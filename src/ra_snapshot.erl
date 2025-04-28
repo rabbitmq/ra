@@ -30,7 +30,7 @@
 
          begin_snapshot/5,
          promote_checkpoint/2,
-         complete_snapshot/3,
+         complete_snapshot/4,
 
          begin_accept/2,
          accept_chunk/4,
@@ -377,7 +377,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
     %% TODO: really we'd like to run this in the ra worker as good potentially
     %% be quite large and a touch expensive to compute but also we don't want
     %% to close over both the MacState and the MacRef
-    Indexes = ra_machine:live_indexes(MacMod, MacState),
+    LiveIndexes = ra_seq:from_list(ra_machine:live_indexes(MacMod, MacState)),
     %% call prepare then write_snapshotS
     %% This needs to be called in the current process to "lock" potentially
     %% mutable machine state
@@ -395,15 +395,17 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
                                 ok
                         end,
                         %% write the live indexes, if any
-                        case Indexes of
+                        case LiveIndexes of
                             [] -> ok;
                             _ ->
-                                F = filename:join(SnapDir, "indexes"),
-                                ok = ra_lib:write_file(F, term_to_binary(Indexes), true),
+                                Data = term_to_binary(LiveIndexes),
+                                F = filename:join(SnapDir, <<"indexes">>),
+                                ok = ra_lib:write_file(F, Data, true),
                                 ok
                         end,
                         Self ! {ra_log_event,
-                                {snapshot_written, IdxTerm, SnapKind}},
+                                {snapshot_written, IdxTerm,
+                                 LiveIndexes, SnapKind}},
                         ok
                 end,
 
@@ -434,9 +436,16 @@ promote_checkpoint(PromotionIdx,
                           %% into a snapshot.
                           ok = Mod:sync(Checkpoint),
                           ok = ra_file:rename(Checkpoint, Snapshot),
+                          F = filename:join(SnapDir, <<"indexes">>),
+                          Indexes = case file:read_file(F) of
+                                        {ok, Bin} ->
+                                            binary_to_term(Bin);
+                                        _ ->
+                                         []
+                                    end,
                           Self ! {ra_log_event,
-                                  {snapshot_written,
-                                   {Idx, Term}, snapshot}}
+                                  {snapshot_written, {Idx, Term},
+                                   Indexes, snapshot}}
                   end,
 
             State = State0#?MODULE{pending = {{Idx, Term}, snapshot},
@@ -465,20 +474,27 @@ find_promotable_checkpoint(Idx, [CP | Rest], Acc) ->
 find_promotable_checkpoint(_Idx, [], _Acc) ->
     undefined.
 
--spec complete_snapshot(ra_idxterm(), kind(), state()) ->
+-spec complete_snapshot(ra_idxterm(), kind(), ra_seq:state(), state()) ->
     state().
-complete_snapshot(_IdxTerm, snapshot,
+complete_snapshot(_IdxTerm, snapshot, _LiveIndexes,
                   #?MODULE{pending = undefined} = State) ->
     %% if pending=undefined it means and snapshot installation with a higher
     %% index was accepted concurrently
     State;
-complete_snapshot({Idx, _} = IdxTerm, snapshot,
+complete_snapshot({Idx, _} = IdxTerm, snapshot, LiveIndexes,
                   #?MODULE{uid = UId} = State) ->
+    SmallestIdx = case ra_seq:first(LiveIndexes) of
+                      undefined ->
+                          Idx + 1;
+                      I ->
+                          I
+                  end,
     %% TODO live indexes
-    ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, Idx+1, []),
+    ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, SmallestIdx,
+                                      LiveIndexes),
     State#?MODULE{pending = undefined,
                   current = IdxTerm};
-complete_snapshot(IdxTerm, checkpoint,
+complete_snapshot(IdxTerm, checkpoint, _LiveIndexes,
                   #?MODULE{checkpoints = Checkpoints0} = State) ->
     State#?MODULE{pending = undefined,
                   checkpoints = [IdxTerm | Checkpoints0]}.
