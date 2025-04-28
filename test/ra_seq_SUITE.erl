@@ -26,7 +26,8 @@ all_tests() ->
      add,
      subtract,
      iter,
-     remove_prefix
+     remove_prefix,
+     remove_prefix_2
     ].
 
 groups() ->
@@ -139,4 +140,12 @@ remove_prefix(_Config) ->
     %% not a prefix
     Pref3 = ra_seq:from_list([5, 6, 8]),
     {error, not_prefix} = ra_seq:remove_prefix(Pref3, S0),
+
+    {ok, []} = ra_seq:remove_prefix(S0, S0),
+    ok.
+
+remove_prefix_2(_Config) ->
+    S1 = ra_seq:from_list([2, 3, 4, 5]),
+    S2 = ra_seq:from_list([1, 2, 3]),
+    {ok, [5, 4]} = ra_seq:remove_prefix(S2, S1),
     ok.
