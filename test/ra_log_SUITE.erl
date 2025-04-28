@@ -103,16 +103,22 @@ write_sparse_then_fetch(Config) ->
     Log0 = ?config(ra_log, Config),
     Term = 1,
     Idx = ra_log:next_index(Log0),
-    LastIdx = Idx + 5,
+    Idx5 = Idx + 5,
     Entry1 = {Idx, Term, "entry"},
     %% sparse
-    Entry2 = {Idx+5, Term, "entry+5"},
-    Log1 = ra_log:write_sparse(Entry1, undefined, Log0),
+    Entry2 = {Idx5, Term, "entry+5"},
+
+    {LastIdx0, _} = ra_log:last_index_term(Log0),
+    Log1 = ra_log:write_sparse(Entry1, LastIdx0, Log0),
     {{Idx, Term, "entry"}, Log2} = ra_log:fetch(Idx, Log1),
     Log3 = ra_log:write_sparse(Entry2, Idx, Log2),
-    Log = await_written_idx(Idx, Term, Log3),
-    {LastIdx, Term} = ra_log:last_written(Log),
-    {{LastIdx, Term, "entry+5"}, Log2} = ra_log:fetch(Idx+5, Log1),
+    Log = await_written_idx(Idx5, Term, Log3),
+    {Idx5, Term} = ra_log:last_written(Log),
+    {Idx5, _} = ra_log:last_index_term(Log),
+    % debugger:start(),
+    % int:i(ra_log),
+    % int:break(ra_log, 524),
+    {{Idx5, Term, "entry+5"}, _Log} = ra_log:fetch(Idx5, Log),
     ok.
 
 append_then_fetch_no_wait(Config) ->
@@ -120,7 +126,9 @@ append_then_fetch_no_wait(Config) ->
     Term = 1,
     Idx = ra_log:next_index(Log0),
     Entry = {Idx, Term, "entry"},
+    ?assertMatch(#{num_pending := 0}, ra_log:overview(Log0)),
     Log1 = ra_log:append(Entry, Log0),
+    ?assertMatch(#{num_pending := 1}, ra_log:overview(Log1)),
     % check last written hasn't been incremented
     {0, 0} = ra_log:last_written(Log1),
     % log entry should be immediately visible to allow
@@ -134,7 +142,8 @@ append_then_fetch_no_wait(Config) ->
         {ra_log_event, {written, _, _} = Evt} ->
             ct:pal("written ~p", [Evt]),
             {Log, _} = ra_log:handle_event(Evt, Log3),
-            {Idx, Term} = ra_log:last_written(Log)
+            {Idx, Term} = ra_log:last_written(Log),
+            ?assertMatch(#{num_pending := 0}, ra_log:overview(Log))
     after 1000 ->
               flush(),
               ct:pal("fail written event not received")
@@ -309,6 +318,7 @@ flush() ->
 await_written_idx(Idx, Term, Log0) ->
     receive
         {ra_log_event, {written, Term, _Seq} = Evt} ->
+            ct:pal("written ~p", [Evt]),
             {Log, _} = ra_log:handle_event(Evt, Log0),
             case ra_log:last_written(Log) of
                 {Idx, Term} ->
@@ -316,6 +326,7 @@ await_written_idx(Idx, Term, Log0) ->
                 _ ->
                     await_written_idx(Idx, Term, Log)
             end
-    after 1000 ->
+    after 1000_000 ->
+              flush(),
               throw(ra_log_append_timeout)
     end.

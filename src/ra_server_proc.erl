@@ -926,8 +926,9 @@ receive_snapshot(EventType, Msg, State0) ->
             TimeoutActions = case Msg of
                                  #install_snapshot_rpc{} ->
                                      %% Reset timeout only on receive snapshot progress.
-                                     [{state_timeout, Conf#conf.receive_snapshot_timeout,
-                                                      receive_snapshot_timeout}];
+                                     [{state_timeout,
+                                       Conf#conf.receive_snapshot_timeout,
+                                       receive_snapshot_timeout}];
                                  _ ->
                                      []
                              end,
