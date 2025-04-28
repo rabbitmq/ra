@@ -401,7 +401,7 @@ sparse_read_out_of_range_2(Config) ->
                                                 <<"snap@10">>, Log1),
     run_effs(Effs),
     {Log3, _} = receive
-                    {ra_log_event, {snapshot_written, {10, 2},
+                    {ra_log_event, {snapshot_written, {10, 2}, _,
                                     snapshot} = Evt} ->
                         ra_log:handle_event(Evt, Log2)
                 after 5000 ->
@@ -537,14 +537,16 @@ written_event_after_snapshot(Config) ->
                                                 <<"one+two">>, Log1b),
     run_effs(Effs),
     {Log3, _} = receive
-                    {ra_log_event, {snapshot_written, {2, 1},
+                    {ra_log_event, {snapshot_written, {2, 1}, _,
                                     snapshot} = Evt} ->
                         ra_log:handle_event(Evt, Log2)
                 after 500 ->
                           exit(snapshot_written_timeout)
                 end,
 
+    %% the written events for indexes [1,2] are delivered after
     Log4 = deliver_all_log_events(Log3, 100),
+    ct:pal("Log4 ~p", [ra_log:overview(Log4)]),
     % true = filelib:is_file(Snap1),
     Log5  = ra_log:append({3, 1, <<"three">>}, Log4),
     Log6  = ra_log:append({4, 1, <<"four">>}, Log5),
@@ -554,7 +556,7 @@ written_event_after_snapshot(Config) ->
                                                  Log6b),
     run_effs(Effs2),
     _ = receive
-            {ra_log_event, {snapshot_written, {4, 1}, snapshot} = E} ->
+            {ra_log_event, {snapshot_written, {4, 1}, _, snapshot} = E} ->
                 ra_log:handle_event(E, Log7)
         after 500 ->
                   exit(snapshot_written_timeout)
@@ -896,6 +898,7 @@ resend_write_lost_in_wal_crash(Config) ->
     Log3 = append_n(11, 13, 2, Log2b),
     Log4 = receive
                {ra_log_event, {resend_write, 10} = Evt} ->
+                   ct:pal("resend"),
                    element(1, ra_log:handle_event(Evt, Log3));
                {ra_log_event, {written, 2, {11, 12}}} ->
                    ct:fail("unexpected gappy write!!")
@@ -1067,7 +1070,7 @@ snapshot_written_after_installation(Config) ->
                                                 <<"one-five">>, Log1),
     run_effs(Effs),
     DelayedSnapWritten = receive
-                             {ra_log_event, {snapshot_written, {5, 1},
+                             {ra_log_event, {snapshot_written, {5, 1}, _,
                                              snapshot} = Evt} ->
                                  Evt
                          after 1000 ->
@@ -1113,7 +1116,7 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
     {Log2, Effs} = ra_log:checkpoint(5, #{}, ?MODULE, <<"one-five">>, Log1),
     run_effs(Effs),
     DelayedSnapWritten = receive
-                             {ra_log_event, {snapshot_written, {5, 1},
+                             {ra_log_event, {snapshot_written, {5, 1}, _,
                                              checkpoint} = Evt} ->
                                  Evt
                          after 1000 ->
@@ -1729,13 +1732,15 @@ create_snapshot_chunk(Config, #{index := Idx} = Meta, Context) ->
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
                            OthDir, CPDir, undefined, ?DEFAULT_MAX_CHECKPOINTS),
     MacState = <<"9">>,
+    LiveIndexes = [],
     {Sn1, [{bg_work, Fun, _ErrFun}]} =
         ra_snapshot:begin_snapshot(Meta, ?MODULE, MacState, snapshot, Sn0),
     Fun(),
     Sn2 =
         receive
-            {ra_log_event, {snapshot_written, {Idx, 2} = IdxTerm, snapshot}} ->
-                ra_snapshot:complete_snapshot(IdxTerm, snapshot, Sn1)
+            {ra_log_event, {snapshot_written, {Idx, 2} = IdxTerm, _, snapshot}} ->
+                ra_snapshot:complete_snapshot(IdxTerm, snapshot,
+                                              LiveIndexes, Sn1)
         after 1000 ->
                   exit(snapshot_timeout)
         end,

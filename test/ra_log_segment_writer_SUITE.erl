@@ -209,9 +209,6 @@ accept_mem_tables_overwrite_same_wal(Config) ->
     Entries2 = [{4, 43, d2}, {5, 43, e2}, {6, 43, f}],
     Tid2 = ra_mt:tid(make_mem_table(UId, Entries2)),
     Ranges2 = #{UId => [{Tid2, [{4, 6}]}, {Tid, [{2, 5}]}]},
-    % debugger:start(),
-    % int:i(ra_log_segment_writer),
-    % int:break(ra_log_segment_writer, 240),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
                                                  make_wal(Config, "w2.wal")),
     receive
@@ -250,7 +247,6 @@ accept_mem_tables_multi_segment(Config) ->
     TidSeq = {Tid, [ra_mt:range(Mt)]},
     TidRanges = [TidSeq],
     Ranges = #{UId => TidRanges},
-    ct:pal("TidRanges ~p", [TidRanges]),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w.wal")),
     receive
@@ -276,7 +272,7 @@ accept_mem_tables_multi_segment_max_size(Config) ->
     Entries = [{I, 2, crypto:strong_rand_bytes(120)} || I <- lists:seq(1, 10)],
     Mt = make_mem_table(UId, Entries),
     Tid = ra_mt:tid(Mt),
-    TidRanges = [{Tid, ra_mt:range(Mt)}],
+    TidRanges = [{Tid, [ra_mt:range(Mt)]}],
     Ranges = #{UId => TidRanges},
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w.wal")),

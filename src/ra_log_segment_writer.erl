@@ -370,8 +370,7 @@ send_segments(System, ServerUId, TidRanges, SegRefs) ->
                  %% TODO: HACK: this is a hack to get a full range out of a
                  %% sequent, ideally the mt should take the ra_seq and
                  %% delete from that
-                 Range = {ra_seq:first(Seq), ra_seq:last(Seq)},
-                 _  = catch ra_mt:delete({range, Tid, Range})
+                 _  = catch ra_mt:delete({indexes, Tid, Seq})
              end || {Tid, Seq} <- TidRanges],
             ok;
         Pid ->
@@ -380,7 +379,12 @@ send_segments(System, ServerUId, TidRanges, SegRefs) ->
     end.
 
 append_to_segment(UId, Tid, Seq0, Seg, State) ->
-    FirstIdx = ra_seq:first(Seq0),
+    FirstIdx = case ra_seq:first(Seq0) of
+                   undefined ->
+                       0;
+                   Fst ->
+                       Fst
+               end,
     StartIdx = start_index(UId, FirstIdx),
     %% TODO combine flor and iterator into one operation
     Seq = ra_seq:floor(StartIdx, Seq0),
