@@ -19,6 +19,7 @@ all() ->
 all_tests() ->
     [
      resend_write_lost_in_wal_crash,
+     resend_after_written_event_lost_in_wal_crash,
      resend_write_after_tick,
      handle_overwrite,
      handle_overwrite_append,
@@ -913,6 +914,37 @@ resend_write_lost_in_wal_crash(Config) ->
     {[_, _, _, _, _], _} = ra_log_take(9, 14, Log6),
     ra_log:close(Log6),
 
+    ok.
+
+resend_after_written_event_lost_in_wal_crash(Config) ->
+    Log0 = ra_log_init(Config),
+    {0, 0} = ra_log:last_index_term(Log0),
+    %% write 1..9
+    Log1 = append_n(1, 10, 2, Log0),
+    Log2 = assert_log_events(Log1, fun (L) ->
+                                           {9, 2} == ra_log:last_written(L)
+                                   end),
+    WalPid = whereis(ra_log_wal),
+    %% suspend wal, write an entry then kill it
+    Log2b = append_n(10, 11, 2, Log2),
+    receive
+        {ra_log_event, {written, 2, [10]}} ->
+            %% drop written event to simulate being lost in wal crash
+            ok
+    after 500 ->
+              flush(),
+              ct:fail(resend_write_timeout)
+    end,
+    %% restart wal to get a new pid, shouldn't matter
+    exit(WalPid, kill),
+    wait_for_wal(WalPid),
+    %% write 11..12 which should trigger resend
+    Log3 = append_n(11, 12, 2, Log2b),
+    Log6 = assert_log_events(Log3, fun (L) ->
+                                           {11, 2} == ra_log:last_written(L)
+                                   end),
+    {[_, _, _], _} = ra_log_take(9, 11, Log6),
+    ra_log:close(Log6),
     ok.
 
 resend_write_after_tick(Config) ->
