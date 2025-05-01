@@ -61,6 +61,7 @@ append(Idx, [Prev | _] = Seq)
 from_list(L) ->
     lists:foldl(fun append/2, [], lists:sort(L)).
 
+%% @doc This operation is O(n)
 -spec floor(ra:index(), state()) -> state().
 floor(FloorIdxIncl, Seq) when is_list(Seq) ->
     %% TODO: assert appendable

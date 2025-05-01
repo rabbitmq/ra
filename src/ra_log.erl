@@ -677,7 +677,7 @@ handle_event({written, Term, WrittenSeq},
                 {error, not_prefix} ->
                     ?DEBUG("~ts: ~p not prefix of ~p",
                            [Cfg#cfg.log_id, WrittenSeq, Pend0]),
-                    exit({not_prefix, WrittenSeq, Pend0})
+                    {resend_pending(State0), []}
             end;
         {undefined, State} when LastWrittenIdx < FirstIdx ->
             % A snapshot happened before the written event came in
@@ -703,85 +703,86 @@ handle_event({written, Term, WrittenSeq},
                     handle_event({written, Term, NewWrittenSeq}, State0)
             end
     end;
-handle_event({written, _Term, [{FromIdx, _ToIdx}]},
-             #?MODULE{last_index = LastIdx} = State)
-  when FromIdx > LastIdx ->
-    %% we must have reverted back, either by explicit reset or by a snapshot
-    %% installation taking place whilst the WAL was processing the write
-    %% Just drop the event in this case as it is stale
-    {State, []};
-handle_event({written, Term, [{FromIdx, ToIdx}]},
-             #?MODULE{cfg = Cfg,
-                      last_written_index_term = {LastWrittenIdx0,
-                                                 _LastWrittenTerm0},
-                      first_index = FirstIdx} = State0)
-  when FromIdx =< LastWrittenIdx0 + 1 ->
-    % We need to ignore any written events for the same index
-    % but in a prior term if we do not we may end up confirming
-    % to a leader writes that have not yet
-    % been fully flushed
-    case fetch_term(ToIdx, State0) of
-        {Term, State} when is_integer(Term) ->
-            ok = put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, ToIdx),
-            {State#?MODULE{last_written_index_term = {ToIdx, Term}}, []};
-        {undefined, State} when ToIdx < FirstIdx ->
-            % A snapshot happened before the written event came in
-            % This can only happen on a leader when consensus is achieved by
-            % followers returning appending the entry and the leader committing
-            % and processing a snapshot before the written event comes in.
-            {State, []};
-        {OtherTerm, State} ->
-            %% term mismatch, let's reduce the range and try again to see
-            %% if any entries in the range are valid
-            case ra_range:new(FromIdx, ToIdx-1) of
-                undefined ->
-                    ?DEBUG("~ts: written event did not find term ~b for index ~b "
-                           "found ~w",
-                           [Cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
-                    {State, []};
-                NextWrittenRange ->
-                    %% retry with a reduced range
-                    handle_event({written, Term, [NextWrittenRange]}, State0)
-            end
-    end;
-handle_event({written, _Term, [{FromIdx, _}]} = Evt,
-             #?MODULE{cfg = #cfg{log_id = LogId},
-                      mem_table = Mt,
-                      last_written_index_term = {LastWrittenIdx, _}} = State0)
-  when FromIdx > LastWrittenIdx + 1 ->
-    % leaving a gap is not ok - may need to resend from mem table
-    Expected = LastWrittenIdx + 1,
-    MtRange = ra_mt:range(Mt),
-    case ra_range:in(Expected, MtRange) of
-        true ->
-            ?INFO("~ts: ra_log: written gap detected at ~b expected ~b!",
-                  [LogId, FromIdx, Expected]),
-            {resend_from(Expected, State0), []};
-        false ->
-            ?DEBUG("~ts: ra_log: written gap detected at ~b but is outside
-                  of mem table range ~w. Updating last written index to ~b!",
-                   [LogId, FromIdx, MtRange, Expected]),
-            %% if the entry is not in the mem table we may have missed a
-            %% written event due to wal crash. Accept written event by updating
-            %% last written index term and recursing
-            {Term, State} = fetch_term(Expected, State0),
-            handle_event(Evt,
-                         State#?MODULE{last_written_index_term = {Expected, Term}})
-    end;
-handle_event({written, Term, Written}, State) ->
-    %% simple handling of ra_seqs for now
-    case Written of
-        [I] when is_integer(I) ->
-            handle_event({written, Term, [{I, I}]}, State);
-        [I2, I] when is_integer(I) andalso
-                     I + 1 == I2 ->
-            handle_event({written, Term, [{I, I2}]}, State);
-        _ ->
-            exit({sparse_written_events_not_implemented, Written})
-    end;
+% handle_event({written, _Term, [{FromIdx, _ToIdx}]},
+%              #?MODULE{last_index = LastIdx} = State)
+%   when FromIdx > LastIdx ->
+%     %% we must have reverted back, either by explicit reset or by a snapshot
+%     %% installation taking place whilst the WAL was processing the write
+%     %% Just drop the event in this case as it is stale
+%     {State, []};
+% handle_event({written, Term, [{FromIdx, ToIdx}]},
+%              #?MODULE{cfg = Cfg,
+%                       last_written_index_term = {LastWrittenIdx0,
+%                                                  _LastWrittenTerm0},
+%                       first_index = FirstIdx} = State0)
+%   when FromIdx =< LastWrittenIdx0 + 1 ->
+%     % We need to ignore any written events for the same index
+%     % but in a prior term if we do not we may end up confirming
+%     % to a leader writes that have not yet
+%     % been fully flushed
+%     case fetch_term(ToIdx, State0) of
+%         {Term, State} when is_integer(Term) ->
+%             ok = put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, ToIdx),
+%             {State#?MODULE{last_written_index_term = {ToIdx, Term}}, []};
+%         {undefined, State} when ToIdx < FirstIdx ->
+%             % A snapshot happened before the written event came in
+%             % This can only happen on a leader when consensus is achieved by
+%             % followers returning appending the entry and the leader committing
+%             % and processing a snapshot before the written event comes in.
+%             {State, []};
+%         {OtherTerm, State} ->
+%             %% term mismatch, let's reduce the range and try again to see
+%             %% if any entries in the range are valid
+%             case ra_range:new(FromIdx, ToIdx-1) of
+%                 undefined ->
+%                     ?DEBUG("~ts: written event did not find term ~b for index ~b "
+%                            "found ~w",
+%                            [Cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
+%                     {State, []};
+%                 NextWrittenRange ->
+%                     %% retry with a reduced range
+%                     handle_event({written, Term, [NextWrittenRange]}, State0)
+%             end
+%     end;
+% handle_event({written, _Term, [{FromIdx, _}]} = Evt,
+%              #?MODULE{cfg = #cfg{log_id = LogId},
+%                       mem_table = Mt,
+%                       last_written_index_term = {LastWrittenIdx, _}} = State0)
+%   when FromIdx > LastWrittenIdx + 1 ->
+%     % leaving a gap is not ok - may need to resend from mem table
+%     Expected = LastWrittenIdx + 1,
+%     MtRange = ra_mt:range(Mt),
+%     case ra_range:in(Expected, MtRange) of
+%         true ->
+%             ?INFO("~ts: ra_log: written gap detected at ~b expected ~b!",
+%                   [LogId, FromIdx, Expected]),
+%             {resend_from(Expected, State0), []};
+%         false ->
+%             ?DEBUG("~ts: ra_log: written gap detected at ~b but is outside
+%                   of mem table range ~w. Updating last written index to ~b!",
+%                    [LogId, FromIdx, MtRange, Expected]),
+%             %% if the entry is not in the mem table we may have missed a
+%             %% written event due to wal crash. Accept written event by updating
+%             %% last written index term and recursing
+%             {Term, State} = fetch_term(Expected, State0),
+%             handle_event(Evt,
+%                          State#?MODULE{last_written_index_term = {Expected, Term}})
+%     end;
+% handle_event({written, Term, Written}, State) ->
+%     %% simple handling of ra_seqs for now
+%     case Written of
+%         [I] when is_integer(I) ->
+%             handle_event({written, Term, [{I, I}]}, State);
+%         [I2, I] when is_integer(I) andalso
+%                      I + 1 == I2 ->
+%             handle_event({written, Term, [{I, I2}]}, State);
+%         _ ->
+%             exit({sparse_written_events_not_implemented, Written})
+%     end;
 handle_event({segments, TidRanges, NewSegs},
              #?MODULE{cfg = #cfg{uid = UId, names = Names} = Cfg,
                       reader = Reader0,
+                      pending = Pend0,
                       mem_table = Mt0} = State0) ->
     Reader = ra_log_reader:update_segments(NewSegs, Reader0),
     put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
@@ -794,7 +795,18 @@ handle_event({segments, TidRanges, NewSegs},
                    ok = ra_log_ets:execute_delete(Names, UId, Spec),
                    Acc
            end, Mt0, TidRanges),
+    %% it is theoretically possible that the segment writer flush _could_
+    %% over take WAL notifications
+    %%
+    FstPend = ra_seq:first(Pend0),
+    Pend = case ra_mt:range(Mt) of
+               {Start, _End} when Start > FstPend ->
+                   ra_seq:floor(Start, Pend0);
+               _ ->
+                   Pend0
+           end,
     State = State0#?MODULE{reader = Reader,
+                           pending = Pend,
                            mem_table = Mt},
     {State, []};
 handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
@@ -1342,6 +1354,23 @@ resend_from(Idx, #?MODULE{cfg = #cfg{uid = UId}} = State0) ->
                   [UId, Idx]),
             State0
     end.
+
+resend_pending(#?MODULE{cfg = Cfg,
+                        last_resend_time = undefined,
+                        pending = Pend,
+                        mem_table = Mt} = State) ->
+    ct:pal("~ts: ra_log: resending from ~b to ~b mt ~p",
+           [State#?MODULE.cfg#cfg.log_id, ra_seq:first(Pend),
+            ra_seq:last(Pend), ra_mt:range(Mt)]),
+    ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_RESENDS, ra_seq:length(Pend)),
+    ra_seq:fold(fun (I, Acc) ->
+                        {I, T, C} = ra_mt:lookup(I, Mt),
+                        Tid = ra_mt:tid_for(I, T, Mt),
+                        wal_rewrite(Acc, Tid, {I, T, C})
+                end,
+                State#?MODULE{last_resend_time = {erlang:system_time(seconds),
+                                                  whereis(Cfg#cfg.wal)}},
+                Pend).
 
 resend_from0(Idx, #?MODULE{cfg = Cfg,
                            last_index = LastIdx,
