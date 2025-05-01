@@ -66,7 +66,8 @@ all_tests() ->
      recover_after_snapshot,
      updated_segment_can_be_read,
      open_segments_limit,
-     write_config
+     write_config,
+     sparse_write
     ].
 
 groups() ->
@@ -1518,6 +1519,70 @@ write_config(Config) ->
 
     ok.
 
+sparse_write(Config) ->
+    Log00 = ra_log_init(Config),
+    % assert there are no segments at this point
+    [] = find_segments(Config),
+
+    % create a segment
+
+    Indexes = lists:seq(1, 10, 2),
+    Log0 = write_sparse(Indexes, 0, Log00),
+    Log0b = assert_log_events(Log0,
+                             fun (L) ->
+                                     #{num_pending := Num} = ra_log:overview(L),
+                                     Num == 0
+                             end),
+    {Res0, _Log} = ra_log:sparse_read(Indexes, Log0b),
+    ?assertMatch([{1, _, _},
+                  {3, _, _},
+                  {5, _, _},
+                  {7, _, _},
+                  {9, _, _}], Res0),
+
+    %% roll wal and assert we can read sparsely from segments
+    ra_log_wal:force_roll_over(ra_log_wal),
+    Log1 = assert_log_events(Log0b,
+                             fun (L) ->
+                                     #{num_segments := Segs} = ra_log:overview(L),
+                                     Segs > 0
+                             end),
+
+    {Res, Log2} = ra_log:sparse_read(Indexes, Log1),
+    ?assertMatch([{1, _, _},
+                  {3, _, _},
+                  {5, _, _},
+                  {7, _, _},
+                  {9, _, _}], Res),
+
+    ct:pal("ov: ~p", [ra_log:overview(Log2)]),
+
+    %% the snapshot is written after live index replication
+    Meta = meta(15, 2, [?N1]),
+    Context = #{},
+    %% passing all Indexes but first one as snapshot state
+    LiveIndexes = tl(Indexes),
+    Chunk = create_snapshot_chunk(Config, Meta, LiveIndexes, Context),
+    SnapState0 = ra_log:snapshot_state(Log2),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    {ok, SnapState, AEffs} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    run_effs(AEffs),
+    {Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, Log2),
+    {ok, Log} = ra_log:write([{16, 1, <<>>}], Log3),
+    {ResFinal, _} = ra_log:sparse_read(LiveIndexes, Log),
+    ?assertMatch([{3, _, _},
+                  {5, _, _},
+                  {7, _, _},
+                  {9, _, _}], ResFinal),
+
+    ReInitLog= ra_log_init(Config),
+    {ResReInit, _} = ra_log:sparse_read(LiveIndexes, ReInitLog),
+    ?assertMatch([{3, _, _},
+                  {5, _, _},
+                  {7, _, _},
+                  {9, _, _}], ResReInit),
+    ok.
+
 validate_fold(From, To, Term, Log0) ->
     {Entries0, Log} = ra_log:fold(From, To,
                                   fun (E, A) -> [E | A] end,
@@ -1570,6 +1635,13 @@ write_n(From, To, Term, Log0) ->
                X <- lists:seq(From, To - 1)],
     {ok, Log} = ra_log:write(Entries, Log0),
     Log.
+
+write_sparse([], _, Log0) ->
+    Log0;
+write_sparse([I | Rem], LastIdx, Log0) ->
+    ct:pal("write_sparse index ~b last ~w", [I, LastIdx]),
+    {ok, Log} = ra_log:write_sparse({I, 1, <<I:64/integer>>}, LastIdx, Log0),
+    write_sparse(Rem, I, Log).
 
 %% Utility functions
 
@@ -1757,13 +1829,15 @@ meta(Idx, Term, Cluster) ->
       machine_version => 1}.
 
 create_snapshot_chunk(Config, #{index := Idx} = Meta, Context) ->
+    create_snapshot_chunk(Config, #{index := Idx} = Meta, <<"9">>, Context).
+
+create_snapshot_chunk(Config, #{index := Idx} = Meta, MacState, Context) ->
     OthDir = filename:join(?config(work_dir, Config), "snapshot_installation"),
     CPDir = filename:join(?config(work_dir, Config), "checkpoints"),
     ok = ra_lib:make_dir(OthDir),
     ok = ra_lib:make_dir(CPDir),
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
                            OthDir, CPDir, undefined, ?DEFAULT_MAX_CHECKPOINTS),
-    MacState = <<"9">>,
     LiveIndexes = [],
     {Sn1, [{bg_work, Fun, _ErrFun}]} =
         ra_snapshot:begin_snapshot(Meta, ?MODULE, MacState, snapshot, Sn0),
@@ -1816,4 +1890,8 @@ run_effs(Effs) ->
 
 %% ra_machine fakes
 version() -> 1.
-live_indexes(_) -> [].
+live_indexes(MacState) when is_list(MacState) ->
+    %% fake returning live indexes
+    MacState;
+live_indexes(_) ->
+    [].

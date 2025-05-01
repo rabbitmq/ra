@@ -315,7 +315,8 @@ init(#{uid := UId,
             {SnapIdx, SnapTerm},
             State#?MODULE.last_written_index_term
            ]),
-    element(1, delete_segments(SnapIdx, State)).
+    State.
+    % element(1, delete_segments(SnapIdx, State)).
 
 -spec close(state()) -> ok.
 close(#?MODULE{cfg = #cfg{uid = _UId},
@@ -449,6 +450,8 @@ write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
                                       [UId, Idx, LastIdx+1])),
     {error, {integrity_error, Msg}}.
 
+-spec write_sparse(log_entry(), ra:index(), state()) ->
+    {ok, state()} | {error, wal_down | gap_detected}.
 write_sparse({Idx, Term, _} = Entry, PrevIdx0,
              #?MODULE{cfg = #cfg{uid = UId,
                                  wal = Wal} = Cfg,
@@ -472,13 +475,12 @@ write_sparse({Idx, Term, _} = Entry, PrevIdx0,
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
-            State0#?MODULE{last_index = Idx,
-                           last_term = Term,
-                           mem_table = Mt,
-                           last_wal_write = {Pid, now_ms()}
-                          };
-        {error, wal_down} ->
-            error(wal_down)
+            {ok, State0#?MODULE{last_index = Idx,
+                                last_term = Term,
+                                mem_table = Mt,
+                                last_wal_write = {Pid, now_ms()}}};
+        {error, wal_down} = Err->
+            Err
     end.
 
 -spec fold(FromIdx :: ra_index(), ToIdx :: ra_index(),
@@ -847,18 +849,11 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
                         Snap
                 end,
             % delete any segments outside of first_index
-            {State, Effects1} = delete_segments(SnapIdx, State0),
+            % {State, Effects1} = delete_segments(SnapIdx, State0),
+            State = State0,
 
-            %% delete from mem table
-            %% this will race with the segment writer but if the
-            %% segwriter detects a missing index it will query the snaphost
-            %% state and if that is higher it will resume flush
-            {Spec, Mt1} = ra_mt:set_first(SnapIdx + 1, Mt0),
-            ok = exec_mem_table_delete(Names, UId, Spec),
 
             %% TODO schedule compaction,
-            %% NB the mt cannot be truncated here with set_first as we need
-            %% to keep any live indexes
             % SegRefs = ra_log_reader:segment_refs(Reader),
             %
 
@@ -872,9 +867,16 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
                                   I ->
                                       I
                               end,
+            %$% TODO: optimise - ra_seq:floor/2 is O(n),
             Pend = ra_seq:floor(SmallestLiveIdx, Pend0),
+            %% delete from mem table
+            %% this will race with the segment writer but if the
+            %% segwriter detects a missing index it will query the snaphost
+            %% state and if that is higher it will resume flush
+            {Spec, Mt1} = ra_mt:set_first(SmallestLiveIdx, Mt0),
+            ok = exec_mem_table_delete(Names, UId, Spec),
 
-            Effects = Effects0 ++ Effects1,
+            Effects = Effects0, % ++ Effects1,
             {State#?MODULE{first_index = SnapIdx + 1,
                            last_index = max(LstIdx, SnapIdx),
                            last_written_index_term = LWIdxTerm,
@@ -960,18 +962,21 @@ set_snapshot_state(SnapState, State) ->
 install_snapshot({SnapIdx, SnapTerm} = IdxTerm, SnapState0,
                  #?MODULE{cfg = #cfg{uid = UId,
                                      names = Names} = Cfg,
-                          mem_table = Mt0
-                         } = State0) ->
+                          mem_table = Mt0} = State0) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_INSTALLED, 1),
     ok = put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, SnapIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, SnapIdx),
-    {State, Effs} = delete_segments(SnapIdx, State0),
+    % {State, Effs} = delete_segments(SnapIdx, State0),
+    % TODO: schedule compaction
+    State = State0,
     {SnapState, Checkpoints} =
         ra_snapshot:take_older_checkpoints(SnapIdx, SnapState0),
     CPEffects = [{delete_snapshot,
                   ra_snapshot:directory(SnapState, checkpoint),
                   Checkpoint} || Checkpoint <- Checkpoints],
+    %% TODO: can't really do this as the mem table may contain live indexes
+    %% below the snap idx
     {Spec, Mt} = ra_mt:set_first(SnapIdx + 1, Mt0),
     ok = exec_mem_table_delete(Names, UId, Spec),
     {State#?MODULE{snapshot_state = SnapState,
@@ -980,7 +985,7 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, SnapState0,
                    last_term = SnapTerm,
                    mem_table = Mt,
                    last_written_index_term = IdxTerm},
-     Effs ++ CPEffects}.
+     CPEffects}.
 
 -spec recover_snapshot(State :: state()) ->
     option({ra_snapshot:meta(), term()}).
@@ -1264,24 +1269,24 @@ release_resources(MaxOpenSegments,
 
 %% deletes all segments where the last index is lower than
 %% the Idx argument
-delete_segments(SnapIdx, #?MODULE{cfg = #cfg{log_id = LogId,
-                                             segment_writer = SegWriter,
-                                             uid = UId} = Cfg,
-                                  reader = Reader0} = State0) ->
-    case ra_log_reader:update_first_index(SnapIdx + 1, Reader0) of
-        {Reader, []} ->
-            State = State0#?MODULE{reader = Reader},
-            {State, []};
-        {Reader, [Pivot | _] = Obsolete} ->
-            ok = ra_log_segment_writer:truncate_segments(SegWriter,
-                                                         UId, Pivot),
-            NumActive = ra_log_reader:segment_ref_count(Reader),
-            ?DEBUG("~ts: ~b obsolete segments at ~b - remaining: ~b, pivot ~0p",
-                   [LogId, length(Obsolete), SnapIdx, NumActive, Pivot]),
-            put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS, NumActive),
-            State = State0#?MODULE{reader = Reader},
-            {State, []}
-    end.
+% delete_segments(SnapIdx, #?MODULE{cfg = #cfg{log_id = LogId,
+%                                              segment_writer = SegWriter,
+%                                              uid = UId} = Cfg,
+%                                   reader = Reader0} = State0) ->
+%     case ra_log_reader:update_first_index(SnapIdx + 1, Reader0) of
+%         {Reader, []} ->
+%             State = State0#?MODULE{reader = Reader},
+%             {State, []};
+%         {Reader, [Pivot | _] = Obsolete} ->
+%             ok = ra_log_segment_writer:truncate_segments(SegWriter,
+%                                                          UId, Pivot),
+%             NumActive = ra_log_reader:segment_ref_count(Reader),
+%             ?DEBUG("~ts: ~b obsolete segments at ~b - remaining: ~b, pivot ~0p",
+%                    [LogId, length(Obsolete), SnapIdx, NumActive, Pivot]),
+%             put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS, NumActive),
+%             State = State0#?MODULE{reader = Reader},
+%             {State, []}
+%     end.
 
 %% unly used by resend to wal functionality and doesn't update the mem table
 wal_rewrite(#?MODULE{cfg = #cfg{uid = UId,
