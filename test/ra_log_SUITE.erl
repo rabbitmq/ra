@@ -115,10 +115,7 @@ write_sparse_then_fetch(Config) ->
     Log = await_written_idx(Idx5, Term, Log3),
     {Idx5, Term} = ra_log:last_written(Log),
     {Idx5, _} = ra_log:last_index_term(Log),
-    % debugger:start(),
-    % int:i(ra_log),
-    % int:break(ra_log, 524),
-    {{Idx5, Term, "entry+5"}, _Log} = ra_log:fetch(Idx5, Log),
+    {{Idx5, Term, "entry+5"}, Log} = ra_log:fetch(Idx5, Log),
     ok.
 
 append_then_fetch_no_wait(Config) ->
