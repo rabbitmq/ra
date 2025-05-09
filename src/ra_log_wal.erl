@@ -305,7 +305,7 @@ init(#{system := System,
     catch _:Err:Stack ->
               ?ERROR("WAL in ~ts failed to initialise with ~p, stack ~p",
                      [System, Err, Stack]),
-              {stop, Err, Stack}
+              {stop, Err}
     end.
 
 -spec handle_batch([wal_op()], state()) ->

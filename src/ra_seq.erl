@@ -34,7 +34,8 @@
          next/1,
          length/1,
          in/2,
-         range/1
+         range/1,
+         in_range/2
         ]).
 
 -spec append(ra:index(), state()) -> state().
@@ -198,9 +199,16 @@ range(Seq) ->
     ra_range:new(first(Seq), last(Seq)).
 
 
+in_range(_Range, []) ->
+    [];
+in_range(undefined, _) ->
+    [];
+in_range({Start, End}, Seq0) ->
+    %% TODO: optimise
+    floor(Start, limit(End, Seq0)).
+
 
 %% Internal functions
-
 
 drop_prefix({IDX, PI}, {IDX, SI}) ->
     drop_prefix(next(PI), next(SI));
