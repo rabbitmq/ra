@@ -44,7 +44,11 @@
          latest_checkpoint/1,
 
          take_older_checkpoints/2,
-         take_extra_checkpoints/1
+         take_extra_checkpoints/1,
+
+         make_snapshot_dir/3,
+         write_indexes/2,
+         indexes/1
         ]).
 
 -type effect() :: {monitor, process, snapshot_writer, pid()} |
@@ -398,9 +402,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
                         case LiveIndexes of
                             [] -> ok;
                             _ ->
-                                Data = term_to_binary(LiveIndexes),
-                                F = filename:join(SnapDir, <<"indexes">>),
-                                ok = ra_lib:write_file(F, Data, true),
+                                ok = write_indexes(SnapDir, LiveIndexes),
                                 ok
                         end,
                         Self ! {ra_log_event,
@@ -704,6 +706,27 @@ take_extra_checkpoints(#?MODULE{checkpoints = Checkpoints0,
         false ->
             {State0, Checks}
     end.
+
+-spec write_indexes(file:filename_all(), ra_seq:state()) ->
+    ok | {error, file:posix()}.
+write_indexes(Dir, Indexes) ->
+    File = filename:join(Dir, <<"indexes">>),
+    ra_lib:write_file(File, term_to_binary(Indexes)).
+
+-spec indexes(file:filename_all()) ->
+    {ok, ra_seq:state()} | {error, file:posix()}.
+indexes(Dir) ->
+    File = filename:join(Dir, <<"indexes">>),
+    case prim_file:read_file(File) of
+        {ok, Bin} ->
+            {ok, binary_to_term(Bin)};
+        {error, enoent} ->
+            %% no indexes
+            {ok, []};
+        Err ->
+            Err
+    end.
+
 
 %% Utility
 

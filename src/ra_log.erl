@@ -33,7 +33,7 @@
          next_index/1,
          snapshot_state/1,
          set_snapshot_state/2,
-         install_snapshot/3,
+         install_snapshot/4,
          recover_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/5,
@@ -110,7 +110,8 @@
          reader :: ra_log_reader:state(),
          mem_table :: ra_mt:state(),
          tx = false :: boolean(),
-         pending = [] :: ra_seq:state()
+         pending = [] :: ra_seq:state(),
+         live_indexes = [] :: ra_seq:state()
         }).
 
 -record(read_plan, {dir :: file:filename_all(),
@@ -209,6 +210,13 @@ init(#{uid := UId,
                               undefined -> {-1, -1};
                               Curr -> Curr
                           end,
+    %% TODO: error handling
+    %% TODO: the "indexes" file isn't authoritative when it comes to live
+    %% indexes, we need to recover the snapshot and query it for live indexes
+    %% to get the actual valua
+    {ok, LiveIndexes} = ra_snapshot:indexes(
+                          ra_snapshot:current_snapshot_dir(SnapshotState)),
+    ct:pal("log init live indexes ~p", [LiveIndexes]),
 
     AccessPattern = maps:get(initial_access_pattern, Conf, sequential),
     {ok, Mt0} = ra_log_ets:mem_table_please(Names, UId),
@@ -253,13 +261,15 @@ init(#{uid := UId,
                       reader = Reader,
                       mem_table = Mt,
                       snapshot_state = SnapshotState,
-                      last_wal_write = {whereis(Wal), now_ms()}
+                      last_wal_write = {whereis(Wal), now_ms()},
+                      live_indexes = LiveIndexes
                      },
     put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
     LastIdx = State0#?MODULE.last_index,
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LastIdx),
-    put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS, ra_log_reader:segment_ref_count(Reader)),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
+                ra_log_reader:segment_ref_count(Reader)),
     case ra_snapshot:latest_checkpoint(SnapshotState) of
         undefined ->
             ok;
@@ -527,7 +537,9 @@ fold(_From, _To, _Fun, Acc, State) ->
     {[log_entry()], state()}.
 sparse_read(Indexes0, #?MODULE{cfg = Cfg,
                                reader = Reader0,
+                               first_index = FstIdx,
                                last_index = LastIdx,
+                               live_indexes = LiveIndexes,
                                mem_table = Mt} = State) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
     %% indexes need to be sorted high -> low for correct and efficient reading
@@ -543,7 +555,20 @@ sparse_read(Indexes0, #?MODULE{cfg = Cfg,
                end,
 
     %% drop any indexes that are larger than the last index available
-    Indexes2 = lists:dropwhile(fun (I) -> I > LastIdx end, Indexes1),
+    %% or smaller than first index and not in live indexes
+    Indexes2 = lists:filter(fun (I) ->
+                                    I =< LastIdx andalso
+                                    (case I < FstIdx of
+                                         true ->
+                                             %% TODO: this can be slow if
+                                             %% live indexes are mostly
+                                             %% non-contiguous. Create
+                                             %% BST for live index lookups
+                                             ra_seq:in(I, LiveIndexes);
+                                         false ->
+                                             true
+                                     end)
+                            end, Indexes1),
     {Entries0, MemTblNumRead, Indexes} = ra_mt:get_items(Indexes2, Mt),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_MEM_TBL, MemTblNumRead),
     {Entries1, Reader} = ra_log_reader:sparse_read(Reader0, Indexes, Entries0),
@@ -811,6 +836,30 @@ handle_event({segments, TidRanges, NewSegs},
                            pending = Pend,
                            mem_table = Mt},
     {State, []};
+handle_event({segments_to_be_deleted, SegRefs},
+             #?MODULE{cfg = #cfg{uid = UId,
+                                 log_id = LogId,
+                                 directory = Dir,
+                                 counter = Counter,
+                                 names = Names},
+                      reader = Reader} = State) ->
+    Fun = fun () ->
+                  [prim_file:delete(filename:join(Dir, F))
+                   || {_, F} <- SegRefs],
+                  ok
+          end,
+    ActiveSegs = ra_log_reader:segment_refs(Reader) -- SegRefs,
+    #{max_size := MaxOpenSegments} = ra_log_reader:info(Reader),
+    % close all open segments
+    ok = ra_log_reader:close(Reader),
+    ?DEBUG("~ts: ~b obsolete segments - remaining: ~b",
+           [LogId, length(SegRefs), length(ActiveSegs)]),
+    %% open a new segment with the new max open segment value
+    {State#?MODULE{reader = ra_log_reader:init(UId, Dir, MaxOpenSegments,
+                                              random,
+                                              ActiveSegs, Names, Counter)},
+
+    [{bg_work, Fun, fun (_Err) -> ok end}]};
 handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
              #?MODULE{cfg = #cfg{uid = UId,
                                  names = Names} = Cfg,
@@ -848,14 +897,10 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
                     false ->
                         Snap
                 end,
-            % delete any segments outside of first_index
-            % {State, Effects1} = delete_segments(SnapIdx, State0),
+
+            CompEffs = schedule_compaction(SnapIdx, State0),
             State = State0,
 
-
-            %% TODO schedule compaction,
-            % SegRefs = ra_log_reader:segment_refs(Reader),
-            %
 
             %% remove all pending below smallest live index as the wal
             %% may not write them
@@ -876,12 +921,13 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
             {Spec, Mt1} = ra_mt:set_first(SmallestLiveIdx, Mt0),
             ok = exec_mem_table_delete(Names, UId, Spec),
 
-            Effects = Effects0, % ++ Effects1,
+            Effects = CompEffs ++ Effects0, % ++ Effects1,
             {State#?MODULE{first_index = SnapIdx + 1,
                            last_index = max(LstIdx, SnapIdx),
                            last_written_index_term = LWIdxTerm,
                            mem_table = Mt1,
                            pending = Pend,
+                           live_indexes = LiveIndexes,
                            snapshot_state = SnapState}, Effects};
         checkpoint ->
             put_counter(Cfg, ?C_RA_SVR_METRIC_CHECKPOINT_INDEX, SnapIdx),
@@ -957,19 +1003,20 @@ snapshot_state(State) ->
 set_snapshot_state(SnapState, State) ->
     State#?MODULE{snapshot_state = SnapState}.
 
--spec install_snapshot(ra_idxterm(), ra_snapshot:state(), state()) ->
-    {state(), effects()}.
-install_snapshot({SnapIdx, SnapTerm} = IdxTerm, SnapState0,
+-spec install_snapshot(ra_idxterm(), ra_snapshot:state(), module(), state()) ->
+    {ra_snapshot:meta(), MacState :: term(), state(), effects()}.
+install_snapshot({SnapIdx, SnapTerm} = IdxTerm, SnapState0, MacMod,
                  #?MODULE{cfg = #cfg{uid = UId,
                                      names = Names} = Cfg,
-                          mem_table = Mt0} = State0) ->
+                          mem_table = Mt0} = State0)
+  when is_atom(MacMod) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_INSTALLED, 1),
     ok = put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, SnapIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, SnapIdx),
-    % {State, Effs} = delete_segments(SnapIdx, State0),
-    % TODO: schedule compaction
-    State = State0,
+
+    CompEffs = schedule_compaction(SnapIdx, State0),
+
     {SnapState, Checkpoints} =
         ra_snapshot:take_older_checkpoints(SnapIdx, SnapState0),
     CPEffects = [{delete_snapshot,
@@ -979,13 +1026,22 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, SnapState0,
     %% below the snap idx
     {Spec, Mt} = ra_mt:set_first(SnapIdx + 1, Mt0),
     ok = exec_mem_table_delete(Names, UId, Spec),
-    {State#?MODULE{snapshot_state = SnapState,
-                   first_index = SnapIdx + 1,
-                   last_index = SnapIdx,
-                   last_term = SnapTerm,
-                   mem_table = Mt,
-                   last_written_index_term = IdxTerm},
-     CPEffects}.
+    State = State0#?MODULE{snapshot_state = SnapState,
+                           first_index = SnapIdx + 1,
+                           last_index = SnapIdx,
+                           last_term = SnapTerm,
+                           mem_table = Mt,
+                           last_written_index_term = IdxTerm},
+    {Meta, MacState} = recover_snapshot(State),
+    LiveIndexes = ra_machine:live_indexes(MacMod, MacState),
+    %% TODO: it is not safe to write the indexes _after_ if we then treat
+    %% the persisted indexes as authoritative as if we crash in between
+    %% it may compact segments that still contain live indexes
+    SnapDir = ra_snapshot:current_snapshot_dir(SnapState),
+    ok = ra_snapshot:write_indexes(SnapDir, LiveIndexes),
+    {Meta, MacState, State#?MODULE{live_indexes = LiveIndexes},
+     CompEffs ++ CPEffects}.
+
 
 -spec recover_snapshot(State :: state()) ->
     option({ra_snapshot:meta(), term()}).
@@ -1267,6 +1323,44 @@ release_resources(MaxOpenSegments,
 
 %%% Local functions
 
+
+schedule_compaction(SnapIdx, #?MODULE{cfg = #cfg{},
+                                      snapshot_state = SnapState,
+                                      reader = Reader0}) ->
+    case ra_log_reader:segment_refs(Reader0) of
+        [] ->
+            [];
+        [_ | Compactable] ->
+            %% never compact the current segment
+            %% only take those who have a range lower than the snapshot index as
+            %% we never want to compact more than that
+            SegRefs = lists:takewhile(fun ({{_Start, End}, _}) ->
+                                              End =< SnapIdx
+                                      end, lists:reverse(Compactable)),
+            SnapDir = ra_snapshot:current_snapshot_dir(SnapState),
+
+            Self = self(),
+            Fun = fun () ->
+                          {ok, Indexes} = ra_snapshot:indexes(SnapDir),
+                          {Delete, _} = lists:foldl(
+                                          fun ({Range, _} = S, {Del, Keep}) ->
+                                                  case ra_seq:in_range(Range, Indexes) of
+                                                      [] ->
+                                                          {[S | Del], Keep};
+                                                      _ ->
+                                                          {Del, [S | Keep]}
+                                                  end
+                                          end, {[], []}, SegRefs),
+                          %% need to update the ra_servers list of seg refs _before_
+                          %% the segments can actually be deleted
+                          Self ! {ra_log_event,
+                                  {segments_to_be_deleted, Delete}},
+                          ok
+                  end,
+
+            [{bg_work, Fun, fun (_Err) -> ok end}]
+    end.
+
 %% deletes all segments where the last index is lower than
 %% the Idx argument
 % delete_segments(SnapIdx, #?MODULE{cfg = #cfg{log_id = LogId,
@@ -1364,7 +1458,7 @@ resend_pending(#?MODULE{cfg = Cfg,
                         last_resend_time = undefined,
                         pending = Pend,
                         mem_table = Mt} = State) ->
-    ct:pal("~ts: ra_log: resending from ~b to ~b mt ~p",
+    ?DEBUG("~ts: ra_log: resending from ~b to ~b mt ~p",
            [State#?MODULE.cfg#cfg.log_id, ra_seq:first(Pend),
             ra_seq:last(Pend), ra_mt:range(Mt)]),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_RESENDS, ra_seq:length(Pend)),
