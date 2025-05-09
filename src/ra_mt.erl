@@ -120,11 +120,13 @@ insert({Idx, _, _} = _Entry,
     end.
 
 -spec insert_sparse(log_entry(), undefined | ra:index(), state()) ->
-    {ok, state()} | {error, gap_detected | limit_reached}.
+    {ok, state()} | {error, overwriting | gap_detected | limit_reached}.
 insert_sparse({Idx, _, _} = Entry, LastIdx,
-       #?MODULE{tid = Tid,
-                indexes = Seq} = State) ->
-    case ra_seq:last(Seq) == LastIdx of
+              #?MODULE{tid = Tid,
+                       indexes = Seq} = State) ->
+    LastSeq = ra_seq:last(Seq),
+    IsOverwriting = Idx =< LastSeq andalso is_integer(LastSeq),
+    case LastSeq == LastIdx andalso not IsOverwriting of
         true ->
             case ra_seq:length(Seq) > ?MAX_MEMTBL_ENTRIES of
                 true ->
@@ -134,7 +136,12 @@ insert_sparse({Idx, _, _} = Entry, LastIdx,
                     {ok, State#?MODULE{indexes = ra_seq:append(Idx, Seq)}}
             end;
         false ->
-            {error, gap_detected}
+            case IsOverwriting of
+                true ->
+                    {error, overwriting};
+                false ->
+                    {error, gap_detected}
+            end
     end.
 
 -spec stage(log_entry(), state()) ->

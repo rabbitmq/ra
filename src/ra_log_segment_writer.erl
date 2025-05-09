@@ -273,7 +273,7 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
     TidSeqs = lists:foldl(
                 fun ({T, Seq0}, []) ->
                         case ra_seq:floor(SmallestIdx, Seq0) of
-                            undefined ->
+                            [] ->
                                 [];
                             Seq ->
                                 [{T, Seq}]
@@ -282,7 +282,7 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
                         Start = ra_seq:first(PrevSeq),
                         Seq1 = ra_seq:floor(SmallestIdx, Seq0),
                         case ra_seq:limit(Start, Seq1) of
-                            undefined ->
+                            [] ->
                                 Acc;
                             Seq ->
                                 [{T, Seq} | Acc]

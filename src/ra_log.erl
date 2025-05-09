@@ -216,7 +216,6 @@ init(#{uid := UId,
     %% to get the actual valua
     {ok, LiveIndexes} = ra_snapshot:indexes(
                           ra_snapshot:current_snapshot_dir(SnapshotState)),
-    ct:pal("log init live indexes ~p", [LiveIndexes]),
 
     AccessPattern = maps:get(initial_access_pattern, Conf, sequential),
     {ok, Mt0} = ra_log_ets:mem_table_please(Names, UId),
