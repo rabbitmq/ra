@@ -11,6 +11,12 @@
 -include("src/ra_server.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%% TODO: make so this is not needed
+-dialyzer({nowarn_function,
+           [init_test/1,
+            higher_term_detected/1,
+            follower_aer_term_mismatch_snapshot/1]}).
+
 all() ->
     [
      init_test,
@@ -169,10 +175,10 @@ setup_log() ->
     meck:expect(ra_log, fold, fun ra_log_memory:fold/5),
     meck:expect(ra_log, release_resources, fun ra_log_memory:release_resources/3),
     meck:expect(ra_log, append_sync,
-                fun({Idx, Term, _} = E, L) ->
-                        L1 = ra_log_memory:append(E, L),
-                        {LX, _} = ra_log_memory:handle_event({written, Term, {Idx, Idx}}, L1),
-                        LX
+                fun({Idx, Term, _} = E, L0) ->
+                        L1 = ra_log_memory:append(E, L0),
+                        {L, _} = ra_log_memory:handle_event({written, Term, [Idx]}, L1),
+                        L
                 end),
     meck:expect(ra_log, write_config, fun ra_log_memory:write_config/2),
     meck:expect(ra_log, next_index, fun ra_log_memory:next_index/1),
@@ -1868,8 +1874,8 @@ follower_cluster_change(_Config) ->
 
     ok.
 
-written_evt(Term, Range) ->
-    {ra_log_event, {written, Term, Range}}.
+written_evt(Term, Range) when is_tuple(Range) ->
+    {ra_log_event, {written, Term, [Range]}}.
 
 leader_applies_new_cluster(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
@@ -3148,7 +3154,7 @@ base_state(NumServers, MacMod) ->
                        [{1, 1, usr(<<"hi1">>)},
                         {2, 3, usr(<<"hi2">>)},
                         {3, 5, usr(<<"hi3">>)}]),
-    {Log, _} = ra_log:handle_event({written, 5, {1, 3}}, Log0),
+    {Log, _} = ra_log:handle_event({written, 5, [{1, 3}]}, Log0),
 
     Servers = lists:foldl(fun(N, Acc) ->
                                 Name = {list_to_atom("n" ++ integer_to_list(N)), node()},
