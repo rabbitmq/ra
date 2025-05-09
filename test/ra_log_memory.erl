@@ -41,6 +41,8 @@
 
 -include("src/ra.hrl").
 
+-dialyzer({nowarn_function, install_snapshot/4}).
+
 -type ra_log_memory_meta() :: #{atom() => term()}.
 
 -record(state, {last_index = 0 :: ra_index(),
@@ -50,7 +52,7 @@
                 meta = #{} :: ra_log_memory_meta(),
                 snapshot :: option({ra_snapshot:meta(), term()})}).
 
--type ra_log_memory_state() :: #state{} | ra_log:state().
+-opaque ra_log_memory_state() :: #state{} | ra_log:state().
 
 -export_type([ra_log_memory_state/0]).
 
@@ -170,17 +172,18 @@ last_written(#state{last_written = LastWritten}) ->
 
 -spec handle_event(ra_log:event_body(), ra_log_memory_state()) ->
     {ra_log_memory_state(), list()}.
-handle_event({written, Term, {_From, Idx} = Range0}, State0) ->
+handle_event({written, Term, Seq0}, State0) when is_list(Seq0) ->
+    Idx = ra_seq:last(Seq0),
     case fetch_term(Idx, State0) of
         {Term, State} ->
             {State#state{last_written = {Idx, Term}}, []};
         _ ->
-            case ra_range:limit(Idx, Range0) of
-                undefined ->
+            case ra_seq:limit(Idx - 1, Seq0) of
+                [] ->
                     % if the term doesn't match we just ignore it
                     {State0, []};
-                Range ->
-                    handle_event({written, Term, Range}, State0)
+                Seq ->
+                    handle_event({written, Term, Seq}, State0)
             end
     end;
 handle_event(_Evt, State0) ->
@@ -210,6 +213,8 @@ fetch_term(Idx, #state{entries = Log} = State) ->
 
 flush(_Idx, Log) -> Log.
 
+-spec install_snapshot(ra_idxterm(), term(), module(), ra_log_memory_state()) ->
+    {ra_snapshot:meta(), term(), ra_log_memory_state(), list()}.
 install_snapshot({Index, Term}, Data, _MacMod,
                  #state{entries = Log0} = State0)
   when is_tuple(Data) ->
