@@ -109,9 +109,9 @@ write_sparse_then_fetch(Config) ->
     Entry2 = {Idx5, Term, "entry+5"},
 
     {LastIdx0, _} = ra_log:last_index_term(Log0),
-    Log1 = ra_log:write_sparse(Entry1, LastIdx0, Log0),
+    {ok, Log1} = ra_log:write_sparse(Entry1, LastIdx0, Log0),
     {{Idx, Term, "entry"}, Log2} = ra_log:fetch(Idx, Log1),
-    Log3 = ra_log:write_sparse(Entry2, Idx, Log2),
+    {ok, Log3} = ra_log:write_sparse(Entry2, Idx, Log2),
     Log = await_written_idx(Idx5, Term, Log3),
     {Idx5, Term} = ra_log:last_written(Log),
     {Idx5, _} = ra_log:last_index_term(Log),

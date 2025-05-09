@@ -23,7 +23,8 @@
          sparse_read/3,
          read_plan/2,
          exec_read_plan/6,
-         fetch_term/2
+         fetch_term/2,
+         info/1
          ]).
 
 -include("ra.hrl").
@@ -258,6 +259,12 @@ fetch_term(Idx, #?STATE{cfg = #cfg{} = Cfg} = State0) ->
     incr_counter(Cfg, ?C_RA_LOG_FETCH_TERM, 1),
     segment_term_query(Idx, State0).
 
+-spec info(state()) -> map().
+info(#?STATE{cfg = #cfg{} = _Cfg,
+             open_segments = Open} = State) ->
+    #{max_size => ra_flru:max_size(Open),
+      num_segments => segment_ref_count(State)
+     }.
 %% LOCAL
 
 segment_read_plan(_SegRefs, [], Acc) ->

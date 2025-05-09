@@ -220,7 +220,6 @@ sparse_write_recover(Config) ->
 
     ok = proc_lib:stop(ra_log_wal),
     {ok, _Pid2} = ra_log_wal:start_link(Conf),
-    % {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{Tid, [15, 12]}]}, _}} ->

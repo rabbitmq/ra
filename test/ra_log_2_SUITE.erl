@@ -402,14 +402,15 @@ sparse_read_out_of_range_2(Config) ->
     {Log2, Effs} = ra_log:update_release_cursor(SnapIdx, #{}, ?MODULE,
                                                 <<"snap@10">>, Log1),
     run_effs(Effs),
-    {Log3, _} = receive
-                    {ra_log_event, {snapshot_written, {10, 2}, _,
-                                    snapshot} = Evt} ->
-                        ra_log:handle_event(Evt, Log2)
-                after 5000 ->
-                          flush(),
-                          exit(snapshot_written_timeout)
-                end,
+    {Log3, Effs3} = receive
+                        {ra_log_event, {snapshot_written, {10, 2}, _,
+                                        snapshot} = Evt} ->
+                            ra_log:handle_event(Evt, Log2)
+                    after 5000 ->
+                              flush(),
+                              exit(snapshot_written_timeout)
+                    end,
+    run_effs(Effs3),
     Log4 = deliver_all_log_events(Log3, 100),
 
     {SnapIdx, 2} = ra_log:snapshot_index_term(Log4),
@@ -1118,7 +1119,7 @@ snapshot_written_after_installation(Config) ->
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState, AEffs} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
     run_effs(AEffs),
-    {Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, Log2),
+    {_, _, Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, ?MODULE, Log2),
     %% write some more to create another segment
     Log4 = write_and_roll(16, 20, 2, Log3),
     {Log5, Efx4} = ra_log:handle_event(DelayedSnapWritten, Log4),
@@ -1166,7 +1167,7 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
     {ok, SnapState, AcceptEffs} =
         ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
     run_effs(AcceptEffs),
-    {Log4, Effs4} = ra_log:install_snapshot({15, 2}, SnapState, Log3),
+    {_, _, Log4, Effs4} = ra_log:install_snapshot({15, 2}, SnapState, ?MODULE, Log3),
     ?assert(lists:any(fun (E) -> element(1, E) == delete_snapshot end, Effs4)),
     %% write some more to create another segment
     Log5 = write_and_roll(16, 20, 2, Log4),
@@ -1211,7 +1212,7 @@ snapshot_installation(Config) ->
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState, AEffs} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
     run_effs(AEffs),
-    {Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, Log2),
+    {_, _, Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, ?MODULE, Log2),
 
     {15, _} = ra_log:last_index_term(Log3),
     {15, _} = ra_log:last_written(Log3),
@@ -1261,7 +1262,7 @@ append_after_snapshot_installation(Config) ->
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState, AEffs} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
     run_effs(AEffs),
-    {Log2, _} = ra_log:install_snapshot({15, 2}, SnapState, Log1),
+    {_, _, Log2, _} = ra_log:install_snapshot({15, 2}, SnapState, ?MODULE, Log1),
     {15, _} = ra_log:last_index_term(Log2),
     {15, _} = ra_log:last_written(Log2),
 
@@ -1293,7 +1294,7 @@ written_event_after_snapshot_installation(Config) ->
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState, AEffs} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
     run_effs(AEffs),
-    {Log2, _} = ra_log:install_snapshot({SnapIdx, 2}, SnapState, Log1),
+    {_, _, Log2, _} = ra_log:install_snapshot({SnapIdx, 2}, SnapState, ?MODULE, Log1),
     {SnapIdx, _} = ra_log:last_index_term(Log2),
     {SnapIdx, _} = ra_log:last_written(Log2),
     NextIdx = SnapIdx + 1,
@@ -1334,19 +1335,17 @@ update_release_cursor(Config) ->
                                                 ?MODULE, initial_state, Log1),
 
     run_effs(Effs),
+    %% ensure snapshot index has been updated and 1 segment deleted
     Log3 = assert_log_events(Log2,
                              fun (L) ->
-                                     {127, 2} == ra_log:snapshot_index_term(L)
+                                     {127, 2} == ra_log:snapshot_index_term(L) andalso
+                                     length(find_segments(Config)) == 1
                              end),
     %% now the snapshot_written should have been delivered and the
     %% snapshot state table updated
     UId = ?config(uid, Config),
     127 = ra_log_snapshot_state:snapshot(ra_log_snapshot_state, UId),
     % this should delete a single segment
-    ra_lib:retry(fun () ->
-                         Segments = find_segments(Config),
-                         1 == length(Segments)
-                 end, 10, 100),
     Log3b = validate_fold(128, 149, 2, Log3),
     % update the release cursor all the way
     {Log4, Effs2} = ra_log:update_release_cursor(149, #{?N1 => new_peer(),
@@ -1368,9 +1367,9 @@ update_release_cursor(Config) ->
 
     % append a few more items
     Log = assert_log_events(append_and_roll_no_deliver(150, 155, 2, Log5),
-                             fun (L) ->
-                                     {154, 2} == ra_log:last_written(L)
-                             end),
+                            fun (L) ->
+                                    {154, 2} == ra_log:last_written(L)
+                            end),
     validate_fold(150, 154, 2, Log),
     % assert there is only one segment - the current
     % snapshot has been confirmed.
@@ -1443,6 +1442,8 @@ missed_mem_table_entries_are_deleted_at_next_opportunity(Config) ->
                                                         ?N2 => new_peer()},
                                                  ?MODULE, initial_state, Log5),
     run_effs(Effs2),
+    ct:pal("Effs2 ~p", [Effs2]),
+    ct:pal("find segments ~p", [find_segments(Config)]),
     Log7 = deliver_log_events_cond(Log6,
                                    fun (_) ->
                                            case find_segments(Config) of
@@ -1567,7 +1568,7 @@ sparse_write(Config) ->
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     {ok, SnapState, AEffs} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
     run_effs(AEffs),
-    {Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, Log2),
+    {_, _, Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, ?MODULE, Log2),
     {ok, Log} = ra_log:write([{16, 1, <<>>}], Log3),
     {ResFinal, _} = ra_log:sparse_read(LiveIndexes, Log),
     ?assertMatch([{3, _, _},
@@ -1659,7 +1660,11 @@ deliver_log_events_cond(Log0, CondFun, N) ->
                             P ! E,
                             Acc;
                        ({next_event, {ra_log_event, E}}, Acc0) ->
-                            {Acc, _} = ra_log:handle_event(E, Acc0),
+                            {Acc, Effs} = ra_log:handle_event(E, Acc0),
+                            run_effs(Effs),
+                            Acc;
+                       ({bg_work, Fun, _}, Acc) ->
+                            Fun(),
                             Acc;
                        (_, Acc) ->
                             Acc
@@ -1720,11 +1725,12 @@ assert_log_events(Log0, AssertPred, Timeout) ->
         {ra_log_event, Evt} ->
             ct:pal("log evt: ~p", [Evt]),
             {Log1, Effs} = ra_log:handle_event(Evt, Log0),
+            run_effs(Effs),
             %% handle any next events
             Log = lists:foldl(
                     fun ({next_event, {ra_log_event, E}}, Acc0) ->
-                            ct:pal("eff log evt: ~p", [E]),
-                            {Acc, _Effs} = ra_log:handle_event(E, Acc0),
+                            {Acc, Effs} = ra_log:handle_event(E, Acc0),
+                            run_effs(Effs),
                             Acc;
                         (_, Acc) ->
                             Acc
@@ -1846,6 +1852,7 @@ create_snapshot_chunk(Config, #{index := Idx} = Meta, MacState, Context) ->
         receive
             {ra_log_event, {snapshot_written, {Idx, 2} = IdxTerm, _, snapshot}} ->
                 ra_snapshot:complete_snapshot(IdxTerm, snapshot,
+
                                               LiveIndexes, Sn1)
         after 1000 ->
                   exit(snapshot_timeout)
