@@ -400,7 +400,7 @@ shrink_cluster_with_snapshot(Config) ->
     %% resume activity ok
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    Peers = start_peers([s1,s2,s3], PrivDir),
+    Peers = start_peers([s1, s2, s3], PrivDir),
     try
         ServerIds = server_ids(ClusterName, Peers),
         [_A, _B, _C] = ServerIds,
@@ -1258,7 +1258,7 @@ stopped_wal_causes_leader_change(Config, RecoverStrat) ->
                             #{term := T} = ra:key_metrics(Follower),
                             T > Term andalso
                             (begin
-                                 P = ct_rpc:call(LeaderNode, erlang, whereis, [LeaderName]),%                      [ra_log_wal]),
+                                 P = ct_rpc:call(LeaderNode, erlang, whereis, [LeaderName]),
                                  is_pid(P) andalso P =/= LeaderPid
                              end)
                     end, 200),

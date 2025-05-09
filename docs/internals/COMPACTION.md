@@ -7,19 +7,19 @@ This is a living document capturing current work on log compaction.
 
 Compaction in Ra is intrinsically linked to the snapshotting
 feature. Standard Raft snapshotting removes all entries in the Ra log
-that precedes the snapshot index where the snapshot is a full representation of
+below the snapshot index where the snapshot is a full representation of
 the state machine state.
 
 The high level idea of compacting in Ra is that instead of deleting all
 segment data that precedes the snapshot index the snapshot data can emit a list
 of live raft indexes which will be kept, either in their original segments
-or written to new compacted segments. the data for these indexes can then
-be omitted from the snapshot to reduce its size and write amplification.
-
+or written to new compacted segments. The data for these indexes can then
+be omitted from the snapshot to reduce its size and the write amplification
+incurred by writing the snapshot.
 
 ### Log sections
 
-Two named sections of the log then emerge.
+Two named sections of the log then emerge:
 
 #### Normal log section
 
@@ -43,14 +43,17 @@ and will run immediately after each snapshot is taken.
 The run will start with the oldest segment and move towards the newest segment
 in the compacting log section. Every segment that has no entries in the live
 indexes list returned by the snapshot state will be deleted. Standard Raft
-log truncation is achieved by returning and empty list of live indexes.
+log truncation is achieved by returning an empty list of live indexes.
+
+TODO: how to ensure segments containing overwritten entries only are cleaned
+up.
 
 ### Compacted segments: naming (phase 3 compaction)
 
 Segment files in a Ra log have numeric names incremented as they are written.
 This is essential as the order is required to ensure log integrity.
 
-Desired Properties of phase 3 compaction:
+Desired Properties of phase 3:
 
 * Retain immutability, entries will never be deleted from a segment. Instead they
 will be written to a new segment.
@@ -61,21 +64,46 @@ will be written to a new segment.
 Segments will be compacted when 2 or more adjacent segments fit into a single
 segment.
 
-The new segment will have the naming format `OLD-NEW.segment`
+During compaction the target segment will have the naming format `001-002-003.compacting`
+such that each segment (001, 002, 003) name is present in the compacting name.
+An upper limit on the maximum number of source segments will have to be set to
+ensure the compacting file name doesn't get ridiculously long. E.g. 8.
 
-This means that a single segment can only be compacted once e.g
-`001.segment -> 001-001.segment` as after this  there is no new name available
-and it has to wait until it can be compacted with the adjacent segment. Single
-segment compaction could be optional and only triggered when a substantial,
-say 75% or more entries / data can be deleted.
+Once the compacting segment has been synced the lowest numbered segment will
+be hard linked to the compacting segment. Each of the compacted
+higher numbered segments (003, 004) will then have a symlink created (e.g. 003.link)
+pointing to the lowest numbered segment (002)
+then the link is renamed to the source file: `003.link -> 003` (NB not atomic).
 
-This naming format means it is easy to identify dead segments after an unclean
-exit.
+`001-002-003.compacting` is then deleted (but 002 is still hard linked so the data
+will remain).
 
-During compaction a different extension will be used: `002-004.compacting` and
-after an unclean shutdown any such files will be removed. Once synced it will be
-renamed to `.segment` and some time after the source files will be deleted (Once
-the Ra server has updated its list of segments).
+This naming format means it is easy to identify partially compacted segments
+after an unclean exit. All `*.compacting` files with a link count of 1 will
+be deleted as it is not clear at what stage the unclean exit occurred.
+
+If a compacting file has a link count of 2 (or more???) the compacting writes
+completed and the lowest numbered segment was hard linked to the compacting
+segment. We don't know if all symlinks were created correctly so we need to ensure
+this during recovery.
+
+Once we've ensured there are hard or symlinks for all the source files the compacting
+file can be deleted.
+
+The symlinks are there so that any pending read references to the old
+segment name are still valid for some time after but the disk space for the
+source segment will still be reclaimed when the links replace the files.
+
+Some time later the symbolic links can be removed.
+
+Single segment compaction would work the same as we can directly rename
+e.g. the compacted segment `001.compacting` to `001.segment` without breaking
+any references to the segment. Single segment compaction should only be triggered
+when a certain limit has been reached, e.g. > 50% of indexes can be cleared up.
+
+TODO: how to handle compaction of segments that have indexes that never were
+committed, i.e. overwritten?
+
 
 #### When does phase 3 compaction run?
 
@@ -84,8 +112,21 @@ Options:
 * On a timer
 * After phase 1 if needed based on a ratio of live to dead indexes in the compacting section
 * After phase 1 if needed based on disk use / ratio of live data to dead.
+* Explicitly through a new ra API.
 
 ![segments](compaction2.jpg)
+
+### Phase 4 compaction (optional)
+
+At some point the number of live indexes could become completely sparse (no
+adjacent indexes) and large which is sub optimal memory wise.
+
+At this point the state machine could implement a "rewrite" command (or we
+provide one in Ra) to rewrite a subset or all of the indexes at the head of
+the Ra log to "clump" their indexes better together.
+
+This is ofc optional and has replication costs but could be a manually triggered
+maintenance option perhaps.
 
 ### Ra Server log worker responsibilities
 
@@ -162,76 +203,18 @@ the flush request comes in.
 With the snapshot now defined as the snapshot state + live preceding raft indexes
 the default snapshot replication approach will need to change.
 
-The snapshot sender (Ra log worker??) needs to negotiate with the follower to
-discover which preceding raft indexes the follower does not yet have. Then it would
-go on and replicate these before or after (??) sending the snapshot itself.
-
-T: probably before as if a new snapshot has been taken locally we'd most likely
-skip some raft index replication on the second attempt.
-
-Q: How will the follower write the live indexes preceding the snapshot?
-If the main Ra process does it this introduces a 3rd modifier of the Ra log
-and there may be concurrent Ra log writes from the snapshot writer at this point.
-
-It can't write them to the WAL as they are not contiguous unless we allow
-such writes.
-
-The Ra process can write them to a set of temporary segment files then call into
-the segment writer to rename into the set of segments.
-No this can't work with the
-live indexes logic the segment writer applies as it relies on the mem tables
-ranges to decide which indexes to flush.
-
-having pending segment flushes when receiving 
-
-the ra process truncates the mem table on snapshot installations
-so that the segment writer avoids
-writing any of the live index preceding the snapshot. 
-
-If this is done before live indexes are replicated if the Ra process then waits
-for the mt delete to complete then 
-
-Idea: the ra server could truncate the mt as soon as a snapshot installation
-starts to minimise subsequent mem table flushes. Typically this means emptying
-the memtable completely (the ra server could execute the delete perhaps to ensure).
-
-Scenario: pending mem table flushes when snapshot installation comes in.
-
-Need to ensure the old pending data in the WAL / memtable isn't flushed _after_
-the received live indexes are written to a segment and that segment is renamed
-into the list of segments.
-
-Options:
-
-1. Call into segment writer to rename the temporary named segment(s) into the
-main sequence of segments. This command will return the full list of new segments.
-If the memtable has been truncated before this is done by the time the rename
-returns we know there wont be any more segment records being written.
-We can't update the `ra_log_snapshot_state` table until _after_ this as the 
-segment writer may assume the live indexes should be in the memtable.
-Also need to handle concurrent compaction?
-Downside: BLOCKING, segwriter can at at times run a backlog.
-
-2. 
+The snapshot sender process (currently transient) first sends all live
+entries for the given snapshot, then performs normal chunk based
+snapshot replication.
 
 
-##### Steps when receiving a new valid `install_snapshot_rpc`
-
-* Once the `last` part of the snapshot has been installed and recovered as the
-mem table state we can calculated which live indexes are needed to complete
-the snapshot. The Ra follower remains in `receiving_snapshot` state and replies
-back with a `ra_seq` of the required indexes.
-    * these are received and written to the log as normal
-process itself
-
-
-#### Alternative snapshot install procedure
+#### Snapshot install procedure
 
 * Sender begins with sending negotiating which live indexes are needed. It is
 probably sufficient for the receiver to return it's `last_applied` index and the
 sender will send all sparse entries after that index
 * Then it proceeds to send the live indexes _before_ the snapshot (so in it's
-natural order if you like).
+natural log order).
 * The receiving ra process then writes these commands to the WAL as normal but
 using a special command / flag to avoid the WAL triggering its' gap detection.
 Ideally the specialised command would include the previous idx so that we can
@@ -239,16 +222,9 @@ still do gap detection in the sparse sequence (should all sends include prior
 sequence so this is the only mode?).
 * The sparse writes are written to a new memtable using a new `ra_mt:sparse_write/2`
 API that bypasses gap validation and stores a sparse sequence instead of range
-* Alt the live indexes replication could be done after the snapshot is complete
-as it is easy for the follower to work out which live indexes it needs.
-when it receives the `last` snapshot chunk it then replies with a special
-continuation command instead of `install_snapshot_result{}` which will initiate
-the live index replication. NB the snapshot sender process may need to call
-into the leader process to get read plans as entries _could_ be in the memtable.
+
 
 #### How to work out which live indexes the follower needs
-WA
-Gnarly example:
 
 Follower term indexes:
 
@@ -267,7 +243,6 @@ If follower `last_applied` is: 1100 then follower needs `[1200, 1777]`
 
 #### How to store live indexes with snapshot
 
-* New section in snapshot file format.
 * Separate file (that can be rebuilt if needed from the snapshot).
 
 

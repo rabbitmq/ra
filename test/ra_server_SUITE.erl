@@ -11,6 +11,12 @@
 -include("src/ra_server.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%% TODO: make so this is not needed
+-dialyzer({nowarn_function,
+           [init_test/1,
+            higher_term_detected/1,
+            follower_aer_term_mismatch_snapshot/1]}).
+
 all() ->
     [
      init_test,
@@ -158,8 +164,12 @@ setup_log() ->
                         {ok, {Meta, undefined}}
                 end),
     meck:expect(ra_snapshot, accept_chunk,
-                fun(Data, _OutOf, _Flag, {Meta, _}) ->
+                fun(Data, _OutOf, {Meta, _}) ->
                         {ok, {Meta, Data}, []}
+                end),
+    meck:expect(ra_snapshot, complete_accept,
+                fun(_Data, _Num, _Machine, {_Meta, MacSt} = State) ->
+                        {State, MacSt, [], []}
                 end),
     meck:expect(ra_snapshot, abort_accept, fun(SS) -> SS end),
     meck:expect(ra_snapshot, accepting, fun(_SS) -> undefined end),
@@ -171,10 +181,10 @@ setup_log() ->
     meck:expect(ra_log, fold, fun ra_log_memory:fold/5),
     meck:expect(ra_log, release_resources, fun ra_log_memory:release_resources/3),
     meck:expect(ra_log, append_sync,
-                fun({Idx, Term, _} = E, L) ->
-                        L1 = ra_log_memory:append(E, L),
-                        {LX, _} = ra_log_memory:handle_event({written, Term, {Idx, Idx}}, L1),
-                        LX
+                fun({Idx, Term, _} = E, L0) ->
+                        L1 = ra_log_memory:append(E, L0),
+                        {L, _} = ra_log_memory:handle_event({written, Term, [Idx]}, L1),
+                        L
                 end),
     meck:expect(ra_log, write_config, fun ra_log_memory:write_config/2),
     meck:expect(ra_log, next_index, fun ra_log_memory:next_index/1),
@@ -224,9 +234,9 @@ init_test(_Config) ->
                      cluster => dehydrate_cluster(Cluster),
                      machine_version => 1},
     SnapshotData = "hi1+2+3",
-    {_, _, LogS, _} = ra_log_memory:install_snapshot({3, 5}, {SnapshotMeta,
-                                                              SnapshotData},
-                                                     ?MODULE, Log0),
+    {ok, Log1, _} = ra_log_memory:install_snapshot({3, 5},
+                                                   ?MODULE, [], Log0),
+    LogS = ra_log:set_snapshot_state({SnapshotMeta, SnapshotData}, Log1),
     meck:expect(ra_log, init, fun (_) -> LogS end),
     #{current_term := 5,
       commit_index := 3,
@@ -781,7 +791,9 @@ follower_aer_term_mismatch_snapshot(_Config) ->
              cluster => #{},
              machine_version => 1},
     Data = <<"hi3">>,
-    {_, _, Log,_} = ra_log_memory:install_snapshot({3, 5}, {Meta, Data}, ?MODULE, Log0),
+
+    {ok, Log1, _} = ra_log_memory:install_snapshot({3, 5}, ?MODULE, [], Log0),
+    Log = ra_log_memory:set_snapshot_state({Meta, Data}, Log1),
     State = maps:put(log, Log, State0),
 
     AE = #append_entries_rpc{term = 6,
@@ -1749,6 +1761,10 @@ follower_install_snapshot_machine_version(_Config) ->
      _Effects0} = ra_server:handle_follower(ISR, State00),
 
     meck:expect(ra_log, recover_snapshot, fun (_) -> {SnapMeta, SnapData} end),
+    meck:expect(ra_snapshot, complete_accept,
+                fun (_, _, _, S) ->
+                        {S, SnapData, [], []}
+                end),
     {follower, #{cfg := #cfg{machine_version = _,%% this gets populated on init only
                              machine_versions = [{4, 1}, {0,0}],
                              effective_machine_module = MacMod1,
@@ -1927,8 +1943,8 @@ follower_cluster_change(_Config) ->
 
     ok.
 
-written_evt(Term, Range) ->
-    {ra_log_event, {written, Term, Range}}.
+written_evt(Term, Range) when is_tuple(Range) ->
+    {ra_log_event, {written, Term, [Range]}}.
 
 leader_applies_new_cluster(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
@@ -2294,24 +2310,29 @@ leader_receives_install_snapshot_rpc(_Config) ->
     % leader ignores lower term
     {leader, State, _}
         = ra_server:handle_leader(ISRpc#install_snapshot_rpc{term = Term - 1},
-                                State),
+                                  State),
     ok.
 
 follower_installs_snapshot(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
-    #{N3 := {_, FState = #{cluster := Config}, _}}
-    = init_servers([N1, N2, N3], {module, ra_queue, #{}}),
+    #{N3 := {_, FState = #{cluster := Config}, _}} =
+        init_servers([N1, N2, N3], {module, ra_queue, #{}}),
     LastTerm = 1, % snapshot term
     Term = 2, % leader term
     Idx = 3,
+    ct:pal("FState ~p", [FState]),
     ISRpc = #install_snapshot_rpc{term = Term, leader_id = N1,
                                   meta = snap_meta(Idx, LastTerm, Config),
                                   chunk_state = {1, last},
                                   data = []},
     {receive_snapshot, FState1,
      [{next_event, ISRpc}, {record_leader_msg, _}]} =
-        ra_server:handle_follower(ISRpc, FState),
+        ra_server:handle_follower(ISRpc, FState#{current_term => Term}),
 
+    meck:expect(ra_snapshot, complete_accept,
+                fun (_, _, _, S) ->
+                        {S, [], [], []}
+                end),
     {follower, #{current_term := Term,
                  commit_index := Idx,
                  last_applied := Idx,
@@ -3195,15 +3216,16 @@ leader_heartbeat_reply_higher_term(_Config) ->
 % %%% helpers
 
 init_servers(ServerIds, Machine) ->
-    lists:foldl(fun (ServerId, Acc) ->
-                        Args = #{cluster_name => some_id,
-                                 id => ServerId,
-                                 uid => atom_to_binary(element(1, ServerId), utf8),
-                                 initial_members => ServerIds,
-                                 log_init_args => #{uid => <<>>},
-                                 machine => Machine},
-                        Acc#{ServerId => {follower, ra_server_init(Args), []}}
-                end, #{}, ServerIds).
+    lists:foldl(
+      fun (ServerId, Acc) ->
+              Args = #{cluster_name => some_id,
+                       id => ServerId,
+                       uid => atom_to_binary(element(1, ServerId), utf8),
+                       initial_members => ServerIds,
+                       log_init_args => #{uid => <<>>},
+                       machine => Machine},
+              Acc#{ServerId => {follower, ra_server_init(Args), []}}
+      end, #{}, ServerIds).
 
 list(L) when is_list(L) -> L;
 list(L) -> [L].
@@ -3231,7 +3253,7 @@ base_state(NumServers, MacMod) ->
                        [{1, 1, usr(<<"hi1">>)},
                         {2, 3, usr(<<"hi2">>)},
                         {3, 5, usr(<<"hi3">>)}]),
-    {Log, _} = ra_log:handle_event({written, 5, {1, 3}}, Log0),
+    {Log, _} = ra_log:handle_event({written, 5, [{1, 3}]}, Log0),
 
     Servers = lists:foldl(fun(N, Acc) ->
                                 Name = {list_to_atom("n" ++ integer_to_list(N)), node()},
