@@ -28,6 +28,7 @@ all_tests() ->
      sparse_write_same_batch,
      sparse_write_overwrite,
      sparse_write_recover,
+     sparse_write_recover_with_mt,
      wal_filename_upgrade,
      same_uid_different_process,
      consecutive_terms_in_batch_should_result_in_two_written_events,
@@ -207,19 +208,57 @@ sparse_write_same_batch(Config) ->
     ok.
 
 sparse_write_recover(Config) ->
+    %% no mt case
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    Tid = ets:new(?FUNCTION_NAME, []),
+    Names = ?config(names, Config),
+    %% create a tid that isn't registered as mt
+    Tid = ets:new(?MODULE, [set]),
     {ok, Pid} = ra_log_wal:start_link(Conf),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 11, 12, 1, "value"),
     ok = await_written(WriterId, 1, [12]),
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 12, 15, 1, "value2"),
     ok = await_written(WriterId, 1, [15]),
+    ?assert(is_process_alive(Pid)),
+    ok = proc_lib:stop(Pid),
+    {ok, Pid2} = ra_log_wal:start_link(Conf),
+    ?assert(is_process_alive(Pid2)),
+    receive
+        {'$gen_cast',
+         {mem_tables, #{UId := [{MtTid, [15, 12]}]}, _}} ->
+            {ok, Mt0} = ra_log_ets:mem_table_please(Names, UId),
+            ?assertEqual(MtTid, ra_mt:tid(Mt0)),
+            ok
+    after 5000 ->
+              flush(),
+              ct:fail("receiving mem table ranges timed out")
+    end,
+    flush(),
+    proc_lib:stop(Pid2),
+    meck:unload(),
+    ok.
 
-    ok = proc_lib:stop(ra_log_wal),
-    {ok, _Pid2} = ra_log_wal:start_link(Conf),
+sparse_write_recover_with_mt(Config) ->
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    Names = ?config(names, Config),
+    {ok, Mt0} = ra_log_ets:mem_table_please(Names, UId),
+    Tid = ra_mt:tid(Mt0),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    {ok, Mt1} = ra_mt:insert_sparse({12, 1, "value"}, undefined, Mt0),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 11, 12, 1, "value"),
+    ok = await_written(WriterId, 1, [12]),
+    {ok, _Mt} = ra_mt:insert_sparse({15, 1, "value"}, 12, Mt1),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 12, 15, 1, "value2"),
+    ok = await_written(WriterId, 1, [15]),
+    ?assert(is_process_alive(Pid)),
+    ok = proc_lib:stop(Pid),
+    {ok, Pid2} = ra_log_wal:start_link(Conf),
+    ?assert(is_process_alive(Pid2)),
     receive
         {'$gen_cast',
          {mem_tables, #{UId := [{Tid, [15, 12]}]}, _}} ->
@@ -228,7 +267,8 @@ sparse_write_recover(Config) ->
               flush(),
               ct:fail("receiving mem table ranges timed out")
     end,
-    proc_lib:stop(Pid),
+    flush(),
+    proc_lib:stop(Pid2),
     meck:unload(),
     ok.
 
@@ -976,7 +1016,7 @@ recover_overwrite(Config) ->
     _ = await_written(WriterId, 2, [{5, 20}]),
 
     flush(),
-    ok = proc_lib:stop(ra_log_wal),
+    ok = proc_lib:stop(ra_log_wal, normal, 5000),
     {ok, Pid2} = ra_log_wal:start_link(Conf),
     {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
 

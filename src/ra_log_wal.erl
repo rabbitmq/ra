@@ -381,26 +381,29 @@ recover_wal(Dir, #conf{system = System,
              end || File <- Files0,
                     filename:extension(File) == ".wal"],
     WalFiles = lists:sort(Files),
-    AllWriters =
-        [begin
-             ?DEBUG("WAL in ~ts: recovering ~ts, Mode ~s",
-                    [System, F, Mode]),
-             Fd = open_at_first_record(filename:join(Dir, F)),
-             {Time, #recovery{ranges = Ranges,
-                              writers = Writers}} =
-             timer:tc(fun () -> recover_wal_chunks(Conf, Fd, Mode) end),
+    FinalWriters =
+    lists:foldl(fun (F, Writers0) ->
+                        ?DEBUG("WAL in ~ts: recovering ~ts, Mode ~s",
+                               [System, F, Mode]),
+                        Fd = open_at_first_record(filename:join(Dir, F)),
+                        {Time, #recovery{ranges = Ranges,
+                                         writers = Writers}} =
+                            timer:tc(fun () ->
+                                             recover_wal_chunks(Conf, Fd,
+                                                                Writers0, Mode)
+                                     end),
 
-             ok = ra_log_segment_writer:accept_mem_tables(SegWriter, Ranges, F),
+                        ok = ra_log_segment_writer:accept_mem_tables(SegWriter,
+                                                                     Ranges, F),
+                        close_existing(Fd),
+                        ?DEBUG("WAL in ~ts: recovered ~ts time taken ~bms - recovered ~b writers",
+                               [System, F, Time div 1000, map_size(Writers)]),
+                        Writers
+                end, #{}, WalFiles),
 
-             close_existing(Fd),
-             ?DEBUG("WAL in ~ts: recovered ~ts time taken ~bms - recovered ~b writers",
-                    [System, F, Time div 1000, map_size(Writers)]),
-             Writers
-         end || F <- WalFiles],
-
-    FinalWriters = lists:foldl(fun (New, Acc) ->
-                                       maps:merge(Acc, New)
-                               end, #{}, AllWriters),
+    % FinalWriters = lists:foldl(fun (New, Acc) ->
+    %                                    maps:merge(Acc, New)
+    %                            end, #{}, AllWriters),
 
     ?DEBUG("WAL in ~ts: final writers recovered ~b",
            [System, map_size(FinalWriters)]),
@@ -781,9 +784,10 @@ dump_records(<<_:1/unsigned, 1:1/unsigned, _:22/unsigned,
 dump_records(<<>>, Entries) ->
     Entries.
 
-recover_wal_chunks(#conf{} = Conf, Fd, Mode) ->
+recover_wal_chunks(#conf{} = Conf, Fd, Writers, Mode) ->
     Chunk = read_wal_chunk(Fd, Conf#conf.recovery_chunk_size),
-    recover_records(Conf, Fd, Chunk, #{}, #recovery{mode = Mode}).
+    recover_records(Conf, Fd, Chunk, #{}, #recovery{mode = Mode,
+                                                    writers = Writers}).
 % All zeros indicates end of a pre-allocated wal file
 recover_records(_, _Fd, <<0:1/unsigned, 0:1/unsigned, 0:22/unsigned,
                           IdDataLen:16/unsigned, _:IdDataLen/binary,
@@ -824,10 +828,11 @@ recover_records(#conf{names = Names} = Conf, Fd,
                     %               W ->
                     %                   W#{UId => {in_seq, SmallestIdx}}
                     %           end,
-                    W = State0#recovery.writers,
-                    Writers =  W#{UId => {in_seq, SmallestIdx - 1}},
+                    Writers = State0#recovery.writers,
+                    % Writers =  W#{UId => {in_seq, SmallestIdx - 1}},
                     recover_records(Conf, Fd, Rest, Cache,
-                                    State0#recovery{writers = Writers});
+                                    State0#recovery{writers =
+                                                        maps:remove(UId, Writers)});
                 error ->
                     System = Conf#conf.system,
                     ?DEBUG("WAL in ~ts: record failed CRC check. If this is the last record"
@@ -1004,7 +1009,16 @@ recover_entry(Names, UId, {Idx, _, _} = Entry, SmallestIdx,
                   {ok, M} = ra_log_ets:mem_table_please(Names, UId),
                   M
           end,
-    case ra_mt:insert(Entry, Mt0) of
+    %% always use write_sparse as there is nothing to indicate in the wal
+    %% data if an entry was written as such. this way we recover all writes
+    %% so should be ok for all types of writes
+    PrevIdx = case Writers of
+                  #{UId := {in_seq, I}} ->
+                      I;
+                  _ ->
+                      undefined
+              end,
+    case ra_mt:insert_sparse(Entry, PrevIdx, Mt0) of
         {ok, Mt1} ->
             Ranges = update_ranges(Ranges0, UId, ra_mt:tid(Mt1),
                                    SmallestIdx, [Idx]),
@@ -1014,7 +1028,8 @@ recover_entry(Names, UId, {Idx, _, _} = Entry, SmallestIdx,
         {error, overwriting} ->
             %% create successor memtable
             {ok, Mt1} = ra_log_ets:new_mem_table_please(Names, UId, Mt0),
-            {retry, State#recovery{tables = Tables#{UId => Mt1}}}
+            {retry, State#recovery{tables = Tables#{UId => Mt1},
+                                   writers = maps:remove(UId, Writers)}}
     end;
 recover_entry(Names, UId, {Idx, Term, _}, SmallestIdx,
               #recovery{mode = post_boot,
@@ -1049,6 +1064,7 @@ handle_trunc(false, _UId, _Idx, State) ->
     State;
 handle_trunc(true, UId, Idx, #recovery{mode = Mode,
                                        ranges = Ranges0,
+                                       writers = Writers,
                                        tables = Tbls} = State) ->
     case Tbls of
         #{UId := Mt0} when Mode == initial ->
@@ -1065,9 +1081,10 @@ handle_trunc(true, UId, Idx, #recovery{mode = Mode,
                      end,
 
             State#recovery{tables = Tbls#{UId => Mt},
+                           writers = maps:remove(UId, Writers),
                            ranges = Ranges};
         _ ->
-            State
+            State#recovery{writers = maps:remove(UId, Writers)}
     end.
 
 named_cast(To, Msg) when is_pid(To) ->
