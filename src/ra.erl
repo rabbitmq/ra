@@ -432,8 +432,7 @@ start_cluster(System, ServerConfigs)
     {error, cluster_not_formed}.
 start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
               Timeout) when is_atom(System) ->
-    {Started, NotStarted} =
-        ra_lib:partition_parallel(
+    case ra_lib:partition_parallel(
             fun (C) ->
                 case start_server(System, C) of
                     ok  -> true;
@@ -442,39 +441,46 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
                               [C, Err]),
                         false
                 end
-            end, ServerConfigs),
-    case Started of
-        [] ->
-            ?ERR("ra: failed to form a new cluster ~w. "
-                  "No servers were successfully started.",
-                  [ClusterName]),
-            {error, cluster_not_formed};
-        _ ->
+            end, ServerConfigs) of
+        {ok, Started, NotStarted} ->
+            case Started of
+                [] ->
+                    ?ERR("ra: failed to form a new cluster ~w. "
+                        "No servers were successfully started.",
+                        [ClusterName]),
+                    {error, cluster_not_formed};
+                _ ->
+                    StartedIds = sort_by_local([I || #{id := I} <- Started], []),
+                    NotStartedIds = [I || #{id := I} <- NotStarted],
+                    %% try triggering elections until one succeeds
+                    %% TODO: handle case where no election was successfully triggered
+                    {value, TriggeredId} = lists:search(fun (N) ->
+                                                                ok == trigger_election(N)
+                                                        end, StartedIds),
+                    %% the triggered id is likely to become the leader so try that first
+                    case members(TriggeredId,
+                                length(ServerConfigs) * Timeout) of
+                        {ok, _, Leader} ->
+                            ?INFO("ra: started cluster ~ts with ~b servers. "
+                                "~b servers failed to start: ~w. Leader: ~w",
+                                [ClusterName, length(ServerConfigs),
+                                length(NotStarted), NotStartedIds,
+                                Leader]),
+                            % we have a functioning cluster
+                            {ok, StartedIds, NotStartedIds};
+                        Err ->
+                            ?WARN("ra: failed to form new cluster ~w. "
+                                "Error: ~w", [ClusterName, Err]),
+                            _ = [force_delete_server(System, N) || N <- StartedIds],
+                            % we do not have a functioning cluster
+                            {error, cluster_not_formed}
+                    end
+            end;
+        {error, {partition_parallel_timeout, Started, _}} ->
             StartedIds = sort_by_local([I || #{id := I} <- Started], []),
-            NotStartedIds = [I || #{id := I} <- NotStarted],
-            %% try triggering elections until one succeeds
-            %% TODO: handle case where no election was successfully triggered
-            {value, TriggeredId} = lists:search(fun (N) ->
-                                                        ok == trigger_election(N)
-                                                end, StartedIds),
-            %% the triggered id is likely to become the leader so try that first
-            case members(TriggeredId,
-                         length(ServerConfigs) * Timeout) of
-                {ok, _, Leader} ->
-                    ?INFO("ra: started cluster ~ts with ~b servers. "
-                          "~b servers failed to start: ~w. Leader: ~w",
-                          [ClusterName, length(ServerConfigs),
-                           length(NotStarted), NotStartedIds,
-                           Leader]),
-                    % we have a functioning cluster
-                    {ok, StartedIds, NotStartedIds};
-                Err ->
-                    ?WARN("ra: failed to form new cluster ~w. "
-                          "Error: ~w", [ClusterName, Err]),
-                    _ = [force_delete_server(System, N) || N <- StartedIds],
-                    % we do not have a functioning cluster
-                    {error, cluster_not_formed}
-            end
+            ?WARN("ra: a member of cluster ~w failed to start within the expected time interval (~w)", [ClusterName, Timeout]),
+            _ = [force_delete_server(System, N) || N <- StartedIds],
+            {error, cluster_not_formed}
     end.
 
 %% @doc Starts an individual ra server of a cluster.
