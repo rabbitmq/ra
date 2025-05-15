@@ -132,6 +132,7 @@
 
 -type state() :: #state{}.
 -type wal_conf() :: #{name := atom(), %% the name to register the wal as
+                      system := atom(),
                       names := ra_system:names(),
                       dir := file:filename_all(),
                       max_size_bytes => non_neg_integer(),
@@ -254,7 +255,7 @@ start_link(#{name := Name} = Config)
 -spec init(wal_conf()) ->
     {ok, state()} |
     {stop, wal_checksum_validation_failure} | {stop, term()}.
-init(#{dir := Dir} = Conf0) ->
+init(#{dir := Dir, system := System} = Conf0) ->
     #{max_size_bytes := MaxWalSize,
       max_entries := MaxEntries,
       recovery_chunk_size := RecoveryChunkSize,
@@ -278,7 +279,7 @@ init(#{dir := Dir} = Conf0) ->
     process_flag(message_queue_data, off_heap),
     process_flag(min_bin_vheap_size, MinBinVheapSize),
     process_flag(min_heap_size, MinHeapSize),
-    CRef = ra_counters:new(WalName, ?COUNTER_FIELDS),
+    CRef = ra_counters:new(WalName, ?COUNTER_FIELDS, #{ra_system => System, module => ?MODULE}),
     Conf = #conf{dir = Dir,
                  segment_writer = SegWriter,
                  compute_checksums = ComputeChecksums,
