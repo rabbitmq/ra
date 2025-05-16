@@ -38,6 +38,7 @@ init_per_group(_, Config) ->
     Config.
 
 end_per_group(_, Config) ->
+    application:stop(ra),
     Config.
 
 init_per_testcase(TestCase, Config) ->
