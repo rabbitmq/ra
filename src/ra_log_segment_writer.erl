@@ -160,11 +160,12 @@ handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
                    end, [], Ranges),
 
     _ = [begin
-             {_, Failures} = ra_lib:partition_parallel(
-                               fun (TidRange) ->
-                                       ok = flush_mem_table_ranges(TidRange, State),
-                                       true
-                               end, Tabs, infinity),
+             {ok, _, Failures} =
+                ra_lib:partition_parallel(
+                    fun (TidRange) ->
+                            ok = flush_mem_table_ranges(TidRange, State),
+                            true
+                    end, Tabs, infinity),
              case Failures of
                  [] ->
                      %% this is what we expect

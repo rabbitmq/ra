@@ -298,16 +298,23 @@ derive_safe_string(S, Num) ->
          end,
      string:slice(F(string:next_grapheme(S), []), 0, Num).
 
+-spec partition_parallel(fun((any()) -> boolean()), [any()]) ->
+    {ok, [any()], [any()]} | {error, any()}.
 partition_parallel(F, Es) ->
     partition_parallel(F, Es, 60000).
 
+-spec partition_parallel(fun((any()) -> boolean()), [any()], timeout()) ->
+    {ok, [any()], [any()]} | {error, any()}.
 partition_parallel(F, Es, Timeout) ->
     Parent = self(),
     Running = [{spawn_monitor(fun() ->
                                       Parent ! {self(), F(E)}
                               end), E}
                || E <- Es],
-    collect(Running, {[], []}, Timeout).
+    case collect(Running, {[], []}, Timeout) of
+        {error, _} = E -> E;
+        {Successes, Failures} -> {ok, Successes, Failures}
+    end.
 
 collect([], Acc, _Timeout) ->
     Acc;
@@ -322,7 +329,7 @@ collect([{{Pid, MRef}, E} | Next], {Left, Right}, Timeout) ->
         {'DOWN', MRef, process, Pid, Reason} ->
             collect(Next, {Left, [{E, Reason} | Right]}, Timeout)
     after Timeout ->
-              exit(partition_parallel_timeout)
+        {error, {partition_parallel_timeout, Left, Right}}
     end.
 
 retry(Func, Attempts) ->
@@ -577,6 +584,13 @@ lists_detect_sort_test() ->
     ?assertEqual(ascending, lists_detect_sort([1, 2, 3, 4, 6, 6])),
     ?assertEqual(unsorted, lists_detect_sort([1, 2, 3, 4, 6, 5])),
 
+    ok.
+
+partition_parallel_test() ->
+    ?assertMatch({error, {partition_parallel_timeout, [], []}},
+                 partition_parallel(fun(_) ->
+                                        timer:sleep(infinity)
+                                    end, [1, 2, 3], 1000)),
     ok.
 
 -endif.

@@ -390,7 +390,7 @@ shrink_cluster_with_snapshot(Config) ->
     ClusterName = ?config(cluster_name, Config),
     Peers = start_peers([s1,s2,s3], PrivDir),
     ServerIds = server_ids(ClusterName, Peers),
-    [A, B, C] = ServerIds,
+    [_A, _B, _C] = ServerIds,
 
     Machine = {module, ?MODULE, #{}},
     {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
