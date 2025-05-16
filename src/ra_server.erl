@@ -219,6 +219,7 @@
                               initial_machine_version => ra_machine:version(),
                               friendly_name => unicode:chardata(),
                               metrics_key => term(),
+                              metrics_labels => map(),
                               % TODO: review - only really used for
                               % setting election timeouts
                               broadcast_time => non_neg_integer(), % ms
@@ -258,6 +259,7 @@
 
 -type mutable_config() :: #{cluster_name => ra_cluster_name(),
                             metrics_key => term(),
+                            metrics_labels => map(),
                             broadcast_time => non_neg_integer(), % ms
                             tick_timeout => non_neg_integer(), % ms
                             install_snap_rpc_timeout => non_neg_integer(), % ms
