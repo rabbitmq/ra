@@ -35,7 +35,6 @@
          consistent_query/3,
          ping/2,
          % cluster operations
-         start_cluster/1,
          start_cluster/2,
          start_cluster/3,
          start_cluster/4,
@@ -349,16 +348,6 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
                      machine => Machine}
                end || Id <- ServerIds],
     start_cluster(System, Configs, Timeout).
-
-%% @doc Same as `start_cluster/2' but uses the default Ra system.
-%% @param ServerConfigs a list of initial server configurations
-%% DEPRECATED: use start_cluster/2
-%% @end
--spec start_cluster([ra_server:ra_server_config()]) ->
-    {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed}.
-start_cluster(ServerConfigs) ->
-  start_cluster(default, ServerConfigs).
 
 %% @doc Starts a new distributed ra cluster.
 %% @param System the system name

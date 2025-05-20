@@ -515,13 +515,13 @@ begin_accept(#{index := Idx, term := Term} = Meta,
 -spec accept_chunk(term(), non_neg_integer(), chunk_flag(), state()) ->
     {ok, state(), [effect()]}.
 accept_chunk(Chunk, Num, last,
-             #?MODULE{uid = UId,
+             #?MODULE{uid = _UId,
                       module = Mod,
                       snapshot_directory = Dir,
                       current = Current,
                       pending = Pending,
                       accepting = #accept{next = Num,
-                                          idxterm = {Idx, _} = IdxTerm,
+                                          idxterm = {_Idx, _} = IdxTerm,
                                           state = AccState}} = State) ->
     %% last chunk
     ok = Mod:complete_accept(Chunk, AccState),
@@ -537,12 +537,6 @@ accept_chunk(Chunk, Num, last,
            fun() -> [delete(Dir, Del) || Del <- Dels] end,
            fun (_) -> ok end},
 
-    %% update ets table
-    % true = ets:insert(?ETSTBL, {UId, Idx}),
-
-    %% TODO: move this to install_snapshot so we can work out the
-    %% live indexes
-    ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, Idx+1, []),
     {ok, State#?MODULE{accepting = undefined,
                        %% reset any pending snapshot writes
                        pending = undefined,

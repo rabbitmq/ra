@@ -33,7 +33,7 @@
          next_index/1,
          snapshot_state/1,
          set_snapshot_state/2,
-         install_snapshot/4,
+         install_snapshot/3,
          recover_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/5,
@@ -60,6 +60,7 @@
 -define(MIN_CHECKPOINT_INTERVAL, 16384).
 -define(LOG_APPEND_TIMEOUT, 5000).
 -define(WAL_RESEND_TIMEOUT, 5000).
+-define(ETSTBL, ra_log_snapshot_state).
 
 -type ra_meta_key() :: atom().
 -type segment_ref() :: {ra_range:range(), File :: file:filename_all()}.
@@ -729,82 +730,6 @@ handle_event({written, Term, WrittenSeq},
                     handle_event({written, Term, NewWrittenSeq}, State0)
             end
     end;
-% handle_event({written, _Term, [{FromIdx, _ToIdx}]},
-%              #?MODULE{last_index = LastIdx} = State)
-%   when FromIdx > LastIdx ->
-%     %% we must have reverted back, either by explicit reset or by a snapshot
-%     %% installation taking place whilst the WAL was processing the write
-%     %% Just drop the event in this case as it is stale
-%     {State, []};
-% handle_event({written, Term, [{FromIdx, ToIdx}]},
-%              #?MODULE{cfg = Cfg,
-%                       last_written_index_term = {LastWrittenIdx0,
-%                                                  _LastWrittenTerm0},
-%                       first_index = FirstIdx} = State0)
-%   when FromIdx =< LastWrittenIdx0 + 1 ->
-%     % We need to ignore any written events for the same index
-%     % but in a prior term if we do not we may end up confirming
-%     % to a leader writes that have not yet
-%     % been fully flushed
-%     case fetch_term(ToIdx, State0) of
-%         {Term, State} when is_integer(Term) ->
-%             ok = put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, ToIdx),
-%             {State#?MODULE{last_written_index_term = {ToIdx, Term}}, []};
-%         {undefined, State} when ToIdx < FirstIdx ->
-%             % A snapshot happened before the written event came in
-%             % This can only happen on a leader when consensus is achieved by
-%             % followers returning appending the entry and the leader committing
-%             % and processing a snapshot before the written event comes in.
-%             {State, []};
-%         {OtherTerm, State} ->
-%             %% term mismatch, let's reduce the range and try again to see
-%             %% if any entries in the range are valid
-%             case ra_range:new(FromIdx, ToIdx-1) of
-%                 undefined ->
-%                     ?DEBUG("~ts: written event did not find term ~b for index ~b "
-%                            "found ~w",
-%                            [Cfg#cfg.log_id, Term, ToIdx, OtherTerm]),
-%                     {State, []};
-%                 NextWrittenRange ->
-%                     %% retry with a reduced range
-%                     handle_event({written, Term, [NextWrittenRange]}, State0)
-%             end
-%     end;
-% handle_event({written, _Term, [{FromIdx, _}]} = Evt,
-%              #?MODULE{cfg = #cfg{log_id = LogId},
-%                       mem_table = Mt,
-%                       last_written_index_term = {LastWrittenIdx, _}} = State0)
-%   when FromIdx > LastWrittenIdx + 1 ->
-%     % leaving a gap is not ok - may need to resend from mem table
-%     Expected = LastWrittenIdx + 1,
-%     MtRange = ra_mt:range(Mt),
-%     case ra_range:in(Expected, MtRange) of
-%         true ->
-%             ?INFO("~ts: ra_log: written gap detected at ~b expected ~b!",
-%                   [LogId, FromIdx, Expected]),
-%             {resend_from(Expected, State0), []};
-%         false ->
-%             ?DEBUG("~ts: ra_log: written gap detected at ~b but is outside
-%                   of mem table range ~w. Updating last written index to ~b!",
-%                    [LogId, FromIdx, MtRange, Expected]),
-%             %% if the entry is not in the mem table we may have missed a
-%             %% written event due to wal crash. Accept written event by updating
-%             %% last written index term and recursing
-%             {Term, State} = fetch_term(Expected, State0),
-%             handle_event(Evt,
-%                          State#?MODULE{last_written_index_term = {Expected, Term}})
-%     end;
-% handle_event({written, Term, Written}, State) ->
-%     %% simple handling of ra_seqs for now
-%     case Written of
-%         [I] when is_integer(I) ->
-%             handle_event({written, Term, [{I, I}]}, State);
-%         [I2, I] when is_integer(I) andalso
-%                      I + 1 == I2 ->
-%             handle_event({written, Term, [{I, I2}]}, State);
-%         _ ->
-%             exit({sparse_written_events_not_implemented, Written})
-%     end;
 handle_event({segments, TidRanges, NewSegs},
              #?MODULE{cfg = #cfg{uid = UId, names = Names} = Cfg,
                       reader = Reader0,
@@ -897,9 +822,6 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
                         Snap
                 end,
 
-            CompEffs = schedule_compaction(SnapIdx, State0),
-            State = State0,
-
 
             %% remove all pending below smallest live index as the wal
             %% may not write them
@@ -920,14 +842,16 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
             {Spec, Mt1} = ra_mt:set_first(SmallestLiveIdx, Mt0),
             ok = exec_mem_table_delete(Names, UId, Spec),
 
-            Effects = CompEffs ++ Effects0, % ++ Effects1,
-            {State#?MODULE{first_index = SnapIdx + 1,
-                           last_index = max(LstIdx, SnapIdx),
-                           last_written_index_term = LWIdxTerm,
-                           mem_table = Mt1,
-                           pending = Pend,
-                           live_indexes = LiveIndexes,
-                           snapshot_state = SnapState}, Effects};
+            State = State0#?MODULE{first_index = SnapIdx + 1,
+                                   last_index = max(LstIdx, SnapIdx),
+                                   last_written_index_term = LWIdxTerm,
+                                   mem_table = Mt1,
+                                   pending = Pend,
+                                   live_indexes = LiveIndexes,
+                                   snapshot_state = SnapState},
+            CompEffs = schedule_compaction(SnapIdx, State),
+            Effects = CompEffs ++ Effects0,
+            {State, Effects};
         checkpoint ->
             put_counter(Cfg, ?C_RA_SVR_METRIC_CHECKPOINT_INDEX, SnapIdx),
             %% If we already have the maximum allowed number of checkpoints,
@@ -1002,11 +926,12 @@ snapshot_state(State) ->
 set_snapshot_state(SnapState, State) ->
     State#?MODULE{snapshot_state = SnapState}.
 
--spec install_snapshot(ra_idxterm(), ra_snapshot:state(), module(), state()) ->
+-spec install_snapshot(ra_idxterm(), module(), state()) ->
     {ra_snapshot:meta(), MacState :: term(), state(), effects()}.
-install_snapshot({SnapIdx, SnapTerm} = IdxTerm, SnapState0, MacMod,
+install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod,
                  #?MODULE{cfg = #cfg{uid = UId,
                                      names = Names} = Cfg,
+                          snapshot_state = SnapState0,
                           mem_table = Mt0} = State0)
   when is_atom(MacMod) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_INSTALLED, 1),
@@ -1021,24 +946,35 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, SnapState0, MacMod,
     CPEffects = [{delete_snapshot,
                   ra_snapshot:directory(SnapState, checkpoint),
                   Checkpoint} || Checkpoint <- Checkpoints],
-    %% TODO: can't really do this as the mem table may contain live indexes
-    %% below the snap idx
-    {Spec, Mt} = ra_mt:set_first(SnapIdx + 1, Mt0),
-    ok = exec_mem_table_delete(Names, UId, Spec),
     State = State0#?MODULE{snapshot_state = SnapState,
                            first_index = SnapIdx + 1,
                            last_index = SnapIdx,
                            last_term = SnapTerm,
-                           mem_table = Mt,
                            last_written_index_term = IdxTerm},
     {Meta, MacState} = recover_snapshot(State),
     LiveIndexes = ra_machine:live_indexes(MacMod, MacState),
     %% TODO: it is not safe to write the indexes _after_ if we then treat
     %% the persisted indexes as authoritative as if we crash in between
     %% it may compact segments that still contain live indexes
+    SmallestLiveIndex = ra_seq:first(LiveIndexes),
     SnapDir = ra_snapshot:current_snapshot_dir(SnapState),
     ok = ra_snapshot:write_indexes(SnapDir, LiveIndexes),
-    {Meta, MacState, State#?MODULE{live_indexes = LiveIndexes},
+    %% TODO: more mt entries could potentially be cleared up here
+    {Spec, Mt} = ra_mt:set_first(SmallestLiveIndex, Mt0),
+    ok = exec_mem_table_delete(Names, UId, Spec),
+    %% TODO: move this to install_snapshot so we can work out the
+    %% live indexes
+    SmallestIdx = case LiveIndexes of
+                      [] ->
+                          SnapIdx + 1;
+                      _ ->
+                          ra_seq:first(LiveIndexes)
+                  end,
+    ok = ra_log_snapshot_state:insert(?ETSTBL, UId, SnapIdx, SmallestIdx,
+                                      LiveIndexes),
+    {Meta, MacState, State#?MODULE{live_indexes = LiveIndexes,
+                                   mem_table = Mt
+                                   },
      CompEffs ++ CPEffects}.
 
 
@@ -1357,29 +1293,11 @@ schedule_compaction(SnapIdx, #?MODULE{cfg = #cfg{},
                           ok
                   end,
 
-            [{bg_work, Fun, fun (_Err) -> ok end}]
+            [{bg_work, Fun, fun (_Err) ->
+                                    ?WARN("bgwork err ~p", [_Err]), ok
+                            end}]
     end.
 
-%% deletes all segments where the last index is lower than
-%% the Idx argument
-% delete_segments(SnapIdx, #?MODULE{cfg = #cfg{log_id = LogId,
-%                                              segment_writer = SegWriter,
-%                                              uid = UId} = Cfg,
-%                                   reader = Reader0} = State0) ->
-%     case ra_log_reader:update_first_index(SnapIdx + 1, Reader0) of
-%         {Reader, []} ->
-%             State = State0#?MODULE{reader = Reader},
-%             {State, []};
-%         {Reader, [Pivot | _] = Obsolete} ->
-%             ok = ra_log_segment_writer:truncate_segments(SegWriter,
-%                                                          UId, Pivot),
-%             NumActive = ra_log_reader:segment_ref_count(Reader),
-%             ?DEBUG("~ts: ~b obsolete segments at ~b - remaining: ~b, pivot ~0p",
-%                    [LogId, length(Obsolete), SnapIdx, NumActive, Pivot]),
-%             put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS, NumActive),
-%             State = State0#?MODULE{reader = Reader},
-%             {State, []}
-%     end.
 
 %% unly used by resend to wal functionality and doesn't update the mem table
 wal_rewrite(#?MODULE{cfg = #cfg{uid = UId,
