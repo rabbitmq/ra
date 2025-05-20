@@ -50,7 +50,7 @@
          local_state_query/3,
          trigger_election/2,
          ping/2,
-         log_fold/4,
+         read_entries/4,
          transfer_leadership/3,
          force_shrink_members_to_current_member/1
         ]).
@@ -207,9 +207,24 @@ query(ServerLoc, QueryFun, leader, Options, Timeout) ->
 query(ServerLoc, QueryFun, consistent, _Options, Timeout) ->
     leader_call(ServerLoc, {consistent_query, QueryFun}, Timeout).
 
--spec log_fold(ra_server_id(), fun(), term(), integer()) -> term().
-log_fold(ServerId, Fun, InitialState, Timeout) ->
-    gen_statem:call(ServerId, {log_fold, Fun, InitialState}, Timeout).
+-spec read_entries(ra_server_id(), [ra:index()],
+                   undefined | ra_flru:state(),
+                   non_neg_integer()) ->
+    {ok, {map(), ra_flru:state()}} | {error, term()}.
+read_entries(ServerId, Indexes, Flru0, Timeout) ->
+    case local_call(ServerId, {read_entries, Indexes}, Timeout) of
+        {ok, ReadPlan} ->
+            {Reads, Flru} = ra_log:execute_read_plan(ReadPlan, Flru0,
+                                                     fun (Idx, Term, Cmd) ->
+                                                             {Idx, Term, Cmd}
+                                                     end,
+                                                     #{access_pattern => random,
+                                                       file_advise => random}),
+            {ok, {Reads, Flru}};
+        Err ->
+            Err
+    end.
+
 
 %% used to query the raft state rather than the machine state
 -spec state_query(server_loc(),
@@ -518,7 +533,7 @@ leader(EventType, {aux_command, Cmd}, State0) ->
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
                         State0#state{server_state = ServerState}),
-    {keep_state, State#state{server_state = ServerState}, Actions};
+    {keep_state, State, Actions};
 leader(EventType, flush_commands,
        #state{conf = #conf{flush_commands_size = Size},
               low_priority_commands = Delayed0} = State0) ->
@@ -586,8 +601,8 @@ leader({timeout, Name}, machine_timeout, State0) ->
     {keep_state, State, Actions};
 leader({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
-leader({call, From}, {log_fold, Fun, Term}, State) ->
-    fold_log(From, Fun, Term, State);
+leader({call, From}, {read_entries, Indexes}, State) ->
+    read_entries0(From, Indexes, State);
 leader(EventType, Msg, State0) ->
     case handle_leader(Msg, State0) of
         {leader, State1, Effects1} ->
@@ -858,8 +873,8 @@ follower(_, tick_timeout, #state{server_state = ServerState0} = State0) ->
     {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast,
                                        State0#state{server_state = ServerState}),
     {keep_state, State, set_tick_timer(State, Actions)};
-follower({call, From}, {log_fold, Fun, Term}, State) ->
-    fold_log(From, Fun, Term, State);
+follower({call, From}, {read_entries, Indexes}, State) ->
+    read_entries0(From, Indexes, State);
 follower(EventType, Msg, #state{conf = #conf{name = Name},
                                 server_state = SS0} = State0) ->
     case handle_follower(Msg, State0) of
@@ -1514,7 +1529,7 @@ handle_effect(_RaftState, {reply, Reply}, {call, From}, State, Actions) ->
     {State, Actions};
 handle_effect(_RaftState, {reply, _From, _Reply}, _EvtType, State, Actions) ->
     {State, Actions};
-handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, Id, Term}}, _,
+handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}}, _,
               #state{server_state = SS0,
                      monitors = Monitors,
                      conf = #conf{snapshot_chunk_size = ChunkSize,
@@ -1524,10 +1539,10 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, Id, Term}}, 
         true ->
             %% node is connected
             %% leader effect only
-            Self = self(),
             Machine = ra_server:machine(SS0),
+            Id = ra_server:id(SS0),
             Pid = spawn(fun () ->
-                                try send_snapshots(Self, Id, Term, To,
+                                try send_snapshots(Id, Term, To,
                                                    ChunkSize, InstallSnapTimeout,
                                                    SnapState, Machine) of
                                     _ -> ok
@@ -1883,14 +1898,13 @@ send(To, Msg, Conf) ->
             Res
     end.
 
-fold_log(From, Fun, Term, State) ->
-    case ra_server:log_fold(State#state.server_state, Fun, Term) of
-        {ok, Result, ServerState} ->
-            {keep_state, State#state{server_state = ServerState},
-             [{reply, From, {ok, Result}}]}
-    end.
+read_entries0(From, Idxs, #state{server_state = #{log := Log}} = State) ->
+    ReadState = ra_log:partial_read(Idxs, Log, fun (Idx, Term, Cmd) ->
+                                                       {Idx, Term, Cmd}
+                                               end),
+    {keep_state, State, [{reply, From, {ok, ReadState}}]}.
 
-send_snapshots(Me, Id, Term, {_, ToNode} = To, ChunkSize,
+send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                InstallTimeout, SnapState, Machine) ->
     Context = ra_snapshot:context(SnapState, ToNode),
     {ok, #{machine_version := SnapMacVer} = Meta, ReadState} =
@@ -1899,6 +1913,7 @@ send_snapshots(Me, Id, Term, {_, ToNode} = To, ChunkSize,
     %% only send the snapshot if the target server can accept it
     TheirMacVer = erpc:call(ToNode, ra_machine, version, [Machine]),
 
+    %% rpc the check what their
     case SnapMacVer > TheirMacVer of
         true ->
             ok;
@@ -1906,13 +1921,45 @@ send_snapshots(Me, Id, Term, {_, ToNode} = To, ChunkSize,
             RPC = #install_snapshot_rpc{term = Term,
                                         leader_id = Id,
                                         meta = Meta},
+            case ra_snapshot:indexes(ra_snapshot:current_snapshot_dir(SnapState)) of
+                {ok, [_|_] = Indexes} ->
+                    %% there are live indexes to send before the snapshot
+                    Idxs = lists:reverse(ra_seq:expand(Indexes)),
+                    Flru = lists:foldl(
+                             fun (Is, F0) ->
+                                     {ok, {Ents0, F}} =
+                                         ra_server_proc:read_entries(Id, Is, F0, 5000),
+                                     Ents = [map_get(I, Ents0) || I <- Is],
+                                     RPC1 = RPC#install_snapshot_rpc{chunk_state = {0, pre},
+                                                                     data = Ents},
+                                     _Res1 = gen_statem:call(To, RPC1,
+                                                            {dirty_timeout, InstallTimeout}),
+                                     %% TODO: assert REs1 is successful
+                                     F
+                             end, undefined, ra_lib:lists_chunk(16, Idxs)),
+                    _ = ra_flru:evict_all(Flru),
+                    ok;
+                _ ->
+                    ok
+            end,
+            %% send install sntaphost RPC with entries here
+            %% Read indexes for snapshot, if non-empty
+            %% Find out what the follower's last applied index is
+            %%
+            %% Call into `Id' to do sparse read of some chunk of indexes
+            %% begin rpc with gen_statem:send_request/2
+            %% while waiting for reply call into `Id' to get the next chunk
+            %% of entries
+            %% wait for response
+            %% send again, etc
             Result = read_chunks_and_send_rpc(RPC, To, ReadState, 1,
-                                              ChunkSize, InstallTimeout, SnapState),
-            ok = gen_statem:cast(Me, {To, Result})
+                                              ChunkSize, InstallTimeout,
+                                              SnapState),
+            ok = gen_statem:cast(Id, {To, Result})
     end.
 
-read_chunks_and_send_rpc(RPC0,
-                         To, ReadState0, Num, ChunkSize, InstallTimeout, SnapState) ->
+read_chunks_and_send_rpc(RPC0, To, ReadState0, Num, ChunkSize,
+                         InstallTimeout, SnapState) ->
     {ok, Data, ContState} = ra_snapshot:read_chunk(ReadState0, ChunkSize,
                                                    SnapState),
     ChunkFlag = case ContState of
