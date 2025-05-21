@@ -169,7 +169,7 @@
         {term :: ra_term(), % the leader's term
          leader_id :: ra_server_id(),
          meta :: snapshot_meta(),
-         chunk_state = {0, pre} :: {pos_integer(), chunk_flag()},
+         chunk_state = {0, pre} :: {non_neg_integer(), chunk_flag()},
          data :: term()
         }).
 

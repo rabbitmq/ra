@@ -1911,6 +1911,8 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
         ra_snapshot:begin_read(SnapState, Context),
 
     %% only send the snapshot if the target server can accept it
+    %% TODO: grab the last_applied index also and use this to floor
+    %% the live indexes
     TheirMacVer = erpc:call(ToNode, ra_machine, version, [Machine]),
 
     %% rpc the check what their

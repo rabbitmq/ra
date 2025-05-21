@@ -1519,9 +1519,10 @@ handle_follower(Msg, State) ->
 handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                               meta = #{index := SnapIndex,
                                                        machine_version := SnapMacVer,
+                                                       cluster := ClusterIds,
                                                        term := SnapTerm} = SnapMeta,
                                               chunk_state = {Num, ChunkFlag},
-                                              data = Data},
+                                              data = ChunkOrEntries},
                         #{cfg := #cfg{id = Id,
                                       log_id = LogId,
                                       effective_machine_version = CurEffMacVer,
@@ -1539,7 +1540,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                      last_term = SnapTerm,
                                      last_index = SnapIndex},
     case ChunkFlag of
-        pre ->
+        pre when is_list(ChunkOrEntries) ->
             %% TODO: we may need to reset the log here to
             %% the last applied index as we
             %% dont know for sure indexes after last applied
@@ -1549,22 +1550,20 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                        fun ({I, _, _} = E, {L0, LstIdx}) ->
                                {ok, L} = ra_log:write_sparse(E, LstIdx, L0),
                                {L, I}
-                       end, {Log00, LastIndex}, Data),
+                       end, {Log00, LastIndex}, ChunkOrEntries),
             State = update_term(Term, State0#{log => Log0}),
             {receive_snapshot, State, [{reply, Reply}]};
         next ->
             SnapState0 = ra_log:snapshot_state(Log00),
-            {ok, SnapState, Effs0} =
-                ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
-                                         SnapState0),
+            SnapState = ra_snapshot:accept_chunk(ChunkOrEntries, Num, SnapState0),
             Log0 = ra_log:set_snapshot_state(SnapState, Log00),
             State = update_term(Term, State0#{log => Log0}),
-            {receive_snapshot, State, [{reply, Reply} | Effs0]};
+            {receive_snapshot, State, [{reply, Reply}]};
         last ->
             SnapState0 = ra_log:snapshot_state(Log00),
-            {ok, SnapState, Effs0} =
-                ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
-                                         SnapState0),
+            {SnapState, MacState, LiveIndexes, Effs0} =
+                ra_snapshot:complete_accept(ChunkOrEntries, Num, Machine,
+                                            SnapState0),
             Log0 = ra_log:set_snapshot_state(SnapState, Log00),
             %% if the machine version of the snapshot is higher
             %% we also need to update the current effective machine configuration
@@ -1582,9 +1581,9 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                           Cfg0
                   end,
             %% this is the last chunk so we can "install" it
-            {#{cluster := ClusterIds},
-             MacState, Log, Effs} = ra_log:install_snapshot({SnapIndex, SnapTerm},
-                                                            EffMacMod, Log0),
+            {ok, Log, Effs} = ra_log:install_snapshot({SnapIndex, SnapTerm},
+                                                      EffMacMod,
+                                                      LiveIndexes, Log0),
             OldServerIds = maps:map(fun (_, V) ->
                                             maps:with([voter_status], V)
                                     end, Cluster),
