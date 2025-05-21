@@ -73,40 +73,56 @@ basics(_Config) ->
     ?assertMatch({ok, #{machine := #{num_keys := 2}}, KvId},
                  ra:member_overview(KvId)),
     ra_log_wal:force_roll_over(ra_log_wal),
-    timer:sleep(1000),
+    %% wait for rollover processing
+    ra_log_wal:last_writer_seq(ra_log_wal, <<>>),
+    %% wait for segment writer to process
+    ra_log_segment_writer:await(ra_log_segment_writer),
+    %% promt ra_kv to take a snapshot
     ok = ra:aux_command(KvId, take_snapshot),
-    timer:sleep(1000),
+    %% wait for snapshot to complete
+    ok = ra_lib:retry(
+           fun () ->
+                   {ok, #{log := #{snapshot_index := SnapIdx,
+                                   num_segments := NumSegments,
+                                   last_index := LastIdx}}, _} =
+                       ra:member_overview(KvId),
+                   SnapIdx == LastIdx andalso NumSegments == 2
+           end, 100, 100),
+    %% restart server to test recovery
     ok = ra:stop_server(default, KvId),
     ok = ra:restart_server(default, KvId),
     {ok, #{index := LastIdx}} = ra_kv:put(KvId, <<"k3">>, <<"k3">>, 5000),
-    ct:pal("overview after ~p", [ra:member_overview(KvId)]),
-    {ok, #{machine := #{live_indexes := Live}}, _} = ra:member_overview(KvId),
+    {ok, #{machine := #{live_indexes := Live},
+           log := #{last_index := KvIdLastIdx}}, _} = ra:member_overview(KvId),
     {ok, {Reads, _}} = ra_server_proc:read_entries(KvId, [LastIdx | Live],
                                                    undefined, 1000),
-    ct:pal("ReadRes ~p", [Reads]),
-
-    % debugger:start(),
-    % int:i(ra_log),
-    % int:i(ra_snapshot),
-    % int:i(ra_server_proc),
-    % int:break(ra_server_proc, 1922),
-    % int:break(ra_log, 873),
-    % int:break(ra_log, 1002),
-    % int:break(ra_log, 1328),
+    ?assertEqual(3, map_size(Reads)),
+    % ct:pal("ReadRes ~p", [Reads]),
     KvId2 = {kv2, node()},
     ok = ra_kv:add_member(?SYS, KvId2, KvId),
-    timer:sleep(1000),
+    ok = ra_lib:retry(
+           fun () ->
+                   {ok, #{log := #{last_index := Last}}, _} =
+                       ra:member_overview(KvId2),
+                   Last >= KvIdLastIdx
+           end, 100, 100),
     {ok, {Reads2, _}} = ra_server_proc:read_entries(KvId2, [LastIdx | Live],
                                                     undefined, 1000),
-    ct:pal("ReadRes2 ~p", [Reads2]),
-    ct:pal("overview ~p", [ra:member_overview(KvId2)]),
     ?assertEqual(3, map_size(Reads2)),
     ra_log_wal:force_roll_over(ra_log_wal),
-    timer:sleep(1000),
+    ra_log_wal:last_writer_seq(ra_log_wal, <<>>),
+    ra_log_segment_writer:await(ra_log_segment_writer),
     {ok, {Reads3, _}} = ra_server_proc:read_entries(KvId2, [LastIdx | Live],
                                                     undefined, 1000),
     ct:pal("ReadRes3 ~p", [Reads3]),
-    ct:pal("overview3 ~p", [ra:member_overview(KvId2)]),
+    % ct:pal("overview3 ~p", [ra:member_overview(KvId2)]),
     ?assertEqual(3, map_size(Reads3)),
 
+    %% TODO: test recovery of kv
+    ok = ra:stop_server(default, KvId2),
+    ok = ra:restart_server(default, KvId2),
+    {ok, {Reads4, _}} = ra_server_proc:read_entries(KvId2, [LastIdx | Live],
+                                                    undefined, 1000),
+
+    ?assertEqual(3, map_size(Reads4)),
     ok.

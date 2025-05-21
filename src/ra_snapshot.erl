@@ -8,6 +8,7 @@
 
 -include("ra.hrl").
 
+-include_lib("stdlib/include/assert.hrl").
 -type file_err() :: ra_lib:file_err().
 
 %% alias
@@ -33,7 +34,8 @@
          complete_snapshot/4,
 
          begin_accept/2,
-         accept_chunk/4,
+         accept_chunk/3,
+         complete_accept/4,
          abort_accept/1,
 
          context/2,
@@ -70,6 +72,7 @@
 -record(accept, {%% the next expected chunk
                  next = 1 :: non_neg_integer(),
                  state :: term(),
+                 machine_version :: non_neg_integer(),
                  idxterm :: ra_idxterm()}).
 
 -record(?MODULE,
@@ -503,26 +506,30 @@ complete_snapshot(IdxTerm, checkpoint, _LiveIndexes,
 
 -spec begin_accept(meta(), state()) ->
     {ok, state()}.
-begin_accept(#{index := Idx, term := Term} = Meta,
+begin_accept(#{index := Idx,
+               machine_version := SnapMacVer,
+               term := Term} = Meta,
              #?MODULE{module = Mod,
                       snapshot_directory = Dir} = State) ->
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     ok = ra_lib:make_dir(SnapDir),
     {ok, AcceptState} = Mod:begin_accept(SnapDir, Meta),
     {ok, State#?MODULE{accepting = #accept{idxterm = {Idx, Term},
+                                           machine_version = SnapMacVer,
                                            state = AcceptState}}}.
 
--spec accept_chunk(term(), non_neg_integer(), chunk_flag(), state()) ->
-    {ok, state(), [effect()]}.
-accept_chunk(Chunk, Num, last,
-             #?MODULE{uid = _UId,
-                      module = Mod,
-                      snapshot_directory = Dir,
-                      current = Current,
-                      pending = Pending,
-                      accepting = #accept{next = Num,
-                                          idxterm = {_Idx, _} = IdxTerm,
-                                          state = AccState}} = State) ->
+-spec complete_accept(Chunk :: term(), Num :: non_neg_integer(),
+                      Machine :: ra_machine:machine(), state()) ->
+    {state(), MacState :: term(), ra_seq:state(), [effect()]}.
+complete_accept(Chunk, Num, Machine,
+                #?MODULE{uid = UId,
+                         module = Mod,
+                         snapshot_directory = Dir,
+                         current = Current,
+                         pending = Pending,
+                         accepting = #accept{next = Num,
+                                             idxterm = {Idx, Term} = IdxTerm,
+                                             state = AccState}} = State0) ->
     %% last chunk
     ok = Mod:complete_accept(Chunk, AccState),
     %% run validate here?
@@ -536,25 +543,44 @@ accept_chunk(Chunk, Num, last,
     Eff = {bg_work,
            fun() -> [delete(Dir, Del) || Del <- Dels] end,
            fun (_) -> ok end},
+    State = State0#?MODULE{accepting = undefined,
+                           %% reset any pending snapshot writes
+                           pending = undefined,
+                           current = IdxTerm},
+    {ok, #{machine_version := SnapMacVer}, MacState} = recover(State),
+    SnapMacMod  = ra_machine:which_module(Machine, SnapMacVer),
+    LiveIndexes = ra_machine:live_indexes(SnapMacMod, MacState),
+    SnapDir = make_snapshot_dir(Dir, Idx, Term),
+    ok = write_indexes(SnapDir, LiveIndexes),
+    %% delete accepting marker file
+    AcceptMarker = filename:join(SnapDir, <<"accepting">>),
+    _ = prim_file:delete(AcceptMarker),
+    %% assert accepting marker is no longer there
+    ?assertNot(filelib:is_file(AcceptMarker)),
+    SmallestIdx = case ra_seq:first(LiveIndexes) of
+                      undefined ->
+                          Idx + 1;
+                      I ->
+                          I
+                  end,
+    ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, SmallestIdx,
+                                      LiveIndexes),
+    {State, MacState, LiveIndexes, [Eff]}.
 
-    {ok, State#?MODULE{accepting = undefined,
-                       %% reset any pending snapshot writes
-                       pending = undefined,
-                       current = IdxTerm}, [Eff]};
-accept_chunk(Chunk, Num, next,
-             #?MODULE{module = Mod,
-                      accepting =
-                      #accept{state = AccState0,
-                              next = Num} = Accept} = State) ->
+-spec accept_chunk(Chunk :: term(), Num :: non_neg_integer(), state()) ->
+    state().
+accept_chunk(Chunk, Num, #?MODULE{module = Mod,
+                                  accepting =
+                                  #accept{state = AccState0,
+                                          next = Num} = Accept} = State) ->
     {ok, AccState} = Mod:accept_chunk(Chunk, AccState0),
-    {ok, State#?MODULE{accepting = Accept#accept{state = AccState,
-                                                 next = Num + 1}},
-     []};
-accept_chunk(_Chunk, Num, _ChunkFlag,
+    State#?MODULE{accepting = Accept#accept{state = AccState,
+                                            next = Num + 1}};
+accept_chunk(_Chunk, Num,
              #?MODULE{accepting = #accept{next = Next}} = State)
   when Next > Num ->
     %% this must be a resend - we can just ignore it
-    {ok, State, []}.
+    State.
 
 -spec abort_accept(state()) -> state().
 abort_accept(#?MODULE{accepting = undefined} = State) ->

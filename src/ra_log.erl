@@ -33,7 +33,7 @@
          next_index/1,
          snapshot_state/1,
          set_snapshot_state/2,
-         install_snapshot/3,
+         install_snapshot/4,
          recover_snapshot/1,
          snapshot_index_term/1,
          update_release_cursor/5,
@@ -60,7 +60,6 @@
 -define(MIN_CHECKPOINT_INTERVAL, 16384).
 -define(LOG_APPEND_TIMEOUT, 5000).
 -define(WAL_RESEND_TIMEOUT, 5000).
--define(ETSTBL, ra_log_snapshot_state).
 
 -type ra_meta_key() :: atom().
 -type segment_ref() :: {ra_range:range(), File :: file:filename_all()}.
@@ -926,9 +925,9 @@ snapshot_state(State) ->
 set_snapshot_state(SnapState, State) ->
     State#?MODULE{snapshot_state = SnapState}.
 
--spec install_snapshot(ra_idxterm(), module(), state()) ->
-    {ra_snapshot:meta(), MacState :: term(), state(), effects()}.
-install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod,
+-spec install_snapshot(ra_idxterm(), module(), ra_seq:state(), state()) ->
+    {ok, state(), effects()}.
+install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod, LiveIndexes,
                  #?MODULE{cfg = #cfg{uid = UId,
                                      names = Names} = Cfg,
                           snapshot_state = SnapState0,
@@ -951,30 +950,18 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod,
                            last_index = SnapIdx,
                            last_term = SnapTerm,
                            last_written_index_term = IdxTerm},
-    {Meta, MacState} = recover_snapshot(State),
-    LiveIndexes = ra_machine:live_indexes(MacMod, MacState),
-    %% TODO: it is not safe to write the indexes _after_ if we then treat
-    %% the persisted indexes as authoritative as if we crash in between
-    %% it may compact segments that still contain live indexes
-    SmallestLiveIndex = ra_seq:first(LiveIndexes),
-    SnapDir = ra_snapshot:current_snapshot_dir(SnapState),
-    ok = ra_snapshot:write_indexes(SnapDir, LiveIndexes),
-    %% TODO: more mt entries could potentially be cleared up here
+    %% TODO: more mt entries could potentially be cleared up in the
+    %% mem table here
+    SmallestLiveIndex = case ra_seq:first(LiveIndexes) of
+                            undefined ->
+                                SnapIdx + 1;
+                            I ->
+                                I
+                        end,
     {Spec, Mt} = ra_mt:set_first(SmallestLiveIndex, Mt0),
     ok = exec_mem_table_delete(Names, UId, Spec),
-    %% TODO: move this to install_snapshot so we can work out the
-    %% live indexes
-    SmallestIdx = case LiveIndexes of
-                      [] ->
-                          SnapIdx + 1;
-                      _ ->
-                          ra_seq:first(LiveIndexes)
-                  end,
-    ok = ra_log_snapshot_state:insert(?ETSTBL, UId, SnapIdx, SmallestIdx,
-                                      LiveIndexes),
-    {Meta, MacState, State#?MODULE{live_indexes = LiveIndexes,
-                                   mem_table = Mt
-                                   },
+    {ok, State#?MODULE{live_indexes = LiveIndexes,
+                       mem_table = Mt},
      CompEffs ++ CPEffects}.
 
 

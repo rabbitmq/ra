@@ -213,19 +213,17 @@ fetch_term(Idx, #state{entries = Log} = State) ->
 
 flush(_Idx, Log) -> Log.
 
--spec install_snapshot(ra_idxterm(), term(), module(), ra_log_memory_state()) ->
-    {ra_snapshot:meta(), term(), ra_log_memory_state(), list()}.
-install_snapshot({Index, Term}, Data, _MacMod,
-                 #state{entries = Log0} = State0)
-  when is_tuple(Data) ->
+install_snapshot({Index, Term}, _MacMod, _LiveIndexes,
+                 #state{entries = Log0} = State0) ->
     % discard log entries below snapshot index
     Log = maps:filter(fun (K, _) -> K > Index end, Log0),
     State = State0#state{entries = Log,
                          last_index = Index,
-                         last_written = {Index, Term},
-                         snapshot = Data},
-    {Meta, MacState} = Data,
-    {Meta, MacState, State, []}.
+                         last_written = {Index, Term}
+                         % snapshot = Data
+                        },
+    % {Meta, MacState} = Data,
+    {ok, State, []}.
 
 -spec read_snapshot(State :: ra_log_memory_state()) ->
     {ok, ra_snapshot:meta(), term()}.

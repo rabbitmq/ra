@@ -18,6 +18,8 @@
 
 -define(MACMOD, ?MODULE).
 
+-define(MAGIC, "RASN").
+-define(VERSION, 1).
 %%%===================================================================
 %%% Common Test callbacks
 %%%===================================================================
@@ -376,11 +378,12 @@ accept_snapshot(Config) ->
     undefined = ra_snapshot:accepting(State0),
     {ok, S1} = ra_snapshot:begin_accept(Meta, State0),
     {55, 2} = ra_snapshot:accepting(S1),
-    {ok, S2, _} = ra_snapshot:accept_chunk(A, 1, next, S1),
-    {ok, S3, _} = ra_snapshot:accept_chunk(B, 2, next, S2),
-    {ok, S4, _} = ra_snapshot:accept_chunk(C, 3, next, S3),
-    {ok, S5, _} = ra_snapshot:accept_chunk(D, 4, next, S4),
-    {ok, S, _}  = ra_snapshot:accept_chunk(E, 5, last, S5),
+    S2 = ra_snapshot:accept_chunk(A, 1, S1),
+    S3 = ra_snapshot:accept_chunk(B, 2, S2),
+    S4 = ra_snapshot:accept_chunk(C, 3, S3),
+    S5 = ra_snapshot:accept_chunk(D, 4, S4),
+    Machine = {machine, ?MODULE, #{}},
+    {S,_, _, _}  = ra_snapshot:complete_accept(E, 5, Machine, S5),
 
     undefined = ra_snapshot:accepting(S),
     undefined = ra_snapshot:pending(S),
@@ -404,8 +407,8 @@ abort_accept(Config) ->
     undefined = ra_snapshot:accepting(State0),
     {ok, S1} = ra_snapshot:begin_accept(Meta, State0),
     {55, 2} = ra_snapshot:accepting(S1),
-    {ok, S2, _} = ra_snapshot:accept_chunk(A, 1, next, S1),
-    {ok, S3, _} = ra_snapshot:accept_chunk(B, 2, next, S2),
+    S2 = ra_snapshot:accept_chunk(A, 1, S1),
+    S3 = ra_snapshot:accept_chunk(B, 2, S2),
     S = ra_snapshot:abort_accept(S3),
     undefined = ra_snapshot:accepting(S),
     undefined = ra_snapshot:pending(S),
@@ -435,7 +438,7 @@ accept_receives_snapshot_written_with_higher_index(Config) ->
     %% then begin an accept for a higher index
     {ok, State2} = ra_snapshot:begin_accept(MetaHigh, State1),
     {165, 2} = ra_snapshot:accepting(State2),
-    {ok, State3, _} = ra_snapshot:accept_chunk(A, 1, next, State2),
+    State3 = ra_snapshot:accept_chunk(A, 1, State2),
 
     %% then the snapshot written event is received
     receive
@@ -445,7 +448,8 @@ accept_receives_snapshot_written_with_higher_index(Config) ->
             {55, 2} = ra_snapshot:current(State4),
             55 = ra_snapshot:last_index_for(UId),
             %% then accept the last chunk
-            {ok, State, _} = ra_snapshot:accept_chunk(B, 2, last, State4),
+            Machine = {machine, ?MODULE, #{}},
+            {State, _, _, _} = ra_snapshot:complete_accept(B, 2, Machine, State4),
             undefined = ra_snapshot:accepting(State),
             {165, 2} = ra_snapshot:current(State),
             ok
@@ -464,8 +468,14 @@ accept_receives_snapshot_written_with_higher_index_2(Config) ->
         ra_snapshot:begin_snapshot(MetaLow, ?MACMOD, ?FUNCTION_NAME,
                                    snapshot, State0),
     Fun(),
-    MacRef = crypto:strong_rand_bytes(1024),
-    MacBin = term_to_binary(MacRef),
+    MacState = crypto:strong_rand_bytes(1024),
+    MetaBin = term_to_binary(MetaHigh),
+    IOVec = term_to_iovec(MacState),
+    Data = [<<(size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
+    Checksum = erlang:crc32(Data),
+    MacBin = iolist_to_binary([<<?MAGIC,
+                                    ?VERSION:8/unsigned,
+                                    Checksum:32/integer>>,Data]),
     %% split into 1024 max byte chunks
     <<A:1024/binary,
       B/binary>> = MacBin,
@@ -473,10 +483,11 @@ accept_receives_snapshot_written_with_higher_index_2(Config) ->
     %% then begin an accept for a higher index
     {ok, State2} = ra_snapshot:begin_accept(MetaHigh, State1),
     {165, 2} = ra_snapshot:accepting(State2),
-    {ok, State3, _} = ra_snapshot:accept_chunk(A, 1, next, State2),
+    State3 = ra_snapshot:accept_chunk(A, 1, State2),
     {165, 2} = ra_snapshot:accepting(State3),
 
-    {ok, State4, _} = ra_snapshot:accept_chunk(B, 2, last, State3),
+    {State4, _, _, _} = ra_snapshot:complete_accept(B, 2, {machine, ?MODULE, #{}},
+                                                    State3),
     undefined = ra_snapshot:accepting(State4),
     {165, 2} = ra_snapshot:current(State4),
     undefined = ra_snapshot:pending(State4),
