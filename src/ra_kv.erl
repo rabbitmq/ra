@@ -24,12 +24,13 @@
 
 
 -define(STATE, ?MODULE).
+-define(TUPLE(A, B), [A | B]).
 
 -type key() :: binary().
 -type value() :: term().
 
 -record(?STATE, {keys = #{} ::
-                 #{key() := [ra:index() | Hash :: non_neg_integer()]}}).
+                 #{key() => ?TUPLE(non_neg_integer(), Hash :: integer())}}).
 
 
 -record(put, {key :: key(),
@@ -107,11 +108,14 @@ put(ServerId, Key, Value, Timeout) ->
 init(_) ->
     #?MODULE{}.
 
+%% we use improper lists in this module
+-dialyzer({no_improper_lists, [apply/3]}).
+
 apply(#{index := Idx} = Meta,
       #put{key = Key,
            meta = #{hash := Hash}},
       #?STATE{keys = Keys} = State0) ->
-    State = State0#?STATE{keys = maps:put(Key, [Idx | Hash], Keys)},
+    State = State0#?STATE{keys = Keys#{Key => ?TUPLE(Idx, Hash)}},
     {State, {ok, Meta}, []}.
 
 live_indexes(#?STATE{keys = Keys}) ->
