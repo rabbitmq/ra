@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp_version: [26, 27]
+        otp_version: [26, 27, 28]
     steps:
     - name: CHECKOUT
       uses: actions/checkout@v2
