@@ -45,7 +45,7 @@ init([]) ->
     %% other processes such as the segment writer can use this value to skip
     %% stale records and avoid flushing unnecessary data to disk.
     %% This is written from the ra process so will need write_concurrency.
-    %% {RaUId, ra_index()}
+    %% {RaUId, ra:index()}
     _ = ets:new(ra_log_snapshot_state, [set | TableFlags]),
     {ok, #state{}}.
 

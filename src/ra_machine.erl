@@ -132,16 +132,16 @@
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
     {timer, term(), non_neg_integer() | infinity} |
-    {log, [ra_index()], fun(([user_command()]) -> effects())} |
+    {log, [ra:index()], fun(([user_command()]) -> effects())} |
 
     %% these are either conditional on the local configuration or
     %% will always be evaluated when seen by members in any raft state
     {send_msg, To :: locator(), Msg :: term(), Options :: send_msg_opts()} |
-    {log, [ra_index()], fun(([user_command()]) -> effects()), {local, node()}} |
-    {log_ext, [ra_index()], fun(([ra_log:read_plan()]) -> effects()), {local, node()}} |
-    {release_cursor, ra_index(), state()} |
-    {release_cursor, ra_index()} |
-    {checkpoint, ra_index(), state()} |
+    {log, [ra:index()], fun(([user_command()]) -> effects()), {local, node()}} |
+    {log_ext, [ra:index()], fun(([ra_log:read_plan()]) -> effects()), {local, node()}} |
+    {release_cursor, ra:index(), state()} |
+    {release_cursor, ra:index()} |
+    {checkpoint, ra:index(), state()} |
     {aux, term()} |
     %% like append/3 but a special backwards compatible function
     %% that tries to execute in any raft state
@@ -199,8 +199,8 @@
 -type command() :: user_command() | builtin_command().
 
 -type command_meta_data() :: #{system_time := integer(),
-                               index := ra_index(),
-                               term := ra_term(),
+                               index := ra:index(),
+                               term := ra:term(),
                                machine_version => version(),
                                from => from(),
                                reply_mode => ra_server:command_reply_mode()}.

@@ -38,11 +38,11 @@ effective_machine_version(#{cfg := Cfg}) ->
 leader_id(State) ->
     maps:get(?FUNCTION_NAME, State).
 
--spec last_applied(ra_aux:internal_state()) -> ra_index().
+-spec last_applied(ra_aux:internal_state()) -> ra:index().
 last_applied(State) ->
     maps:get(?FUNCTION_NAME, State).
 
--spec current_term(ra_aux:internal_state()) -> ra_term().
+-spec current_term(ra_aux:internal_state()) -> ra:term().
 current_term(State) ->
     maps:get(?FUNCTION_NAME, State).
 
@@ -58,9 +58,9 @@ overview(State) ->
 log_last_index_term(#{log := Log}) ->
     ra_log:last_index_term(Log).
 
--spec log_fetch(ra_index(), ra_aux:internal_state()) ->
+-spec log_fetch(ra:index(), ra_aux:internal_state()) ->
     {undefined |
-     {ra_term(),
+     {ra:term(),
       CmdMetadata :: ra_server:command_meta(),
       Command :: term()}, ra_aux:internal_state()}.
 log_fetch(Idx, #{log := Log0} = State)

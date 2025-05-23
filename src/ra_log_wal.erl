@@ -54,11 +54,11 @@
 % tables and segment notification
 -type writer_id() :: {ra_uid(), pid()}.
 
--record(batch_writer, {snap_idx :: ra_index(),
+-record(batch_writer, {snap_idx :: ra:index(),
                        tid :: ets:tid(),
                        uid :: term(),
                        range :: ra:range(),
-                       term :: ra_term(),
+                       term :: ra:term(),
                        old :: undefined | #batch_writer{}
                       }).
 
@@ -126,7 +126,7 @@
                 % all writers seen within the lifetime of a WAL file
                 % and the last index seen
                 writers = #{} :: #{ra_uid() =>
-                                   {in_seq | out_of_seq, ra_index()}},
+                                   {in_seq | out_of_seq, ra:index()}},
                 batch :: option(#batch{})
                }).
 
@@ -153,13 +153,13 @@
               wal_write_strategy/0]).
 
 -type wal_command() ::
-    {append | truncate, writer_id(), ra_index(), ra_term(), term()}.
+    {append | truncate, writer_id(), ra:index(), ra:term(), term()}.
 
 -type wal_op() :: {cast, wal_command()} |
                   {call, from(), wal_command()}.
 -type wal_cmd() :: term() | {ttb, iodata()}.
 
--spec write(atom() | pid(), writer_id(), ets:tid(), ra_index(), ra_term(),
+-spec write(atom() | pid(), writer_id(), ets:tid(), ra:index(), ra:term(),
             wal_cmd()) ->
     {ok, pid()} | {error, wal_down}.
 write(Wal, {_, _} = From, MtTid, Idx, Term, Cmd)

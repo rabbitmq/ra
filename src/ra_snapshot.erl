@@ -95,7 +95,7 @@
 
 %% Side effect function
 %% Turn the current state into immutable reference.
--callback prepare(Index :: ra_index(),
+-callback prepare(Index :: ra:index(),
                   State :: term()) ->
     Ref :: term().
 
@@ -343,7 +343,7 @@ accepting(#?MODULE{accepting = #accept{idxterm = Accepting}}) ->
 directory(#?MODULE{snapshot_directory = Dir}, snapshot) -> Dir;
 directory(#?MODULE{checkpoint_directory = Dir}, checkpoint) -> Dir.
 
--spec last_index_for(ra_uid()) -> option(ra_index()).
+-spec last_index_for(ra_uid()) -> option(ra:index()).
 last_index_for(UId) ->
     case ets:lookup(?ETSTBL, UId) of
         [{_, Index}] when Index >= 0 ->
@@ -396,7 +396,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
     {State#?MODULE{pending = {Pid, {Idx, Term}, SnapKind}},
      [{monitor, process, snapshot_writer, Pid}]}.
 
--spec promote_checkpoint(Idx :: ra_index(), State0 :: state()) ->
+-spec promote_checkpoint(Idx :: ra:index(), State0 :: state()) ->
     {boolean(), State :: state(), Effects :: [effect()]}.
 promote_checkpoint(PromotionIdx,
                    #?MODULE{module = Mod,
@@ -433,7 +433,7 @@ promote_checkpoint(PromotionIdx,
 %% remove it from the checkpoint list.
 -spec find_promotable_checkpoint(PromotionIdx, Checkpoints, Acc) -> Result
     when
-      PromotionIdx :: ra_index(),
+      PromotionIdx :: ra:index(),
       Checkpoints :: [ra_idxterm()],
       Acc :: [ra_idxterm()],
       Result :: option({[ra_idxterm()], ra_idxterm()}).
@@ -620,7 +620,7 @@ current_snapshot_dir(#?MODULE{snapshot_directory = Dir,
 current_snapshot_dir(_) ->
     undefined.
 
--spec take_older_checkpoints(ra_index(), state()) ->
+-spec take_older_checkpoints(ra:index(), state()) ->
     {state(), [checkpoint()]}.
 take_older_checkpoints(Idx, #?MODULE{checkpoints = Checkpoints0} = State0) ->
     {Checkpoints, Outdated} = lists:splitwith(fun ({CPIdx, _Term}) ->

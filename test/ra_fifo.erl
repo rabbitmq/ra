@@ -69,7 +69,7 @@
 -type msg() :: {msg_header(), raw_msg()}.
 %% message with a header map.
 
--type indexed_msg() :: {ra_index(), msg()}.
+-type indexed_msg() :: {ra:index(), msg()}.
 
 -type delivery_msg() :: {msg_id(), msg()}.
 %% A tuple consisting of the message id and the headered message.
@@ -125,7 +125,7 @@
 -record(enqueuer,
         {next_seqno = 1 :: msg_seqno(),
          % out of order enqueues - sorted list
-         pending = [] :: [{msg_seqno(), ra_index(), raw_msg()}],
+         pending = [] :: [{msg_seqno(), ra:index(), raw_msg()}],
          suspected_down = false :: boolean()
         }).
 

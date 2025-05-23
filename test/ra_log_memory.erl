@@ -43,10 +43,10 @@
 
 -type ra_log_memory_meta() :: #{atom() => term()}.
 
--record(state, {last_index = 0 :: ra_index(),
+-record(state, {last_index = 0 :: ra:index(),
                 last_written = {0, 0} :: ra_idxterm(), % only here to fake the async api of the file based one
                 entries = #{0 => {0, undefined}} ::
-                    #{ra_term() => {ra_index(), term()}},
+                    #{ra:term() => {ra:index(), term()}},
                 meta = #{} :: ra_log_memory_meta(),
                 snapshot :: option({ra_snapshot:meta(), term()})}).
 
@@ -146,7 +146,7 @@ last_index_term(#state{last_index = LastIdx,
             end
     end.
 
--spec set_last_index(ra_index(), ra_log_memory_state()) ->
+-spec set_last_index(ra:index(), ra_log_memory_state()) ->
     {ok, ra_log_memory_state()} | {not_found, ra_log_memory_state()}.
 set_last_index(Idx, #state{last_written = {LWIdx, _}} = State0) ->
     case fetch_term(Idx, State0) of
@@ -186,11 +186,11 @@ handle_event({written, Term, {_From, Idx} = Range0}, State0) ->
 handle_event(_Evt, State0) ->
             {State0, []}.
 
--spec next_index(ra_log_memory_state()) -> ra_index().
+-spec next_index(ra_log_memory_state()) -> ra:index().
 next_index(#state{last_index = LastIdx}) ->
     LastIdx + 1.
 
--spec fetch(ra_index(), ra_log_memory_state()) ->
+-spec fetch(ra:index(), ra_log_memory_state()) ->
     {option(log_entry()), ra_log_memory_state()}.
 fetch(Idx, #state{entries = Log} = State) ->
     case Log of
@@ -199,8 +199,8 @@ fetch(Idx, #state{entries = Log} = State) ->
         _ -> {undefined, State}
     end.
 
--spec fetch_term(ra_index(), ra_log_memory_state()) ->
-    {option(ra_term()), ra_log_memory_state()}.
+-spec fetch_term(ra:index(), ra_log_memory_state()) ->
+    {option(ra:term()), ra_log_memory_state()}.
 fetch_term(Idx, #state{entries = Log} = State) ->
     case Log of
         #{Idx := {T, _}} ->
@@ -253,7 +253,7 @@ snapshot_index_term(#state{snapshot = {#{index := Idx,
                                          term := Term}, _}}) ->
     {Idx, Term}.
 
--spec update_release_cursor(ra_index(), ra_cluster(),
+-spec update_release_cursor(ra:index(), ra_cluster(),
                             ra_machine:version(), term(),
                             ra_log_memory_state()) ->
     {ra_log_memory_state(), []}.

@@ -18,7 +18,7 @@
          metrics_key :: term(),
          machine :: ra_machine:machine(),
          machine_version :: ra_machine:version(),
-         machine_versions :: [{ra_index(), ra_machine:version()}, ...],
+         machine_versions :: [{ra:index(), ra_machine:version()}, ...],
          effective_machine_version :: ra_machine:version(),
          effective_machine_module :: module(),
          effective_handle_aux_fun :: undefined | {handle_aux, 5 | 6},

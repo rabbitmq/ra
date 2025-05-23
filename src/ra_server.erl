@@ -77,16 +77,16 @@
       cluster := ra_cluster(),
       cluster_change_permitted := boolean(),
       cluster_index_term := ra_idxterm(),
-      previous_cluster => {ra_index(), ra_term(), ra_cluster()},
-      current_term := ra_term(),
+      previous_cluster => {ra:index(), ra:term(), ra_cluster()},
+      current_term := ra:term(),
       log := term(),
       voted_for => option(ra_server_id()), % persistent
       votes => non_neg_integer(),
       membership => ra_membership(),
-      commit_index := ra_index(),
-      last_applied := ra_index(),
-      persisted_last_applied => ra_index(),
-      stop_after => ra_index(),
+      commit_index := ra:index(),
+      last_applied := ra:index(),
+      persisted_last_applied => ra:index(),
+      stop_after => ra:index(),
       machine_state := term(),
       aux_state => term(),
       condition => #{predicate_fun := ra_await_condition_fun(),
@@ -172,7 +172,7 @@
     {send_rpc, ra_server_id(), #append_entries_rpc{}} |
     {send_snapshot, To :: ra_server_id(),
      {Module :: module(), Ref :: term(),
-      LeaderId :: ra_server_id(), Term :: ra_term()}} |
+      LeaderId :: ra_server_id(), Term :: ra:term()}} |
     {next_event, ra_msg()} |
     {next_event, cast, ra_msg()} |
     {notify, #{pid() => [term()]}} |
@@ -1794,9 +1794,9 @@ cfg_to_map(Cfg) ->
                  end, {2, #{}}, record_info(fields, cfg))).
 
 -spec metrics(ra_server_state()) ->
-    {atom(), ra_term(),
-     ra_index(), ra_index(),
-     ra_index(), ra_index(), non_neg_integer()}.
+    {atom(), ra:term(),
+     ra:index(), ra:index(),
+     ra:index(), ra:index(), non_neg_integer()}.
 metrics(#{cfg := #cfg{metrics_key = Key},
           commit_index := CI,
           last_applied := LA,
@@ -1908,7 +1908,7 @@ leader_id(State) ->
 clear_leader_id(State) ->
     State#{leader_id => undefined}.
 
--spec current_term(ra_server_state()) -> option(ra_term()).
+-spec current_term(ra_server_state()) -> option(ra:term()).
 current_term(State) ->
     maps:get(current_term, State).
 
@@ -2200,7 +2200,7 @@ log_fold_cache(From, _To, _Cache, Acc) ->
 
 % stores the cluster config at an index such that we can later snapshot
 % at this index.
--spec update_release_cursor(ra_index(),
+-spec update_release_cursor(ra:index(),
                             term(), ra_server_state()) ->
     {ra_server_state(), effects()}.
 update_release_cursor(Index, MacState,
@@ -2212,7 +2212,7 @@ update_release_cursor(Index, MacState,
                                                   MacState, Log0),
     {State#{log => Log}, Effects}.
 
--spec checkpoint(ra_index(), term(), ra_server_state()) ->
+-spec checkpoint(ra:index(), term(), ra_server_state()) ->
       {ra_server_state(), effects()}.
 checkpoint(Index, MacState,
            State = #{log := Log0, cluster := Cluster}) ->
@@ -2221,7 +2221,7 @@ checkpoint(Index, MacState,
                                        MacVersion, MacState, Log0),
     {State#{log => Log}, Effects}.
 
--spec promote_checkpoint(ra_index(), ra_server_state()) ->
+-spec promote_checkpoint(ra:index(), ra_server_state()) ->
     {ra_server_state(), effects()}.
 promote_checkpoint(Index, #{log := Log0} = State) ->
     {Log, Effects} = ra_log:promote_checkpoint(Index, Log0),
@@ -2383,7 +2383,7 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
     end.
 
 %% reads user commands at the specified index
--spec log_read([ra_index()], ra_server_state()) ->
+-spec log_read([ra:index()], ra_server_state()) ->
     {ok, [term()], ra_server_state()} |
     {error, ra_server_state()}.
 log_read(Indexes, #{log := Log0} = State) ->
@@ -2393,7 +2393,7 @@ log_read(Indexes, #{log := Log0} = State) ->
      State#{log => Log}}.
 
 %% reads user commands at the specified index
--spec log_partial_read([ra_index()], ra_server_state()) ->
+-spec log_partial_read([ra:index()], ra_server_state()) ->
     ra_log:read_plan().
 log_partial_read(Indexes, #{log := Log0}) ->
     ra_log:partial_read(Indexes, Log0,
@@ -2679,7 +2679,7 @@ state_query(Query, _State) ->
 %% entries with different terms, then the log with the later term is more
 %% up-to-date. If the logs end with the same term, then whichever log is
 %% longer is more up-to-dat
--spec is_candidate_log_up_to_date(ra_index(), ra_term(), ra_idxterm()) ->
+-spec is_candidate_log_up_to_date(ra:index(), ra:term(), ra_idxterm()) ->
     boolean().
 is_candidate_log_up_to_date(_, Term, {_, LastTerm})
   when Term > LastTerm ->
@@ -3201,7 +3201,7 @@ match_indexes(#{cfg := #cfg{id = Id},
                       [Idx | Acc]
               end, [LWIdx], Cluster).
 
--spec agreed_commit(list()) -> ra_index().
+-spec agreed_commit(list()) -> ra:index().
 agreed_commit(Indexes) ->
     SortedIdxs = lists:sort(fun erlang:'>'/2, Indexes),
     Nth = trunc(length(SortedIdxs) / 2) + 1,

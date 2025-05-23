@@ -109,7 +109,8 @@
                      {M :: module(), F :: atom(), A :: list()}.
 
 %% export some internal types
--type index() :: ra_index().
+-nominal index() :: non_neg_integer().
+-nominal term() :: non_neg_integer().
 -type idxterm() :: ra_idxterm().
 -type server_id() :: ra_server_id().
 -type cluster_name() :: ra_cluster_name().
@@ -129,6 +130,7 @@
 %% </ul>
 
 -export_type([index/0,
+              term/0,
               idxterm/0,
               server_id/0,
               cluster_name/0,

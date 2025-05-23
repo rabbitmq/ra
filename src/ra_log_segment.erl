@@ -39,12 +39,12 @@
 -define(BLOCK_SIZE, 4096). %% assumed block size
 -define(READ_AHEAD_B, ?BLOCK_SIZE * 16). %% some multiple of common block sizes
 
--type index_record_data() :: {Term :: ra_term(), % 64 bit
+-type index_record_data() :: {Term :: ra:term(), % 64 bit
                               Offset :: non_neg_integer(), % 32 bit
                               Length :: non_neg_integer(), % 32 bit
                               Checksum :: integer()}. % CRC32 - 32 bit
 
--type ra_segment_index() :: #{ra_index() => index_record_data()}.
+-type ra_segment_index() :: #{ra:index() => index_record_data()}.
 
 -record(cfg, {version :: non_neg_integer(),
               max_count = ?SEGMENT_MAX_ENTRIES :: non_neg_integer(),
@@ -66,7 +66,7 @@
          data_offset :: pos_integer(),
          data_write_offset :: pos_integer(),
          index = undefined :: option(ra_segment_index()),
-         range :: option({ra_index(), ra_index()}),
+         range :: option({ra:index(), ra:index()}),
          pending_data = [] :: iodata(),
          pending_index = [] :: iodata(),
          pending_count = 0 :: non_neg_integer(),
@@ -197,7 +197,7 @@ process_file(false, Mode, Filename, Fd, Options) ->
                 data_write_offset = ?HEADER_SIZE + IndexSize
                }}.
 
--spec append(state(), ra_index(), ra_term(),
+-spec append(state(), ra:index(), ra:term(),
              iodata() | {non_neg_integer(), iodata()}) ->
     {ok, state()} | {error, full | inet:posix()}.
 append(#state{cfg = #cfg{max_pending = PendingCount},
@@ -287,10 +287,10 @@ flush(#state{cfg = #cfg{fd = Fd},
     end.
 
 -spec fold(state(),
-           FromIdx :: ra_index(),
-           ToIdx :: ra_index(),
+           FromIdx :: ra:index(),
+           ToIdx :: ra:index(),
            fun((binary()) -> term()),
-           fun(({ra_index(), ra_term(), term()}, Acc) -> Acc), Acc) ->
+           fun(({ra:index(), ra:term(), term()}, Acc) -> Acc), Acc) ->
     Acc when Acc :: term().
 fold(#state{cfg = #cfg{mode = read} = Cfg,
             cache = Cache,
@@ -312,8 +312,8 @@ is_modified(#state{cfg = #cfg{fd = Fd},
             Size > DataOffset
     end.
 
--spec read_sparse(state(), [ra_index()],
-                  fun((ra:index(), ra_term(), binary(), Acc) -> Acc),
+-spec read_sparse(state(), [ra:index()],
+                  fun((ra:index(), ra:term(), binary(), Acc) -> Acc),
                   Acc) ->
     {ok, NumRead :: non_neg_integer(), Acc} | {error, modified}
       when Acc :: term().
@@ -325,8 +325,8 @@ read_sparse(#state{} = State, Indexes, AccFun, Acc) ->
             read_sparse_no_checks(State, Indexes, AccFun, Acc)
     end.
 
--spec read_sparse_no_checks(state(), [ra_index()],
-                            fun((ra:index(), ra_term(), binary(), Acc) -> Acc),
+-spec read_sparse_no_checks(state(), [ra:index()],
+                            fun((ra:index(), ra:term(), binary(), Acc) -> Acc),
                                 Acc) ->
     {ok, NumRead :: non_neg_integer(), Acc}
       when Acc :: term().
@@ -391,7 +391,7 @@ map_get_(Key, Map) when is_map_key(Key, Map) ->
 map_get_(Key, _Map) ->
     exit({missing_key, Key}).
 
--spec term_query(state(), Idx :: ra_index()) -> option(ra_term()).
+-spec term_query(state(), Idx :: ra:index()) -> option(ra:term()).
 term_query(#state{index = Index}, Idx) ->
     case Index of
         #{Idx := {Term, _, _, _}} ->
@@ -426,7 +426,7 @@ fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0) ->
             exit({missing_key, Idx, Cfg#cfg.filename})
     end.
 
--spec range(state()) -> option({ra_index(), ra_index()}).
+-spec range(state()) -> option({ra:index(), ra:index()}).
 range(#state{range = Range}) ->
     Range.
 

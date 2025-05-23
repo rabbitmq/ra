@@ -203,7 +203,7 @@ lookup(Idx, #?MODULE{tid = Tid,
     end.
 
 -spec lookup_term(ra:index(), state()) ->
-    ra_term() | undefined.
+    ra:term() | undefined.
 lookup_term(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
   when Idx >= FstStagedIdx ->
     %% staged read
@@ -222,7 +222,7 @@ lookup_term(Idx, #?MODULE{prev = #?MODULE{} = Prev}) ->
 lookup_term(_Idx, _State) ->
     undefined.
 
--spec tid_for(ra:index(), ra_term(), state()) ->
+-spec tid_for(ra:index(), ra:term(), state()) ->
     undefined | ets:tid().
 tid_for(_Idx, _Term, undefined) ->
     undefined;

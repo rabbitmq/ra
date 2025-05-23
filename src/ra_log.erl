@@ -65,14 +65,14 @@
 
 -type ra_meta_key() :: atom().
 -type segment_ref() :: {ra_range:range(), File :: file:filename_all()}.
--type event_body() :: {written, ra_term(), ra:range()} |
+-type event_body() :: {written, ra:term(), ra:range()} |
                       {segments, [{ets:tid(), ra:range()}], [segment_ref()]} |
-                      {resend_write, ra_index()} |
+                      {resend_write, ra:index()} |
                       {snapshot_written, ra_idxterm(), ra_snapshot:kind()} |
                       {down, pid(), term()}.
 
 -type event() :: {ra_log_event, event_body()}.
--type transform_fun() :: fun ((ra_index(), ra_term(), ra_server:command()) -> term()).
+-type transform_fun() :: fun ((ra:index(), ra:term(), ra_server:command()) -> term()).
 
 -type effect() ::
     {delete_snapshot, Dir :: file:filename_all(), ra_idxterm()} |
@@ -100,9 +100,9 @@
 -record(?MODULE,
         {cfg = #cfg{},
          %% mutable data below
-         first_index = -1 :: ra_index(),
-         last_index = -1 :: -1 | ra_index(),
-         last_term = 0 :: ra_term(),
+         first_index = -1 :: ra:index(),
+         last_index = -1 :: -1 | ra:index(),
+         last_term = 0 :: ra:term(),
          last_written_index_term = {0, 0} :: ra_idxterm(),
          snapshot_state :: ra_snapshot:state(),
          last_resend_time :: option({integer(), WalPid :: pid() | undefined}),
@@ -114,7 +114,7 @@
         }).
 
 -record(read_plan, {dir :: file:filename_all(),
-                    read :: #{ra_index() := log_entry()},
+                    read :: #{ra:index() := log_entry()},
                     plan :: ra_log_reader:read_plan()}).
 
 -opaque read_plan() :: #read_plan{}.
@@ -139,16 +139,16 @@
 
 -type overview() ::
     #{type := ra_log,
-      last_index := ra_index(),
-      last_term := ra_term(),
-      first_index := ra_index(),
+      last_index := ra:index(),
+      last_term := ra:term(),
+      first_index := ra:index(),
       last_written_index_term := ra_idxterm(),
       num_segments := non_neg_integer(),
       open_segments => non_neg_integer(),
-      snapshot_index => undefined | ra_index(),
-      snapshot_term => undefined | ra_index(),
+      snapshot_index => undefined | ra:index(),
+      snapshot_term => undefined | ra:index(),
       mem_table_size => non_neg_integer(),
-      latest_checkpoint_index => undefined | ra_index(),
+      latest_checkpoint_index => undefined | ra:index(),
       atom() => term()}.
 
 -export_type([state/0,
@@ -441,7 +441,7 @@ write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
                                       [UId, Idx, LastIdx+1])),
     {error, {integrity_error, Msg}}.
 
--spec fold(FromIdx :: ra_index(), ToIdx :: ra_index(),
+-spec fold(FromIdx :: ra:index(), ToIdx :: ra:index(),
            fun((log_entry(), Acc) -> Acc), Acc, state()) ->
     {Acc, state()} when Acc :: term().
 fold(From0, To0, Fun, Acc0,
@@ -479,7 +479,7 @@ fold(_From, _To, _Fun, Acc, State) ->
 %% @doc Reads a list of indexes.
 %% Found indexes are returned in the same order as the input list of indexes
 %% @end
--spec sparse_read([ra_index()], state()) ->
+-spec sparse_read([ra:index()], state()) ->
     {[log_entry()], state()}.
 sparse_read(Indexes0, #?MODULE{cfg = Cfg,
                                reader = Reader0,
@@ -522,8 +522,8 @@ sparse_read(Indexes0, #?MODULE{cfg = Cfg,
 
 %% read a list of indexes,
 %% found indexes be returned in the same order as the input list of indexes
--spec partial_read([ra_index()], state(),
-                   fun ((ra_index(), ra_term(), ra_server:command()) -> term())
+-spec partial_read([ra:index()], state(),
+                   fun ((ra:index(), ra:term(), ra_server:command()) -> term())
                    ) ->
     read_plan().
 partial_read(Indexes0, #?MODULE{cfg = Cfg,
@@ -561,7 +561,7 @@ partial_read(Indexes0, #?MODULE{cfg = Cfg,
 -spec execute_read_plan(read_plan(), undefined | ra_flru:state(),
                         TransformFun :: transform_fun(),
                         ra_log_reader:read_plan_options()) ->
-    {#{ra_index() => Command :: term()}, ra_flru:state()}.
+    {#{ra:index() => Command :: term()}, ra_flru:state()}.
 execute_read_plan(#read_plan{dir = Dir,
                              read = Read,
                              plan = Plan}, Flru0, TransformFun,
@@ -590,7 +590,7 @@ last_written(#?MODULE{last_written_index_term = LWTI}) ->
     LWTI.
 
 %% forces the last index and last written index back to a prior index
--spec set_last_index(ra_index(), state()) ->
+-spec set_last_index(ra:index(), state()) ->
     {ok, state()} | {not_found, state()}.
 set_last_index(Idx, #?MODULE{cfg = Cfg,
                              last_written_index_term = {LWIdx0, _}} = State0) ->
@@ -788,11 +788,11 @@ handle_event({down, Pid, _Info},
              State) ->
     {State#?MODULE{readers = lists:delete(Pid, Readers)}, []}.
 
--spec next_index(state()) -> ra_index().
+-spec next_index(state()) -> ra:index().
 next_index(#?MODULE{last_index = LastIdx}) ->
     LastIdx + 1.
 
--spec fetch(ra_index(), state()) ->
+-spec fetch(ra:index(), state()) ->
     {option(log_entry()), state()}.
 fetch(Idx, State0) ->
     case fold(Idx, Idx, fun(E, Acc) -> [E | Acc] end, [], State0) of
@@ -802,8 +802,8 @@ fetch(Idx, State0) ->
             {Entry, State}
     end.
 
--spec fetch_term(ra_index(), state()) ->
-    {option(ra_term()), state()}.
+-spec fetch_term(ra:index(), state()) ->
+    {option(ra:term()), state()}.
 fetch_term(Idx, #?MODULE{last_index = LastIdx,
                          first_index = FirstIdx} = State0)
   when Idx < FirstIdx orelse Idx > LastIdx ->
@@ -866,14 +866,14 @@ recover_snapshot(#?MODULE{snapshot_state = SnapState}) ->
 snapshot_index_term(#?MODULE{snapshot_state = SS}) ->
     ra_snapshot:current(SS).
 
--spec update_release_cursor(Idx :: ra_index(), Cluster :: ra_cluster(),
+-spec update_release_cursor(Idx :: ra:index(), Cluster :: ra_cluster(),
                             MacVersion :: ra_machine:version(),
                             MacState :: term(), State :: state()) ->
     {state(), effects()}.
 update_release_cursor(Idx, Cluster, MacVersion, MacState, State) ->
     suggest_snapshot(snapshot, Idx, Cluster, MacVersion, MacState, State).
 
--spec checkpoint(Idx :: ra_index(), Cluster :: ra_cluster(),
+-spec checkpoint(Idx :: ra:index(), Cluster :: ra_cluster(),
                  MacVersion :: ra_machine:version(),
                  MacState :: term(), State :: state()) ->
     {state(), effects()}.

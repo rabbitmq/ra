@@ -131,7 +131,7 @@ update_segments(NewSegmentRefs,
                   range = Range,
                   open_segments = Open}.
 
--spec handle_log_update({ra_log_update, undefined | pid(), ra_index(),
+-spec handle_log_update({ra_log_update, undefined | pid(), ra:index(),
                          [segment_ref()]}, state()) -> state().
 handle_log_update({ra_log_update, From, _FstIdx, SegRefs},
                   #?STATE{open_segments = Open0} = State) ->
@@ -146,7 +146,7 @@ handle_log_update({ra_log_update, From, _FstIdx, SegRefs},
                                                   lists:reverse(SegRefs)),
                   open_segments = Open}.
 
--spec update_first_index(ra_index(), state()) ->
+-spec update_first_index(ra:index(), state()) ->
     {state(), [segment_ref()]}.
 update_first_index(FstIdx, #?STATE{segment_refs = SegRefs0,
                                    open_segments = OpenSegs0} = State) ->
@@ -191,7 +191,7 @@ range(#?STATE{range = Range}) ->
 num_open_segments(#?STATE{open_segments = Open}) ->
      ra_flru:size(Open).
 
--spec fold(ra_index(), ra_index(), fun(), term(), state()) ->
+-spec fold(ra:index(), ra:index(), fun(), term(), state()) ->
     {state(), term()}.
 fold(FromIdx, ToIdx, Fun, Acc,
     #?STATE{cfg = #cfg{} = Cfg} = State0)
@@ -201,14 +201,14 @@ fold(FromIdx, ToIdx, Fun, Acc,
 fold(_FromIdx, _ToIdx, _Fun, Acc, #?STATE{} = State) ->
     {State, Acc}.
 
--spec sparse_read(state(), [ra_index()], [log_entry()]) ->
+-spec sparse_read(state(), [ra:index()], [log_entry()]) ->
     {[log_entry()], state()}.
 sparse_read(#?STATE{cfg = #cfg{} = Cfg} = State, Indexes, Entries0) ->
     {Open, SegC, Entries} = (catch segment_sparse_read(State, Indexes, Entries0)),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_SEGMENT, SegC),
     {Entries, State#?MODULE{open_segments = Open}}.
 
--spec read_plan(state(), [ra_index()]) -> read_plan().
+-spec read_plan(state(), [ra:index()]) -> read_plan().
 read_plan(#?STATE{segment_refs = SegRefs}, Indexes) ->
     %% TODO: add counter for number of read plans requested
     segment_read_plan(SegRefs, Indexes, []).
@@ -216,10 +216,10 @@ read_plan(#?STATE{segment_refs = SegRefs}, Indexes) ->
 -spec exec_read_plan(file:filename_all(),
                      read_plan(),
                      undefined | ra_flru:state(),
-                     TransformFun :: fun((ra_index(), ra_term(), binary()) -> term()),
+                     TransformFun :: fun((ra:index(), ra:term(), binary()) -> term()),
                      read_plan_options(),
-                     #{ra_index() => Command :: term()}) ->
-    {#{ra_index() => Command :: term()}, ra_flru:state()}.
+                     #{ra:index() => Command :: term()}) ->
+    {#{ra:index() => Command :: term()}, ra_flru:state()}.
 exec_read_plan(Dir, Plan, undefined, TransformFun, Options, Acc0) ->
     Open = ra_flru:new(1, fun({_, Seg}) -> ra_log_segment:close(Seg) end),
     exec_read_plan(Dir, Plan, Open, TransformFun, Options, Acc0);
@@ -252,7 +252,7 @@ exec_read_plan(Dir, Plan, Open0, TransformFun, Options, Acc0)
               end
       end, {Acc0, Open0}, Plan).
 
--spec fetch_term(ra_index(), state()) -> {option(ra_index()), state()}.
+-spec fetch_term(ra:index(), state()) -> {option(ra:index()), state()}.
 fetch_term(Idx, #?STATE{cfg = #cfg{} = Cfg} = State0) ->
     incr_counter(Cfg, ?C_RA_LOG_FETCH_TERM, 1),
     segment_term_query(Idx, State0).

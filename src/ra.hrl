@@ -16,13 +16,8 @@
 -type from() ::
 	{To :: pid(), Tag :: term()}.
 
-%% Sections 5.1 in the paper.
--type ra_index() :: non_neg_integer().
-%% Section 5.3.
--type ra_term() :: non_neg_integer().
-
 %% tuple form of index and term
--type ra_idxterm() :: {ra_index(), ra_term()}.
+-type ra_idxterm() :: {ra:index(), ra:term()}.
 
 %% Sections 5.1-5.3.
 
@@ -57,7 +52,7 @@
 
 -type ra_voter_status() :: #{membership => ra_membership(),
                              uid => ra_uid(),
-                             target => ra_index()}.
+                             target => ra:index()}.
 
 -type ra_peer_state() :: #{next_index := non_neg_integer(),
                            match_index := non_neg_integer(),
@@ -81,11 +76,11 @@
 -type ra_cluster_snapshot() :: #{ra_server_id() => ra_peer_snapshot()}.
 
 %% represent a unique entry in the ra log
--type log_entry() :: {ra_index(), ra_term(), term()}.
+-type log_entry() :: {ra:index(), ra:term(), term()}.
 
 -type chunk_flag() :: next | last.
 
--type consistent_query_ref() :: {From :: term(), Query :: ra:query_fun(), ConmmitIndex :: ra_index()}.
+-type consistent_query_ref() :: {From :: term(), Query :: ra:query_fun(), ConmmitIndex :: ra:index()}.
 
 -type safe_call_ret(T) :: timeout | {error, noproc | nodedown | shutdown} | T.
 
@@ -110,36 +105,36 @@
 
 %% Figure 2 in the paper
 -record(append_entries_rpc,
-        {term :: ra_term(),
+        {term :: ra:term(),
          leader_id :: ra_server_id(),
-         leader_commit :: ra_index(),
+         leader_commit :: ra:index(),
          prev_log_index :: non_neg_integer(),
-         prev_log_term :: ra_term(),
+         prev_log_term :: ra:term(),
          entries = [] :: [log_entry()]}).
 
 -record(append_entries_reply,
-        {term :: ra_term(),
+        {term :: ra:term(),
          success :: boolean(),
          % because we aren't doing true rpc we may have multiple append
          % entries in flight we need to communicate what we are replying
          % to
          % because writes are fsynced asynchronously we need to indicate
          % the last index seen as well as the last index persisted.
-         next_index :: ra_index(),
+         next_index :: ra:index(),
          % the last index that has been fsynced to disk
-         last_index :: ra_index(),
-         last_term :: ra_term()}).
+         last_index :: ra:index(),
+         last_term :: ra:term()}).
 
 %% Section 5.2
 -record(request_vote_rpc,
-        {term :: ra_term(),
+        {term :: ra:term(),
          candidate_id :: ra_server_id(),
-         last_log_index :: ra_index(),
-         last_log_term :: ra_index()}).
+         last_log_index :: ra:index(),
+         last_log_term :: ra:index()}).
 
 %% Section 4.2
 -record(request_vote_result,
-        {term :: ra_term(),
+        {term :: ra:term(),
          vote_granted :: boolean()}).
 
 %% pre-vote extension
@@ -147,24 +142,24 @@
         {version = ?RA_PROTO_VERSION :: non_neg_integer(),
          %% servers will only vote for servers with a matching machine_version
          machine_version :: non_neg_integer(),
-         term :: ra_term(),
+         term :: ra:term(),
          token :: reference(),
          candidate_id :: ra_server_id(),
-         last_log_index :: ra_index(),
-         last_log_term :: ra_index()}).
+         last_log_index :: ra:index(),
+         last_log_term :: ra:index()}).
 
 -record(pre_vote_result,
-        {term :: ra_term(),
+        {term :: ra:term(),
          token :: reference(),
          vote_granted :: boolean()}).
 
--type snapshot_meta() :: #{index := ra_index(),
-                           term := ra_term(),
+-type snapshot_meta() :: #{index := ra:index(),
+                           term := ra:term(),
                            cluster := ra_cluster_snapshot(),
                            machine_version := ra_machine:version()}.
 
 -record(install_snapshot_rpc,
-        {term :: ra_term(), % the leader's term
+        {term :: ra:term(), % the leader's term
          leader_id :: ra_server_id(),
          meta :: snapshot_meta(),
          chunk_state :: {pos_integer(), chunk_flag()} | undefined,
@@ -172,30 +167,30 @@
         }).
 
 -record(install_snapshot_result,
-        {term :: ra_term(),
+        {term :: ra:term(),
          % because we need to inform the leader of the snapshot that has been
          % replicated from another process we here include the index and
          % term of the snapshot in question
-         last_index :: ra_index(),
-         last_term :: ra_term()}).
+         last_index :: ra:index(),
+         last_term :: ra:term()}).
 
 -record(heartbeat_rpc,
         {query_index :: integer(),
-         term :: ra_term(),
+         term :: ra:term(),
          leader_id :: ra_server_id()}).
 
 -record(heartbeat_reply,
         {query_index :: integer(),
-         term :: ra_term()}).
+         term :: ra:term()}).
 
 -record(info_rpc,
         {from :: ra_server_id(),
-         term :: ra_term(),
+         term :: ra:term(),
          keys :: [ra_server:ra_server_info_key()]}).
 
 -record(info_reply,
         {from :: ra_server_id(),
-         term :: ra_term(),
+         term :: ra:term(),
          keys :: [ra_server:ra_server_info_key()],
          info = #{} :: ra_server:ra_server_info()}).
 
