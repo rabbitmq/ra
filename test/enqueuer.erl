@@ -24,7 +24,7 @@
 -include("src/ra.hrl").
 
 -type config() :: #{cluster_name := ra_cluster_name(),
-                    servers := [ra_server_id()],
+                    servers := [ra:server_id()],
                     num_messages := non_neg_integer(),
                     spec := {Interval :: non_neg_integer(), Tag :: atom()}
                     }.

@@ -29,8 +29,8 @@
 -type seq() :: non_neg_integer().
 
 -record(state, {cluster_name :: ra_cluster_name(),
-                servers = [] :: [ra_server_id()],
-                leader :: option(ra_server_id()),
+                servers = [] :: [ra:server_id()],
+                leader :: option(ra:server_id()),
                 next_seq = 0 :: seq(),
                 last_applied :: option(seq()),
                 next_enqueue_seq = 1 :: seq(),
@@ -61,7 +61,7 @@
 %% @param ClusterName the id of the cluster to interact with
 %% @param Nodes The known servers of the queue. If the current leader is known
 %% ensure the leader node is at the head of the list.
--spec init(ra_cluster_name(), [ra_server_id()]) -> state().
+-spec init(ra_cluster_name(), [ra:server_id()]) -> state().
 init(ClusterName, Nodes) ->
     init(ClusterName, Nodes, ?SOFT_LIMIT).
 
@@ -71,7 +71,7 @@ init(ClusterName, Nodes) ->
 %% @param Nodes The known servers of the queue. If the current leader is known
 %% ensure the leader node is at the head of the list.
 %% @param MaxPending size defining the max number of pending commands.
--spec init(ra_cluster_name(), [ra_server_id()], non_neg_integer()) -> state().
+-spec init(ra_cluster_name(), [ra:server_id()], non_neg_integer()) -> state().
 init(ClusterName, Nodes, SoftLimit) ->
     Timeout = application:get_env(kernel, net_ticktime, 60) + 30,
     #state{cluster_name = ClusterName,
@@ -79,7 +79,7 @@ init(ClusterName, Nodes, SoftLimit) ->
            soft_limit = SoftLimit,
            timeout = Timeout * 1000}.
 
--spec init(ra_cluster_name(), [ra_server_id()], non_neg_integer(), fun(() -> ok),
+-spec init(ra_cluster_name(), [ra:server_id()], non_neg_integer(), fun(() -> ok),
            fun(() -> ok)) -> state().
 init(ClusterName, Nodes, SoftLimit, BlockFun, UnblockFun) ->
     Timeout = application:get_env(kernel, net_ticktime, 60) + 30,
@@ -324,7 +324,7 @@ cancel_checkout(CustomerTag, #state{customer_deliveries = CDels} = State0) ->
 
 %% @doc Purges all the messages from a ra_fifo queue and returns the number
 %% of messages purged.
--spec purge(ra_server_id()) -> {ok, non_neg_integer()} | {error | timeout, term()}.
+-spec purge(ra:server_id()) -> {ok, non_neg_integer()} | {error | timeout, term()}.
 purge(Node) ->
     case ra:process_command(Node, purge) of
         {ok, {reply, {purge, Reply}}, _} ->
@@ -360,7 +360,7 @@ cluster_name(#state{cluster_name = ClusterName}) ->
 %%  end
 %% '''
 %%
-%% @param From the {@link ra_server_id().} of the sending process.
+%% @param From the {@link ra:server_id().} of the sending process.
 %% @param Event the body of the `ra_event'.
 %% @param State the current {@module} state.
 %%
@@ -381,7 +381,7 @@ cluster_name(#state{cluster_name = ClusterName}) ->
 %% <li>`MsgId' is a customer scoped monotonically incrementing id that can be
 %% used to {@link settle/3.} (roughly: AMQP 0.9.1 ack) message once finished
 %% with them.</li>
--spec handle_ra_event(ra_server_id(), ra_server_proc:ra_event_body(), state()) ->
+-spec handle_ra_event(ra:server_id(), ra_server_proc:ra_event_body(), state()) ->
     {internal, Correlators :: [term()], state()} |
     {ra_fifo:client_msg(), state()} | eol.
 handle_ra_event(From, {applied, Seqs},
@@ -444,7 +444,7 @@ handle_ra_event(_Leader, {machine, eol}, _State0) ->
 %% @param Msg the message to enqueue.
 %%
 %% @returns `ok'
--spec untracked_enqueue(ra_cluster_name(), [ra_server_id()], term()) ->
+-spec untracked_enqueue(ra_cluster_name(), [ra:server_id()], term()) ->
     ok.
 untracked_enqueue(_ClusterName, [Node | _], Msg) ->
     Cmd = {enqueue, undefined, undefined, Msg},

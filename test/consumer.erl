@@ -23,7 +23,7 @@
 -include("src/ra.hrl").
 
 -type config() :: #{cluster_name := ra_cluster_name(),
-                    servers := [ra_server_id()],
+                    servers := [ra:server_id()],
                     consumer_tag := binary(),
                     num_messages := integer(),
                     notify => pid(),

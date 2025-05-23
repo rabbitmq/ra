@@ -48,7 +48,7 @@ start_server(System, #{id := NodeId,
     Node = ra_lib:ra_server_id_node(NodeId),
     rpc:call(Node, ?MODULE, start_server_rpc, [System, UId, Config]).
 
--spec restart_server(atom(), ra_server_id(), ra_server:mutable_config()) ->
+-spec restart_server(atom(), ra:server_id(), ra_server:mutable_config()) ->
     supervisor:startchild_ret() | {error, system_not_started} | {badrpc, term()}.
 restart_server(System, {RaName, Node}, AddConfig) ->
     rpc:call(Node, ?MODULE, restart_server_rpc,
@@ -125,7 +125,7 @@ restart_server_rpc(System, {RaName, _Node}, AddConfig)
             end
     end.
 
--spec stop_server(System :: atom(), RaNodeId :: ra_server_id()) ->
+-spec stop_server(System :: atom(), RaNodeId :: ra:server_id()) ->
     ok | {error, term()}.
 stop_server(System, ServerId) when is_atom(System) ->
     Node = ra_lib:ra_server_id_node(ServerId),
@@ -153,7 +153,7 @@ prepare_server_stop_rpc(System, RaName) ->
             {ok, Parent, SrvSup}
     end.
 
--spec delete_server(atom(), ServerId :: ra_server_id()) ->
+-spec delete_server(atom(), ServerId :: ra:server_id()) ->
     ok | {error, term()} | {badrpc, term()}.
 delete_server(System, ServerId) when is_atom(System) ->
     Node = ra_lib:ra_server_id_node(ServerId),

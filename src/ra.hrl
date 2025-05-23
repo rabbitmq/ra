@@ -19,8 +19,6 @@
 %% tuple form of index and term
 -type ra_idxterm() :: {ra:index(), ra:term()}.
 
-%% Sections 5.1-5.3.
-
 %% a friendly name for the cluster
 -type ra_cluster_name() :: binary() | string() | atom().
 
@@ -28,16 +26,10 @@
 %% used for on disk resources and local name to pid mapping
 -type ra_uid() :: binary().
 
-%% Identifies a Ra server (node) in a Ra cluster.
-%%
-%% Ra servers need to be registered stable names (names that are reachable
-%% after node restart). Pids are not stable in this sense.
--type ra_server_id() :: {Name :: atom(), Node :: node()}.
-
 %% Specifies server configuration for a new cluster member.
 %% Subset of  ra_server:ra_server_config().
 %% Both `ra:add_member` and `ra:start_server` must be called with the same values.
--type ra_new_server() :: #{id := ra_server_id(),
+-type ra_new_server() :: #{id := ra:server_id(),
                            % Defaults to `voter` if absent.
                            membership => ra_membership(),
                            % Required for `promotable` in the above.
@@ -68,12 +60,12 @@
                            status := ra_peer_status(),
                            machine_version => ra_machine:version()}.
 
--type ra_cluster() :: #{ra_server_id() => ra_peer_state()}.
+-type ra_cluster() :: #{ra:server_id() => ra_peer_state()}.
 
 %% Dehydrated cluster:
--type ra_cluster_servers() :: [ra_server_id()].  % Deprecated
+-type ra_cluster_servers() :: [ra:server_id()].  % Deprecated
 -type ra_peer_snapshot() :: #{voter_status => ra_voter_status()}.
--type ra_cluster_snapshot() :: #{ra_server_id() => ra_peer_snapshot()}.
+-type ra_cluster_snapshot() :: #{ra:server_id() => ra_peer_snapshot()}.
 
 %% represent a unique entry in the ra log
 -type log_entry() :: {ra:index(), ra:term(), term()}.
@@ -87,7 +79,7 @@
 -type states() :: leader | follower | candidate | await_condition.
 
 %% A member of the cluster from which replies should be sent.
--type ra_reply_from() :: leader | local | {member, ra_server_id()}.
+-type ra_reply_from() :: leader | local | {member, ra:server_id()}.
 
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
@@ -106,7 +98,7 @@
 %% Figure 2 in the paper
 -record(append_entries_rpc,
         {term :: ra:term(),
-         leader_id :: ra_server_id(),
+         leader_id :: ra:server_id(),
          leader_commit :: ra:index(),
          prev_log_index :: non_neg_integer(),
          prev_log_term :: ra:term(),
@@ -128,7 +120,7 @@
 %% Section 5.2
 -record(request_vote_rpc,
         {term :: ra:term(),
-         candidate_id :: ra_server_id(),
+         candidate_id :: ra:server_id(),
          last_log_index :: ra:index(),
          last_log_term :: ra:term()}).
 
@@ -144,7 +136,7 @@
          machine_version :: non_neg_integer(),
          term :: ra:term(),
          token :: reference(),
-         candidate_id :: ra_server_id(),
+         candidate_id :: ra:server_id(),
          last_log_index :: ra:index(),
          last_log_term :: ra:term()}).
 
@@ -160,7 +152,7 @@
 
 -record(install_snapshot_rpc,
         {term :: ra:term(), % the leader's term
-         leader_id :: ra_server_id(),
+         leader_id :: ra:server_id(),
          meta :: snapshot_meta(),
          chunk_state :: {pos_integer(), chunk_flag()} | undefined,
          data :: term()
@@ -177,19 +169,19 @@
 -record(heartbeat_rpc,
         {query_index :: integer(),
          term :: ra:term(),
-         leader_id :: ra_server_id()}).
+         leader_id :: ra:server_id()}).
 
 -record(heartbeat_reply,
         {query_index :: integer(),
          term :: ra:term()}).
 
 -record(info_rpc,
-        {from :: ra_server_id(),
+        {from :: ra:server_id(),
          term :: ra:term(),
          keys :: [ra_server:ra_server_info_key()]}).
 
 -record(info_reply,
-        {from :: ra_server_id(),
+        {from :: ra:server_id(),
          term :: ra:term(),
          keys :: [ra_server:ra_server_info_key()],
          info = #{} :: ra_server:ra_server_info()}).

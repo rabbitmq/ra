@@ -91,20 +91,20 @@
 -type ra_command() :: {ra_server:command_type(), term(),
                        ra_server:command_reply_mode()}.
 
--type ra_leader_call_ret(Result) :: {ok, Result, Leader::ra_server_id()} |
+-type ra_leader_call_ret(Result) :: {ok, Result, Leader::ra:server_id()} |
                                     {error, term()} |
-                                    {timeout, ra_server_id()}.
+                                    {timeout, ra:server_id()}.
 
--type ra_local_call_ret(Result) :: {ok, Result, LocalServer::ra_server_id()} |
+-type ra_local_call_ret(Result) :: {ok, Result, LocalServer::ra:server_id()} |
                                    {error, term()} |
-                                   {timeout, ra_server_id()}.
+                                   {timeout, ra:server_id()}.
 
 -type ra_cmd_ret() :: ra_leader_call_ret(term()).
 
 -type gen_statem_start_ret() :: {ok, pid()} | ignore | {error, term()}.
 
 %% ra_event types
--type ra_event_reject_detail() :: {not_leader, Leader :: option(ra_server_id()),
+-type ra_event_reject_detail() :: {not_leader, Leader :: option(ra:server_id()),
                                    ra_server:command_correlation()}.
 
 -type ra_event_body() ::
@@ -115,11 +115,11 @@
     % used to send message side-effects emitted by the state machine
     {machine, term()}.
 
--type ra_event() :: {ra_event, Sender :: ra_server_id(), ra_event_body()}.
+-type ra_event() :: {ra_event, Sender :: ra:server_id(), ra_event_body()}.
 %% the Sender is the ra process that emitted the ra_event.
 
 
--type server_loc() :: ra_server_id() | [ra_server_id()].
+-type server_loc() :: ra:server_id() | [ra:server_id()].
 
 -export_type([ra_leader_call_ret/1,
               ra_local_call_ret/1,
@@ -178,11 +178,11 @@ start_link(Config = #{id := Id}) ->
 command(ServerLoc, Cmd, Timeout) ->
     leader_call(ServerLoc, {command, normal, Cmd}, Timeout).
 
--spec cast_command(ra_server_id(), ra_command()) -> ok.
+-spec cast_command(ra:server_id(), ra_command()) -> ok.
 cast_command(ServerId, Cmd) ->
     gen_statem:cast(ServerId, {command, low, Cmd}).
 
--spec cast_command(ra_server_id(), ra_server:command_priority(), ra_command()) -> ok.
+-spec cast_command(ra:server_id(), ra_server:command_priority(), ra_command()) -> ok.
 cast_command(ServerId, Priority, Cmd) ->
     gen_statem:cast(ServerId, {command, Priority, Cmd}).
 
@@ -206,7 +206,7 @@ query(ServerLoc, QueryFun, leader, Options, Timeout) ->
 query(ServerLoc, QueryFun, consistent, _Options, Timeout) ->
     leader_call(ServerLoc, {consistent_query, QueryFun}, Timeout).
 
--spec log_fold(ra_server_id(), fun(), term(), integer()) -> term().
+-spec log_fold(ra:server_id(), fun(), term(), integer()) -> term().
 log_fold(ServerId, Fun, InitialState, Timeout) ->
     gen_statem:call(ServerId, {log_fold, Fun, InitialState}, Timeout).
 
@@ -235,20 +235,20 @@ state_query(ServerLoc, Spec, Timeout) ->
 local_state_query(ServerLoc, Spec, Timeout) ->
     local_call(ServerLoc, {state_query, Spec}, Timeout).
 
--spec trigger_election(ra_server_id(), timeout()) -> ok.
+-spec trigger_election(ra:server_id(), timeout()) -> ok.
 trigger_election(ServerId, Timeout) ->
     gen_statem:call(ServerId, trigger_election, Timeout).
 
--spec transfer_leadership(ra_server_id(), ra_server_id(), timeout()) ->
-    ok | already_leader | {error, term()} | {timeout, ra_server_id()}.
+-spec transfer_leadership(ra:server_id(), ra:server_id(), timeout()) ->
+    ok | already_leader | {error, term()} | {timeout, ra:server_id()}.
 transfer_leadership(ServerId, TargetServerId, Timeout) ->
     leader_call(ServerId, {transfer_leadership, TargetServerId}, Timeout).
 
--spec force_shrink_members_to_current_member(ra_server_id()) -> ok.
+-spec force_shrink_members_to_current_member(ra:server_id()) -> ok.
 force_shrink_members_to_current_member(ServerId) ->
     gen_statem_safe_call(ServerId, force_member_change, 5000).
 
--spec ping(ra_server_id(), timeout()) -> safe_call_ret({pong, states()}).
+-spec ping(ra:server_id(), timeout()) -> safe_call_ret({pong, states()}).
 ping(ServerId, Timeout) ->
     gen_statem_safe_call(ServerId, ping, Timeout).
 

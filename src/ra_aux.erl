@@ -34,7 +34,7 @@ machine_state(State) ->
 effective_machine_version(#{cfg := Cfg}) ->
     Cfg#cfg.effective_machine_version.
 
--spec leader_id(ra_aux:internal_state()) -> undefined | ra_server_id().
+-spec leader_id(ra_aux:internal_state()) -> undefined | ra:server_id().
 leader_id(State) ->
     maps:get(?FUNCTION_NAME, State).
 

@@ -109,7 +109,7 @@
 
 -type send_msg_opt() :: ra_event | cast | local.
 %% ra_event: the message will be wrapped up and sent as a ra event
-%% e.g: `{ra_event, ra_server_id(), Msg}'
+%% e.g: `{ra_event, ra:server_id(), Msg}'
 %%
 %% cast: the message will be wrapped as a gen cast: ``{'$cast', Msg}''
 %% local: the message will be sent by the local member if there is one

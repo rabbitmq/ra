@@ -12,7 +12,7 @@
 -define(FLUSH_COMMANDS_SIZE, 16).
 
 -record(cfg,
-        {id :: ra_server_id(),
+        {id :: ra:server_id(),
          uid :: ra_uid(),
          log_id :: unicode:chardata(),
          metrics_key :: term(),
