@@ -83,7 +83,7 @@
 %% represent a unique entry in the ra log
 -type log_entry() :: {ra_index(), ra_term(), term()}.
 
--type chunk_flag() :: next | last.
+-type chunk_flag() :: pre | next | last.
 
 -type consistent_query_ref() :: {From :: term(), Query :: ra:query_fun(), ConmmitIndex :: ra_index()}.
 
@@ -93,6 +93,8 @@
 
 %% A member of the cluster from which replies should be sent.
 -type ra_reply_from() :: leader | local | {member, ra_server_id()}.
+
+-type mfargs() :: {M :: module(), F :: atom(), A :: [term()]}.
 
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
@@ -167,7 +169,7 @@
         {term :: ra_term(), % the leader's term
          leader_id :: ra_server_id(),
          meta :: snapshot_meta(),
-         chunk_state :: {pos_integer(), chunk_flag()} | undefined,
+         chunk_state = {0, pre} :: {non_neg_integer(), chunk_flag()},
          data :: term()
         }).
 
