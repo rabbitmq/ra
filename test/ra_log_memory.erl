@@ -46,7 +46,7 @@
 -record(state, {last_index = 0 :: ra_index(),
                 last_written = {0, 0} :: ra_idxterm(), % only here to fake the async api of the file based one
                 entries = #{0 => {0, undefined}} ::
-                    #{ra_term() => {ra_index(), term()}},
+                    #{ra_index() => {ra_term(), term()}},
                 meta = #{} :: ra_log_memory_meta(),
                 snapshot :: option({ra_snapshot:meta(), term()})}).
 

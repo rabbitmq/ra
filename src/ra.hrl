@@ -135,7 +135,7 @@
         {term :: ra_term(),
          candidate_id :: ra_server_id(),
          last_log_index :: ra_index(),
-         last_log_term :: ra_index()}).
+         last_log_term :: ra_term()}).
 
 %% Section 4.2
 -record(request_vote_result,
@@ -151,7 +151,7 @@
          token :: reference(),
          candidate_id :: ra_server_id(),
          last_log_index :: ra_index(),
-         last_log_term :: ra_index()}).
+         last_log_term :: ra_term()}).
 
 -record(pre_vote_result,
         {term :: ra_term(),
