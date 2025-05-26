@@ -113,6 +113,7 @@ init_per_testcase(TestCase, Config) ->
     Names = maps:get(names, Sys),
     WalConf = #{dir => Dir,
                 name => ra_log_wal,
+                system => ?SYS,
                 names => Names,
                 write_strategy => G,
                 max_size_bytes => ?MAX_SIZE_BYTES},
@@ -1432,4 +1433,3 @@ suspend_process(Pid) ->
                       erlang:raise(error, internal_error, Stack)
               end
     end.
-

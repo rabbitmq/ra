@@ -11,8 +11,7 @@
 -export([start_link/0]).
 -export([init/1]).
 
--define(TABLES, [ra_metrics,
-                 ra_state,
+-define(TABLES, [ra_state,
                  ra_open_file_metrics,
                  ra_io_metrics
                  ]).

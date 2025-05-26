@@ -53,7 +53,7 @@ which algorithms such as Raft significantly benefit from.
 
 This library was primarily developed as the foundation of a replication layer for
 [quorum queues](https://rabbitmq.com/quorum-queues.html) in RabbitMQ, and today
-also powers [RabbitMQ streams](https://rabbitmq.com/streams.html) and [Khepri](https://github.com/rabbitmq/khepri). 
+also powers [RabbitMQ streams](https://rabbitmq.com/streams.html) and [Khepri](https://github.com/rabbitmq/khepri).
 
 The design it aims to replace uses
 a variant of [Chain Based Replication](https://www.cs.cornell.edu/home/rvr/papers/OSDI04.pdf)
@@ -405,8 +405,13 @@ is available in a separate repository.
     </tr>
     <tr>
         <td>metrics_key</td>
-        <td>Metrics key. The key used to write metrics into the ra_metrics table.</td>
+        <td>DEPRECATED: Metrics key. The key was used to write metrics into the ra_metrics table. Metrics are now in Seshat.</td>
         <td>Atom</td>
+    </tr>
+    <tr>
+        <td>metrics_labels</td>
+        <td>Metrics labels. Labels that are later returned with metrics for this server (eg. `#{vhost => ..., queue => ...}` for quorum queues).</td>
+        <td>Map</td>
     </tr>
     <tr>
         <td>low_priority_commands_flush_size</td>
