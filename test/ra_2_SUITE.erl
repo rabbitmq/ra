@@ -275,8 +275,7 @@ validate_ets_table_deletes(UIds, Pids, Peers) ->
 
     %% validate by registered name is also cleaned up
     [ [] = ets:lookup(T, Name) || {Name, _} <- Peers,
-                                    T <-  [ra_metrics,
-                                           ra_state]],
+                                    T <-  [ra_state]],
 
     %% validate open file metrics is cleaned up
     [ [] = ets:lookup(T, Pid) || Pid <- Pids,
