@@ -70,6 +70,9 @@ basics(_Config) ->
     [{ok, #{}} = ra_kv:put(KvId, K2, I, 5000)
      || I <- lists:seq(1, 10000)],
 
+    ct:pal("kv get ~p", [ra_kv:get(KvId, <<"k1">>, 5000)]),
+    ct:pal("leaderboard ~p", [ets:tab2list(ra_leaderboard)]),
+
     ?assertMatch({ok, #{machine := #{num_keys := 2}}, KvId},
                  ra:member_overview(KvId)),
     ra_log_wal:force_roll_over(ra_log_wal),
