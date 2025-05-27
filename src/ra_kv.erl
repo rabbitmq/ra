@@ -19,7 +19,9 @@
          start_cluster/3,
          add_member/3,
 
-         put/4
+         put/4,
+         get/3,
+         query_get/3
         ]).
 
 
@@ -48,15 +50,15 @@
 -spec start_cluster(atom(), atom(), map()) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
-start_cluster(System, Name, #{members := ServerIds})
-  when is_atom(Name) andalso
+start_cluster(System, ClusterName, #{members := ServerIds})
+  when is_atom(ClusterName) andalso
        is_atom(System) ->
     Machine = {module, ?MODULE, #{}},
     Configs = [begin
-                   UId = ra:new_uid(ra_lib:to_binary(Name)),
+                   UId = ra:new_uid(ra_lib:to_binary(ClusterName)),
                    #{id => Id,
                      uid => UId,
-                     cluster_name => Name,
+                     cluster_name => ClusterName,
                      log_init_args => #{uid => UId},
                      initial_members => ServerIds,
                      machine => Machine}
@@ -95,13 +97,42 @@ put(ServerId, Key, Value, Timeout) ->
     end.
 
 
-%% get performs a consistent query that returns the index, hash and member set
+%% @doc get performs a consistent query that returns the index, hash and member set
 %% then perform an aux query to actually get the data for a given index.
 %% if addressing a follower (say there is a local one) then the read may need
 %% to wait if the index isn't yet available locally (term also need to be checked)
 %% or check that the machien state has the right index for a given key before
 %% reading the value from the log
+-spec get(ra:server_id(), key(), non_neg_integer()) ->
+    {ok, map(), value()} | {error, term()} | {timeout, ra:server_id()}.
+get(ServerId, Key, Timeout) ->
+    case ra:consistent_query(ServerId, {?MODULE, query_get,
+                                        [element(1, ServerId), Key]}, Timeout) of
+        {ok, {ok, Idx, Members}, LeaderId} ->
+            case ra_server_proc:read_entries(LeaderId, [Idx],
+                                             undefined, Timeout) of
+                {ok, {#{Idx := {Idx, Term,
+                                {'$usr', Meta, #put{value = Value}, _}}}, Flru}} ->
+                    _ = ra_flru:evict_all(Flru),
+                    {ok, Meta#{index => Idx,
+                               members => Members,
+                               term => Term}, Value};
+                Err ->
+                    Err
+            end;
+        Err ->
+            Err
+    end.
 
+
+query_get(ClusterName, Key, #?STATE{keys = Keys}) ->
+    Members = ra_leaderboard:lookup_members(ClusterName),
+    case Keys of
+        #{Key := [Idx |_]} ->
+            {ok, Idx, Members};
+        _ ->
+            {error, not_found}
+    end.
 
 %% state machine
 
@@ -124,6 +155,7 @@ live_indexes(#?STATE{keys = Keys}) ->
               end, [], Keys).
 
 -record(aux, {}).
+
 init_aux(_) ->
     #aux{}.
 
