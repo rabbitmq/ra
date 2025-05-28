@@ -101,6 +101,8 @@ e.g. the compacted segment `001.compacting` to `001.segment` without breaking
 any references to the segment. Single segment compaction should only be triggered
 when a certain limit has been reached, e.g. > 50% of indexes can be cleared up.
 
+TODO: how to handle compaction of segments that have indexes that never were
+committed, i.e. overwritten?
 
 
 #### When does phase 3 compaction run?
