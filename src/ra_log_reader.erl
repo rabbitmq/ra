@@ -109,6 +109,7 @@ update_segments(NewSegmentRefs,
                         segment_refs = SegRefs0} = State) ->
 
     SegmentRefs0 = ra_lol:to_list(SegRefs0),
+    %% TODO: capture segrefs removed by compact_segrefs/2 and delete them
     SegmentRefsComp = compact_segrefs(NewSegmentRefs, SegmentRefs0),
     SegmentRefsCompRev = lists:reverse(SegmentRefsComp),
     SegRefs = ra_lol:from_list(fun seg_ref_gt/2, SegmentRefsCompRev),
@@ -470,13 +471,13 @@ compact_seg_refs_test() ->
 
 compact_segref_3_test() ->
     Data = [
-            {{2, 7}, "B"},
+            {{2, 7}, "C"},
             %% this entry has overwritten the prior two
             {{5, 10}, "B"},
             {{1, 4}, "A"}
            ],
     Res = compact_segrefs(Data, []),
-    ?assertMatch([{{2, 7}, "B"},
+    ?assertMatch([{{2, 7}, "C"},
                   {{1, 1}, "A"}], Res),
     ok.
 
