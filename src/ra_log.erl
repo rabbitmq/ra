@@ -223,6 +223,8 @@ init(#{uid := UId,
     % this queries the segment writer and thus blocks until any
     % segments it is currently processed have been finished
     MtRange = ra_mt:range(Mt0),
+    %% TODO: init ra_log_reader here instead and let it take care of range
+    %% calulation and segref compaction
     {{FirstIdx, LastIdx0}, SegRefs} = case recover_ranges(UId, MtRange, SegWriter) of
                                           {undefined, SRs} ->
                                               {{-1, -1}, SRs};
@@ -938,31 +940,30 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod, LiveIndexes,
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, SnapIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, SnapIdx),
 
-    CompEffs = schedule_compaction(SnapIdx, State0),
-
     {SnapState, Checkpoints} =
         ra_snapshot:take_older_checkpoints(SnapIdx, SnapState0),
     CPEffects = [{delete_snapshot,
                   ra_snapshot:directory(SnapState, checkpoint),
                   Checkpoint} || Checkpoint <- Checkpoints],
-    State = State0#?MODULE{snapshot_state = SnapState,
-                           first_index = SnapIdx + 1,
-                           last_index = SnapIdx,
-                           last_term = SnapTerm,
-                           last_written_index_term = IdxTerm},
-    %% TODO: more mt entries could potentially be cleared up in the
-    %% mem table here
     SmallestLiveIndex = case ra_seq:first(LiveIndexes) of
                             undefined ->
                                 SnapIdx + 1;
                             I ->
                                 I
                         end,
+    %% TODO: more mt entries could potentially be cleared up in the
+    %% mem table here
     {Spec, Mt} = ra_mt:set_first(SmallestLiveIndex, Mt0),
     ok = exec_mem_table_delete(Names, UId, Spec),
-    {ok, State#?MODULE{live_indexes = LiveIndexes,
-                       mem_table = Mt},
-     CompEffs ++ CPEffects}.
+    State = State0#?MODULE{snapshot_state = SnapState,
+                           first_index = SnapIdx + 1,
+                           last_index = SnapIdx,
+                           last_term = SnapTerm,
+                           live_indexes = LiveIndexes,
+                           mem_table = Mt,
+                           last_written_index_term = IdxTerm},
+    CompEffs = schedule_compaction(SnapIdx, State),
+    {ok, State, CompEffs ++ CPEffects}.
 
 
 -spec recover_snapshot(State :: state()) ->
@@ -1260,6 +1261,9 @@ schedule_compaction(SnapIdx, #?MODULE{cfg = #cfg{},
                                               End =< SnapIdx
                                       end, lists:reverse(Compactable)),
             SnapDir = ra_snapshot:current_snapshot_dir(SnapState),
+
+            %% TODO: minor compactions should also delete / truncate
+            %% segments with completely overwritten indexes
 
             Self = self(),
             Fun = fun () ->
