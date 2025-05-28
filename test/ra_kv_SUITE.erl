@@ -96,7 +96,7 @@ basics(_Config) ->
     ok = ra:restart_server(default, KvId),
     {ok, #{index := LastIdx}} = ra_kv:put(KvId, <<"k3">>, <<"k3">>, 5000),
     {ok, #{machine := #{live_indexes := Live},
-           log := #{last_index := KvIdLastIdx}}, _} = ra:member_overview(KvId),
+           log := #{range := {_, KvIdLastIdx}}}, _} = ra:member_overview(KvId),
     {ok, {Reads, _}} = ra_server_proc:read_entries(KvId, [LastIdx | Live],
                                                    undefined, 1000),
     ?assertEqual(3, map_size(Reads)),
@@ -105,7 +105,7 @@ basics(_Config) ->
     ok = ra_kv:add_member(?SYS, KvId2, KvId),
     ok = ra_lib:retry(
            fun () ->
-                   {ok, #{log := #{last_index := Last}}, _} =
+                   {ok, #{log := #{range := {_, Last}}}, _} =
                        ra:member_overview(KvId2),
                    Last >= KvIdLastIdx
            end, 100, 100),

@@ -585,7 +585,7 @@ recover_after_snapshot(Config) ->
     Log = ra_log_init(Config, #{min_snapshot_interval => 1}),
     Overview = ra_log:overview(Log),
     ra_log:close(Log),
-    ?assertMatch(#{last_index := 2,
+    ?assertMatch(#{range := undefined,
                    last_term := 1,
                    snapshot_index := 2,
                    last_written_index_term := {2, 1}}, Overview),
@@ -604,8 +604,7 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
     Log4 = deliver_all_log_events(Log3, 500),
 
     Overview = ra_log:overview(Log4),
-    ?assertMatch(#{last_index := 499,
-                   first_index := 101,
+    ?assertMatch(#{range := {101, 499},
                    mem_table_range := {101, 499},
                    last_written_index_term := {100, 1}}, Overview),
 
@@ -632,8 +631,7 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
                      ct:fail("expected log event not received")
            end,
     OverviewAfter = ra_log:overview(Log5),
-    ?assertMatch(#{last_index := 499,
-                   first_index := 101,
+    ?assertMatch(#{range := {101, 499},
                    snapshot_index := 100,
                    mem_table_range := {101, 499},
                    last_written_index_term := {499, 1}}, OverviewAfter),
@@ -1365,6 +1363,7 @@ update_release_cursor(Config) ->
     UId = ?config(uid, Config),
     127 = ra_log_snapshot_state:snapshot(ra_log_snapshot_state, UId),
     % this should delete a single segment
+    ct:pal("Log3 ~p", [ra_log:overview(Log3)]),
     Log3b = validate_fold(128, 149, 2, Log3),
     % update the release cursor all the way
     {Log4, Effs2} = ra_log:update_release_cursor(149, #{?N1 => new_peer(),

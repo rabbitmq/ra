@@ -100,11 +100,13 @@
 -record(?MODULE,
         {cfg = #cfg{},
          %% mutable data below
-         first_index = -1 :: ra_index(),
-         last_index = -1 :: -1 | ra_index(),
+         range :: ra:range(),
+         % first_index = -1 :: ra_index(),
+         % last_index = -1 :: -1 | ra_index(),
          last_term = 0 :: ra_term(),
          last_written_index_term = {0, 0} :: ra_idxterm(),
          snapshot_state :: ra_snapshot:state(),
+         current_snapshot :: option(ra_idxterm()),
          last_resend_time :: option({integer(), WalPid :: pid() | undefined}),
          last_wal_write :: {pid(), Ms :: integer()},
          reader :: ra_log_reader:state(),
@@ -140,9 +142,9 @@
 
 -type overview() ::
     #{type := ra_log,
-      last_index := ra_index(),
+      range := ra:range(),
+      last_index := ra:index(),
       last_term := ra_term(),
-      first_index := ra_index(),
       last_written_index_term := ra_idxterm(),
       num_segments := non_neg_integer(),
       open_segments => non_neg_integer(),
@@ -207,7 +209,7 @@ init(#{uid := UId,
     SnapshotState = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
                                      CheckpointsDir, Counter, MaxCheckpoints),
     {SnapIdx, SnapTerm} = case ra_snapshot:current(SnapshotState) of
-                              undefined -> {-1, -1};
+                              undefined -> {-1, 0};
                               Curr -> Curr
                           end,
     %% TODO: error handling
@@ -223,28 +225,32 @@ init(#{uid := UId,
     % this queries the segment writer and thus blocks until any
     % segments it is currently processed have been finished
     MtRange = ra_mt:range(Mt0),
-    %% TODO: init ra_log_reader here instead and let it take care of range
-    %% calulation and segref compaction
-    {{FirstIdx, LastIdx0}, SegRefs} = case recover_ranges(UId, MtRange, SegWriter) of
-                                          {undefined, SRs} ->
-                                              {{-1, -1}, SRs};
-                                          R ->  R
-                                      end,
-    %% TODO: don't think this is necessary given the range is calculated from this
-    %% but can't hurt as it may trigger some cleanup
-    {DeleteSpecs, Mt} = ra_mt:set_first(FirstIdx, Mt0),
-
-    ok = exec_mem_table_delete(Names, UId, DeleteSpecs),
+    SegRefs = my_segrefs(UId, SegWriter),
     Reader = ra_log_reader:init(UId, Dir, MaxOpen, AccessPattern, SegRefs,
                                 Names, Counter),
+    SegRange = ra_log_reader:range(Reader),
+    %% TODO: check ra_range:add/2 actually performas the correct logic we expect
+    Range = ra_range:add(MtRange, SegRange),
+
     %% assert there is no gap between the snapshot
     %% and the first index in the log
-    case (FirstIdx - SnapIdx) > 1 of
-        true ->
-            exit({corrupt_log, gap_between_snapshot_and_first_index,
-                  {SnapIdx, FirstIdx}});
-        false -> ok
-    end,
+    Mt = case Range of
+             undefined ->
+                 Mt0;
+             {FstIdx, LstIdx} ->
+                 case FstIdx == SnapIdx + 1 orelse
+                      ra_range:in(SnapIdx, Range) orelse
+                      SnapIdx > LstIdx of
+                     true ->
+                         {DeleteSpecs, Mt1} = ra_mt:set_first(FstIdx, Mt0),
+                         ok = exec_mem_table_delete(Names, UId, DeleteSpecs),
+                         Mt1;
+                     false ->
+                         exit({corrupt_log,
+                               gap_between_snapshot_and_log_range,
+                               {SnapIdx, Range}})
+                 end
+         end,
     Cfg = #cfg{directory = Dir,
                uid = UId,
                log_id = LogId,
@@ -257,16 +263,21 @@ init(#{uid := UId,
                counter = Counter,
                names = Names},
     State0 = #?MODULE{cfg = Cfg,
-                      first_index = max(SnapIdx + 1, FirstIdx),
-                      last_index = max(SnapIdx, LastIdx0),
+                      range = ra_range:truncate(SnapIdx, Range),
                       reader = Reader,
                       mem_table = Mt,
                       snapshot_state = SnapshotState,
+                      current_snapshot = ra_snapshot:current(SnapshotState),
                       last_wal_write = {whereis(Wal), now_ms()},
                       live_indexes = LiveIndexes
                      },
     put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
-    LastIdx = State0#?MODULE.last_index,
+    LastIdx = case Range of
+                  undefined ->
+                      SnapIdx;
+                  {_, Lst} ->
+                      Lst
+              end,
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LastIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
@@ -279,14 +290,12 @@ init(#{uid := UId,
     end,
 
     % recover the last term
-    {LastTerm0, State2} = case LastIdx of
-                               SnapIdx ->
-                                   {SnapTerm, State0};
-                               -1 ->
-                                   {0, State0};
-                               LI ->
-                                   fetch_term(LI, State0)
-                           end,
+    {LastTerm0, State2} = case Range of
+                              undefined ->
+                                  {SnapTerm, State0};
+                              {_, LI} ->
+                                  fetch_term(LI, State0)
+                          end,
     LastSegRefIdx = case SegRefs of
                         [] ->
                             -1;
@@ -370,16 +379,25 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
 commit_tx(#?MODULE{tx = false} = State) ->
     State.
 
+-define(IS_NEXT_IDX(Idx, Range),
+        Range == undefined orelse
+        element(2, Range) + 1 =:= Idx).
+
+-define(IS_IN_RANGE(Idx, Range),
+        Range =/= undefined andalso
+        Idx >= element(1, Range) andalso
+        Idx =< element(2, Range)).
+
 -spec append(Entry :: log_entry(), State :: state()) ->
     state() | no_return().
 append({Idx, Term, Cmd0} = Entry,
        #?MODULE{cfg = #cfg{uid = UId,
                            wal = Wal} = Cfg,
-                last_index = LastIdx,
+                range = Range,
                 tx = false,
                 pending = Pend0,
                 mem_table = Mt0} = State)
-      when Idx =:= LastIdx + 1 ->
+      when ?IS_NEXT_IDX(Idx, Range) ->
     case ra_mt:insert(Entry, Mt0) of
         {ok, Mt} ->
             Cmd = {ttb, term_to_iovec(Cmd0)},
@@ -389,7 +407,7 @@ append({Idx, Term, Cmd0} = Entry,
                     Pend = ra_seq:limit(Idx - 1, Pend0),
                     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
                     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
-                    State#?MODULE{last_index = Idx,
+                    State#?MODULE{range = ra_range:extend(Idx, Range),
                                   last_term = Term,
                                   last_wal_write = {Pid, now_ms()},
                                   pending = ra_seq:append(Idx, Pend),
@@ -408,15 +426,15 @@ append({Idx, Term, Cmd0} = Entry,
     end;
 append({Idx, Term, _Cmd} = Entry,
        #?MODULE{cfg = Cfg,
-                last_index = LastIdx,
+                range = Range,
                 tx = true,
                 pending = Pend0,
                 mem_table = Mt0} = State)
-      when Idx =:= LastIdx + 1 ->
+      when ?IS_NEXT_IDX(Idx, Range) ->
     case ra_mt:stage(Entry, Mt0) of
         {ok, Mt} ->
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
-            State#?MODULE{last_index = Idx,
+            State#?MODULE{range = ra_range:extend(Idx, Range),
                           last_term = Term,
                           pending = ra_seq:append(Idx, Pend0),
                           mem_table = Mt};
@@ -429,9 +447,9 @@ append({Idx, Term, _Cmd} = Entry,
                                                        Cfg#cfg.uid, Mt0),
             append(Entry, State#?MODULE{mem_table = M0})
     end;
-append({Idx, _, _}, #?MODULE{last_index = LastIdx}) ->
-    Msg = lists:flatten(io_lib:format("tried writing ~b - expected ~b",
-                                      [Idx, LastIdx+1])),
+append({Idx, _, _}, #?MODULE{range = Range}) ->
+    Msg = lists:flatten(io_lib:format("tried writing ~b - current range ~w",
+                                      [Idx, Range])),
     exit({integrity_error, Msg}).
 
 -spec write(Entries :: [log_entry()], State :: state()) ->
@@ -439,11 +457,12 @@ append({Idx, _, _}, #?MODULE{last_index = LastIdx}) ->
     {error, {integrity_error, term()} | wal_down}.
 write([{FstIdx, _, _} | _Rest] = Entries,
       #?MODULE{cfg = Cfg,
-               last_index = LastIdx,
+               range = Range,
                pending = Pend0,
                mem_table = Mt0} = State0)
-  when FstIdx =< LastIdx + 1 andalso
-       FstIdx >= 0 ->
+  when Range == undefined orelse
+       (FstIdx =< element(2, Range) + 1 andalso
+        FstIdx >= 0) ->
     case stage_entries(Cfg, Entries, Mt0) of
         {ok, Mt} ->
             Pend = ra_seq:limit(FstIdx - 1, Pend0),
@@ -455,10 +474,10 @@ write([{FstIdx, _, _} | _Rest] = Entries,
 write([], State) ->
     {ok, State};
 write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
-                                  last_index = LastIdx}) ->
+                                  range = Range}) ->
     Msg = lists:flatten(io_lib:format("~s: ra_log:write/2 "
-                                      "tried writing ~b - expected ~b",
-                                      [UId, Idx, LastIdx+1])),
+                                      "tried writing ~b - current range ~w",
+                                      [UId, Idx, Range])),
     {error, {integrity_error, Msg}}.
 
 -spec write_sparse(log_entry(), ra:index(), state()) ->
@@ -466,13 +485,12 @@ write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
 write_sparse({Idx, Term, _} = Entry, PrevIdx0,
              #?MODULE{cfg = #cfg{uid = UId,
                                  wal = Wal} = Cfg,
-                      last_index = LastIdx,
+                      range = Range,
                       mem_table = Mt0} = State0)
   when PrevIdx0 == undefined orelse
-       (PrevIdx0 == LastIdx) ->
+       Range == undefined orelse
+       (PrevIdx0 == element(2, Range)) ->
     {ok, Mt} = ra_mt:insert_sparse(Entry, PrevIdx0, Mt0),
-    % al_write_batch(State0#?MODULE{mem_table = Mt}, [Entry]).
-    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
     Tid = ra_mt:tid(Mt),
     PrevIdx = case PrevIdx0 of
@@ -486,7 +504,13 @@ write_sparse({Idx, Term, _} = Entry, PrevIdx0,
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
-            {ok, State0#?MODULE{last_index = Idx,
+            NewRange = case Range of
+                           undefined ->
+                               ra_range:new(Idx);
+                           {S, _} ->
+                               ra_range:new(S, Idx)
+                       end,
+            {ok, State0#?MODULE{range = NewRange,
                                 last_term = Term,
                                 mem_table = Mt,
                                 last_wal_write = {Pid, now_ms()}}};
@@ -500,15 +524,16 @@ write_sparse({Idx, Term, _} = Entry, PrevIdx0,
 fold(From0, To0, Fun, Acc0,
      #?MODULE{cfg = Cfg,
               mem_table = Mt,
-              first_index = FirstIdx,
-              last_index = LastIdx,
+              range = {StartIdx, EndIdx},
               reader = Reader0} = State)
   when To0 >= From0 andalso
-       To0 >= FirstIdx ->
-    From = max(From0, FirstIdx),
-    To = min(To0, LastIdx),
-    ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
+       To0 >= StartIdx ->
 
+    %% TODO: move to ra_range function
+    From = max(From0, StartIdx),
+    To = min(To0, EndIdx),
+
+    ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
     MtOverlap = ra_mt:range_overlap({From, To}, Mt),
     case MtOverlap of
         {undefined, {RemStart, RemEnd}} ->
@@ -538,8 +563,7 @@ fold(_From, _To, _Fun, Acc, State) ->
     {[log_entry()], state()}.
 sparse_read(Indexes0, #?MODULE{cfg = Cfg,
                                reader = Reader0,
-                               first_index = FstIdx,
-                               last_index = LastIdx,
+                               range = Range,
                                live_indexes = LiveIndexes,
                                mem_table = Mt} = State) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
@@ -558,17 +582,8 @@ sparse_read(Indexes0, #?MODULE{cfg = Cfg,
     %% drop any indexes that are larger than the last index available
     %% or smaller than first index and not in live indexes
     Indexes2 = lists:filter(fun (I) ->
-                                    I =< LastIdx andalso
-                                    (case I < FstIdx of
-                                         true ->
-                                             %% TODO: this can be slow if
-                                             %% live indexes are mostly
-                                             %% non-contiguous. Create
-                                             %% BST for live index lookups
-                                             ra_seq:in(I, LiveIndexes);
-                                         false ->
-                                             true
-                                     end)
+                                    ra_range:in(I, Range) orelse
+                                    ra_seq:in(I, LiveIndexes)
                             end, Indexes1),
     {Entries0, MemTblNumRead, Indexes} = ra_mt:get_items(Indexes2, Mt),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_MEM_TBL, MemTblNumRead),
@@ -599,7 +614,8 @@ sparse_read(Indexes0, #?MODULE{cfg = Cfg,
     read_plan().
 partial_read(Indexes0, #?MODULE{cfg = Cfg,
                                 reader = Reader0,
-                                last_index = LastIdx,
+                                range = Range,
+                                snapshot_state = SnapState,
                                 mem_table = Mt},
             TransformFun) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
@@ -614,6 +630,17 @@ partial_read(Indexes0, #?MODULE{cfg = Cfg,
                        % descending or undefined
                        Indexes0
                end,
+    LastIdx = case Range of
+                  undefined ->
+                      case ra_snapshot:current(SnapState) of
+                          undefined ->
+                              -1;
+                          {SnapIdx, _} ->
+                              SnapIdx
+                      end;
+                  {_, End} ->
+                      End
+              end,
 
     %% drop any indexes that are larger than the last index available
     Indexes2 = lists:dropwhile(fun (I) -> I > LastIdx end, Indexes1),
@@ -652,9 +679,12 @@ read_plan_info(#read_plan{read = Read,
       num_segments => NumSegments}.
 
 
--spec last_index_term(state()) -> ra_idxterm().
-last_index_term(#?MODULE{last_index = LastIdx, last_term = LastTerm}) ->
-    {LastIdx, LastTerm}.
+-spec last_index_term(state()) -> option(ra_idxterm()).
+last_index_term(#?MODULE{range = {_, LastIdx},
+                         last_term = LastTerm}) ->
+    {LastIdx, LastTerm};
+last_index_term(#?MODULE{current_snapshot = CurSnap}) ->
+    CurSnap.
 
 -spec last_written(state()) -> ra_idxterm().
 last_written(#?MODULE{last_written_index_term = LWTI}) ->
@@ -664,6 +694,7 @@ last_written(#?MODULE{last_written_index_term = LWTI}) ->
 -spec set_last_index(ra_index(), state()) ->
     {ok, state()} | {not_found, state()}.
 set_last_index(Idx, #?MODULE{cfg = Cfg,
+                             range = Range,
                              last_written_index_term = {LWIdx0, _}} = State0) ->
     case fetch_term(Idx, State0) of
         {undefined, State} ->
@@ -678,7 +709,7 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
             true = LWTerm =/= undefined,
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LWIdx),
-            {ok, State2#?MODULE{last_index = Idx,
+            {ok, State2#?MODULE{range = ra_range:limit(Idx + 1, Range),
                                 last_term = Term,
                                 last_written_index_term = {LWIdx, LWTerm}}}
     end.
@@ -687,8 +718,11 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
     {state(), [effect()]}.
 handle_event({written, Term, WrittenSeq},
              #?MODULE{cfg = Cfg,
-                      first_index = FirstIdx,
+                      % range = Range,
+                      snapshot_state = SnapState,
+                      % first_index = FirstIdx,
                       pending = Pend0} = State0) ->
+    CurSnap = ra_snapshot:current(SnapState),
     %% gap detection
     %% 1. pending has lower indexes than the ra_seq:first index in WrittenSeq
     %% 2.
@@ -707,7 +741,7 @@ handle_event({written, Term, WrittenSeq},
                            [Cfg#cfg.log_id, WrittenSeq, Pend0]),
                     {resend_pending(State0), []}
             end;
-        {undefined, State} when LastWrittenIdx < FirstIdx ->
+        {undefined, State} when LastWrittenIdx =< element(1, CurSnap) ->
             % A snapshot happened before the written event came in
             % This can only happen on a leader when consensus is achieved by
             % followers returning appending the entry and the leader committing
@@ -717,7 +751,7 @@ handle_event({written, Term, WrittenSeq},
             % remove them
             {ok, Pend} = ra_seq:remove_prefix(WrittenSeq, Pend0),
             {State#?MODULE{pending = Pend}, []};
-        {OtherTerm, State} ->
+        {OtherTerm, State} when OtherTerm =/= Term ->
             %% term mismatch, let's reduce the seq and try again to see
             %% if any entries in the range are valid
             case ra_seq:limit(LastWrittenIdx - 1, WrittenSeq) of
@@ -788,8 +822,9 @@ handle_event({segments_to_be_deleted, SegRefs},
 handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
              #?MODULE{cfg = #cfg{uid = UId,
                                  names = Names} = Cfg,
-                      first_index = FstIdx,
-                      last_index = LstIdx,
+                      range = {FstIdx, _} = Range,
+                      % first_index = FstIdx,
+                      % last_index = LstIdx,
                       mem_table = Mt0,
                       pending = Pend0,
                       last_written_index_term = {LastWrittenIdx, _} = LWIdxTerm0,
@@ -823,7 +858,6 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
                         Snap
                 end,
 
-
             %% remove all pending below smallest live index as the wal
             %% may not write them
             %% TODO: test that a written even can still be processed if it
@@ -843,12 +877,12 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
             {Spec, Mt1} = ra_mt:set_first(SmallestLiveIdx, Mt0),
             ok = exec_mem_table_delete(Names, UId, Spec),
 
-            State = State0#?MODULE{first_index = SnapIdx + 1,
-                                   last_index = max(LstIdx, SnapIdx),
+            State = State0#?MODULE{range = ra_range:truncate(SnapIdx, Range),
                                    last_written_index_term = LWIdxTerm,
                                    mem_table = Mt1,
                                    pending = Pend,
                                    live_indexes = LiveIndexes,
+                                   current_snapshot = Snap,
                                    snapshot_state = SnapState},
             CompEffs = schedule_compaction(SnapIdx, State),
             Effects = CompEffs ++ Effects0,
@@ -891,8 +925,12 @@ handle_event({down, _Pid, _Info}, #?MODULE{} = State) ->
     {State, []}.
 
 -spec next_index(state()) -> ra_index().
-next_index(#?MODULE{last_index = LastIdx}) ->
-    LastIdx + 1.
+next_index(#?MODULE{range = {_, LastIdx}}) ->
+    LastIdx + 1;
+next_index(#?MODULE{current_snapshot = {SnapIdx, _}}) ->
+    SnapIdx + 1;
+next_index(#?MODULE{current_snapshot = undefined}) ->
+    0.
 
 -spec fetch(ra_index(), state()) ->
     {option(log_entry()), state()}.
@@ -906,18 +944,19 @@ fetch(Idx, State0) ->
 
 -spec fetch_term(ra_index(), state()) ->
     {option(ra_term()), state()}.
-fetch_term(Idx, #?MODULE{last_index = LastIdx,
-                         first_index = FirstIdx} = State0)
-  when Idx < FirstIdx orelse Idx > LastIdx ->
-    {undefined, State0};
-fetch_term(Idx, #?MODULE{mem_table = Mt, reader = Reader0} = State0) ->
+fetch_term(Idx, #?MODULE{mem_table = Mt,
+                         range = Range,
+                         reader = Reader0} = State0)
+  when ?IS_IN_RANGE(Idx, Range) ->
     case ra_mt:lookup_term(Idx, Mt) of
         undefined ->
             {Term, Reader} = ra_log_reader:fetch_term(Idx, Reader0),
             {Term, State0#?MODULE{reader = Reader}};
         Term when is_integer(Term) ->
             {Term, State0}
-    end.
+    end;
+fetch_term(_Idx, #?MODULE{} = State0) ->
+    {undefined, State0}.
 
 -spec snapshot_state(State :: state()) -> ra_snapshot:state().
 snapshot_state(State) ->
@@ -956,8 +995,8 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod, LiveIndexes,
     {Spec, Mt} = ra_mt:set_first(SmallestLiveIndex, Mt0),
     ok = exec_mem_table_delete(Names, UId, Spec),
     State = State0#?MODULE{snapshot_state = SnapState,
-                           first_index = SnapIdx + 1,
-                           last_index = SnapIdx,
+                           current_snapshot = IdxTerm,
+                           range = undefined,
                            last_term = SnapTerm,
                            live_indexes = LiveIndexes,
                            mem_table = Mt,
@@ -1144,21 +1183,21 @@ exists({Idx, Term}, Log0) ->
     end.
 
 -spec overview(state()) -> overview().
-overview(#?MODULE{last_index = LastIndex,
+overview(#?MODULE{range = Range,
                   last_term = LastTerm,
-                  first_index = FirstIndex,
                   last_written_index_term = LWIT,
                   snapshot_state = SnapshotState,
+                  current_snapshot = CurrSnap,
                   reader = Reader,
                   last_wal_write = {_LastPid, LastMs},
                   mem_table = Mt,
                   pending = Pend
-                 }) ->
-    CurrSnap = ra_snapshot:current(SnapshotState),
+                 } = State) ->
+    {LastIndex, _} = last_index_term(State),
     #{type => ?MODULE,
+      range => Range,
       last_index => LastIndex,
       last_term => LastTerm,
-      first_index => FirstIndex,
       last_written_index_term => LWIT,
       num_segments => ra_log_reader:segment_ref_count(Reader),
       segments_range => ra_log_reader:range(Reader),
@@ -1292,13 +1331,14 @@ schedule_compaction(SnapIdx, #?MODULE{cfg = #cfg{},
 
 %% unly used by resend to wal functionality and doesn't update the mem table
 wal_rewrite(#?MODULE{cfg = #cfg{uid = UId,
-                                wal = Wal} = Cfg} = State,
+                                wal = Wal} = Cfg,
+                    range = _Range} = State,
             Tid, {Idx, Term, Cmd}) ->
     case ra_log_wal:write(Wal, {UId, self()}, Tid, Idx, Term, Cmd) of
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
-            State#?MODULE{last_index = Idx,
+            State#?MODULE{%last_index = Idx,
                           last_term = Term,
                           last_wal_write = {Pid, now_ms()}
                          };
@@ -1309,8 +1349,9 @@ wal_rewrite(#?MODULE{cfg = #cfg{uid = UId,
 wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
                                     wal = Wal} = Cfg,
                          pending = Pend0,
+                         range = Range,
                          mem_table = Mt0} = State,
-                Entries) ->
+                [{FstIdx, _, _} | _] = Entries) ->
     WriterId = {UId, self()},
     %% all entries in a transaction are written to the same tid
     Tid = ra_mt:tid(Mt0),
@@ -1325,9 +1366,15 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
     {_, Mt} = ra_mt:commit(Mt0),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
+    NewRange = case Range of
+                   undefined ->
+                       ra_range:new(FstIdx, LastIdx);
+                   {Start, _} ->
+                       ra_range:new(Start, LastIdx)
+               end,
     case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
         {ok, Pid} ->
-            {ok, State#?MODULE{last_index = LastIdx,
+            {ok, State#?MODULE{range = NewRange,
                                last_term = LastTerm,
                                last_wal_write = {Pid, now_ms()},
                                mem_table = Mt,
@@ -1339,11 +1386,12 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
             Err
     end.
 
-maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
+maybe_append_first_entry(#?MODULE{range = undefined,
+                                  current_snapshot = undefined} = State0) ->
     State1 = append({0, 0, undefined}, State0),
     receive
         {ra_log_event, {written, 0, [0]} = Evt} ->
-            State2 = State1#?MODULE{first_index = 0},
+            State2 = State1#?MODULE{range = ra_range:new(0)},
             {State, _Effs} = handle_event(Evt, State2),
             State
     after 60000 ->
@@ -1380,7 +1428,7 @@ resend_pending(#?MODULE{cfg = Cfg,
                 Pend).
 
 resend_from0(Idx, #?MODULE{cfg = Cfg,
-                           last_index = LastIdx,
+                           range = {_, LastIdx},
                            last_resend_time = undefined,
                            mem_table = Mt} = State) ->
     ?DEBUG("~ts: ra_log: resending from ~b to ~b",
@@ -1449,14 +1497,9 @@ write_snapshot(Meta, MacModule, MacState, SnapKind,
                                                       SnapKind, SnapState0),
     {State#?MODULE{snapshot_state = SnapState}, Effects}.
 
-recover_ranges(UId, MtRange, SegWriter) ->
-    % 1. check mem_tables (this assumes wal has finished recovering
-    % which means it is essential that ra_servers are part of the same
-    % supervision tree
-    % 2. check segments
+my_segrefs(UId, SegWriter) ->
     SegFiles = ra_log_segment_writer:my_segments(SegWriter, UId),
-    SegRefs = lists:foldl(
-                fun (File, Acc) ->
+    lists:foldl(fun (File, Acc) ->
                         %% if a server recovered when a segment had been opened
                         %% but never had any entries written the segref would be
                         %% undefined
@@ -1466,18 +1509,37 @@ recover_ranges(UId, MtRange, SegWriter) ->
                             SegRef ->
                                 [SegRef | Acc]
                         end
-                end, [], SegFiles),
-    SegRanges = [Range || {Range, _} <- SegRefs],
-    Ranges = [MtRange | SegRanges],
-    {pick_range(Ranges, undefined), SegRefs}.
+                end, [], SegFiles).
+
+% recover_ranges(UId, MtRange, SegWriter) ->
+%     % 1. check mem_tables (this assumes wal has finished recovering
+%     % which means it is essential that ra_servers are part of the same
+%     % supervision tree
+%     % 2. check segments
+%     SegFiles = ra_log_segment_writer:my_segments(SegWriter, UId),
+%     SegRefs = lists:foldl(
+%                 fun (File, Acc) ->
+%                         %% if a server recovered when a segment had been opened
+%                         %% but never had any entries written the segref would be
+%                         %% undefined
+%                         case ra_log_segment:segref(File) of
+%                             undefined ->
+%                                 Acc;
+%                             SegRef ->
+%                                 [SegRef | Acc]
+%                         end
+%                 end, [], SegFiles),
+%     SegRanges = [Range || {Range, _} <- SegRefs],
+%     Ranges = [MtRange | SegRanges],
+%     {pick_range(Ranges, undefined), SegRefs}.
 
 % picks the current range from a sorted (newest to oldest) list of ranges
-pick_range([], Res) ->
-    Res;
-pick_range([H | Tail], undefined) ->
-    pick_range(Tail, H);
-pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
-    pick_range(Tail, {min(Fst, CurFst), CurLst}).
+% pick_range([], Res) ->
+%     Res;
+% pick_range([H | Tail], undefined) ->
+%     pick_range(Tail, H);
+% pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
+%     pick_range(Tail, {min(Fst, CurFst), CurLst}).
 
 
 %% TODO: implement synchronous writes using gen_batch_server:call/3
@@ -1544,14 +1606,14 @@ exec_mem_table_delete(#{} = Names, UId, Specs)
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-pick_range_test() ->
-    Ranges1 = [{76, 90}, {50, 75}, {1, 100}],
-    {1, 90} = pick_range(Ranges1, undefined),
+% pick_range_test() ->
+%     Ranges1 = [{76, 90}, {50, 75}, {1, 100}],
+%     {1, 90} = pick_range(Ranges1, undefined),
 
-    Ranges2 = [{76, 110}, {50, 75}, {1, 49}],
-    {1, 110} = pick_range(Ranges2, undefined),
+%     Ranges2 = [{76, 110}, {50, 75}, {1, 49}],
+%     {1, 110} = pick_range(Ranges2, undefined),
 
-    Ranges3 = [{25, 30}, {25, 35}, {1, 50}],
-    {1, 30} = pick_range(Ranges3, undefined),
-    ok.
+%     Ranges3 = [{25, 30}, {25, 35}, {1, 50}],
+%     {1, 30} = pick_range(Ranges3, undefined),
+%     ok.
 -endif.
