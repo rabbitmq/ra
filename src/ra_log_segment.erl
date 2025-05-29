@@ -22,13 +22,15 @@
          max_count/1,
          filename/1,
          segref/1,
-         is_same_as/2]).
+         is_same_as/2,
+         copy/3]).
 
 -export([dump/1,
          dump_index/1]).
 
 -include("ra.hrl").
 
+-include_lib("stdlib/include/assert.hrl").
 -include_lib("kernel/include/file.hrl").
 
 -define(VERSION, 2).
@@ -474,6 +476,23 @@ close(#state{cfg = #cfg{fd = Fd}}) ->
     _ = file:close(Fd),
     ok.
 
+-spec copy(state(), file:filename_all(), [ra:index()]) ->
+    {ok, state()} | {error, term()}.
+copy(#state{} = State0, FromFile, Indexes)
+  when is_list(Indexes) ->
+    {ok, From} = open(FromFile, #{mode => read}),
+    %% TODO: the current approach recalculates the CRC and isn't completely
+    %% optimial. Also it does not allow for a future where copy_file_range may
+    %% be available
+    State = lists:foldl(
+              fun (I, S0) ->
+                      {ok, Term, Data} = simple_read(From, I),
+                      {ok, S} = append(S0, I, Term, Data),
+                      S
+              end, State0, lists:sort(Indexes)),
+    close(From),
+    sync(State).
+
 %%% Internal
 
 is_same_filename_all(Fn, Fn) ->
@@ -692,6 +711,20 @@ is_full(#state{cfg = #cfg{max_size = MaxSize},
                data_offset = DataOffset}) ->
     IndexOffset >= DataStart orelse
     (DataOffset - DataStart) > MaxSize.
+
+simple_read(#state{cfg = #cfg{fd = Fd},
+                   index = SegIndex}, Idx)
+  when is_map_key(Idx, SegIndex) ->
+    {Term, Pos, Len, _} = map_get(Idx, SegIndex),
+    case file:pread(Fd, Pos, Len) of
+        {ok, Data} ->
+            ?assert(byte_size(Data) == Len),
+            {ok, Term, Data};
+        Err ->
+            Err
+    end;
+simple_read(_State, _) ->
+    {error, not_found}.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

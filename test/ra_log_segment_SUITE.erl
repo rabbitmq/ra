@@ -38,7 +38,8 @@ all_tests() ->
      corrupted_segment,
      large_segment,
      segref,
-     versions_v1
+     versions_v1,
+     copy
     ].
 
 groups() ->
@@ -460,6 +461,37 @@ read_sparse_append_read(Config) ->
     ra_log_segment:close(R0),
     ok.
 
+copy(Config) ->
+    Dir = ?config(data_dir, Config),
+    Indexes = lists:seq(1, 100),
+    SrcFn = filename:join(Dir, <<"SOURCE1.segment">>),
+    {ok, SrcSeg0} = ra_log_segment:open(SrcFn),
+    SrcSeg1 = lists:foldl(
+             fun (I, S0) ->
+                     {ok, S} = ra_log_segment:append(S0, I, 1, term_to_binary(I)),
+                     S
+             end, SrcSeg0, Indexes),
+    _ = ra_log_segment:close(SrcSeg1),
+
+    Fn = filename:join(Dir, <<"TARGET.segment">>),
+    {ok, Seg0} = ra_log_segment:open(Fn),
+    CopyIndexes = lists:seq(1, 100, 2),
+    {ok, Seg} = ra_log_segment:copy(Seg0, SrcFn, CopyIndexes),
+    ra_log_segment:close(Seg),
+    {ok, R} = ra_log_segment:open(Fn, #{mode => read,
+                                        access_pattern => random}),
+    %%TODO: consider makeing read_sparse tolerant to missing indexes somehow
+    %% perhaps detecting if the segment is "sparse"
+    {ok, 2, [_, _]} = ra_log_segment:read_sparse(R, [1, 3],
+                                                 fun (I, T, B, Acc) ->
+                                                         [{I, T, binary_to_term(B)} | Acc]
+                                                 end, []),
+    ra_log_segment:close(R),
+
+    ok.
+
+
+%%% Internal
 write_until_full(Idx, Term, Data, Seg0) ->
     case ra_log_segment:append(Seg0, Idx, Term, Data) of
         {ok, Seg} ->
@@ -467,9 +499,6 @@ write_until_full(Idx, Term, Data, Seg0) ->
         {error, full} ->
             Seg0
     end.
-
-
-%%% Internal
 make_data(Size) ->
     term_to_binary(crypto:strong_rand_bytes(Size)).
 
