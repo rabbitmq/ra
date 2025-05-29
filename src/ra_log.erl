@@ -7,6 +7,7 @@
 %% @hidden
 -module(ra_log).
 
+-include_lib("stdlib/include/assert.hrl").
 -compile([inline_list_funcs]).
 
 -export([pre_init/1,
@@ -50,7 +51,8 @@
          delete_everything/1,
          release_resources/3,
 
-         tick/2
+         tick/2,
+         assert/1
         ]).
 
 -include("ra.hrl").
@@ -335,8 +337,7 @@ init(#{uid := UId,
             {SnapIdx, SnapTerm},
             State#?MODULE.last_written_index_term
            ]),
-    State.
-    % element(1, delete_segments(SnapIdx, State)).
+    assert(State).
 
 -spec close(state()) -> ok.
 close(#?MODULE{cfg = #cfg{uid = _UId},
@@ -1085,6 +1086,26 @@ tick(Now, #?MODULE{cfg = #cfg{wal = Wal},
         false ->
             State
     end.
+
+assert(#?MODULE{cfg = #cfg{log_id = LogId},
+                range = Range,
+                snapshot_state = SnapState,
+                current_snapshot = CurrSnap,
+                live_indexes = LiveIndexes,
+                mem_table = _Mt
+               } = State) ->
+    %% TODO: remove this at some point?
+    ?DEBUG("~ts: ra_log: asserting Range ~p Snapshot ~p LiveIndexes ~p",
+           [LogId, Range, CurrSnap, LiveIndexes]),
+    %% perform assertions to ensure log state is correct
+    ?assert(CurrSnap =:= ra_snapshot:current(SnapState)),
+    ?assert(Range == undefined orelse
+            CurrSnap == undefined orelse
+            element(1, Range) - 1 == element(1, CurrSnap)),
+    ?assert(CurrSnap == undefined orelse
+            LiveIndexes == [] orelse
+            ra_seq:last(LiveIndexes) =< element(1, CurrSnap)),
+    State.
 
 suggest_snapshot0(SnapKind, Idx, Cluster, MacModule, MacState, State0) ->
     case should_snapshot(SnapKind, Idx, State0) of
