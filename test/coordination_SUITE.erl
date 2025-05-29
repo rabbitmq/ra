@@ -388,7 +388,7 @@ shrink_cluster_with_snapshot(Config) ->
     %% resume activity ok
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    Peers = start_peers([s1,s2,s3], PrivDir),
+    Peers = start_peers([s1, s2, s3], PrivDir),
     ServerIds = server_ids(ClusterName, Peers),
     [_A, _B, _C] = ServerIds,
 
@@ -409,7 +409,6 @@ shrink_cluster_with_snapshot(Config) ->
 
     exit(Pid, kill),
     {ok, _, _} = ra:remove_member(Leader1, Leader1),
-
 
     timer:sleep(500),
 
