@@ -111,7 +111,7 @@
          current_snapshot :: option(ra_idxterm()),
          last_resend_time :: option({integer(), WalPid :: pid() | undefined}),
          last_wal_write :: {pid(), Ms :: integer()},
-         reader :: ra_log_reader:state(),
+         reader :: ra_log_segments:state(),
          mem_table :: ra_mt:state(),
          tx = false :: boolean(),
          pending = [] :: ra_seq:state(),
@@ -120,7 +120,7 @@
 
 -record(read_plan, {dir :: file:filename_all(),
                     read :: #{ra_index() := log_entry()},
-                    plan :: ra_log_reader:read_plan()}).
+                    plan :: ra_log_segments:read_plan()}).
 
 -opaque read_plan() :: #read_plan{}.
 -opaque state() :: #?MODULE{}.
@@ -228,9 +228,9 @@ init(#{uid := UId,
     % segments it is currently processed have been finished
     MtRange = ra_mt:range(Mt0),
     SegRefs = my_segrefs(UId, SegWriter),
-    Reader = ra_log_reader:init(UId, Dir, MaxOpen, AccessPattern, SegRefs,
+    Reader = ra_log_segments:init(UId, Dir, MaxOpen, AccessPattern, SegRefs,
                                 Names, Counter),
-    SegmentRange = ra_log_reader:range(Reader),
+    SegmentRange = ra_log_segments:range(Reader),
     %% TODO: check ra_range:add/2 actually performas the correct logic we expect
     Range = ra_range:add(MtRange, SegmentRange),
 
@@ -240,7 +240,7 @@ init(#{uid := UId,
                 [LogId, SR]),
          catch prim_file:delete(filename:join(Dir, F))
      end
-     || {_, F} = SR <- SegRefs -- ra_log_reader:segment_refs(Reader)],
+     || {_, F} = SR <- SegRefs -- ra_log_segments:segment_refs(Reader)],
 
     %% assert there is no gap between the snapshot
     %% and the first index in the log
@@ -291,7 +291,7 @@ init(#{uid := UId,
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, LastIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LastIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
-                ra_log_reader:segment_ref_count(Reader)),
+                ra_log_segments:segment_ref_count(Reader)),
     case ra_snapshot:latest_checkpoint(SnapshotState) of
         undefined ->
             ok;
@@ -351,7 +351,7 @@ close(#?MODULE{cfg = #cfg{uid = _UId},
                reader = Reader}) ->
     % deliberately ignoring return value
     % close all open segments
-    _ = ra_log_reader:close(Reader),
+    _ = ra_log_segments:close(Reader),
     ok.
 
 -spec begin_tx(state()) -> state().
@@ -545,11 +545,11 @@ fold(From0, To0, Fun, Acc0,
     MtOverlap = ra_mt:range_overlap({From, To}, Mt),
     case MtOverlap of
         {undefined, {RemStart, RemEnd}} ->
-            {Reader, Acc} = ra_log_reader:fold(RemStart, RemEnd, Fun,
+            {Reader, Acc} = ra_log_segments:fold(RemStart, RemEnd, Fun,
                                                Acc0, Reader0),
             {Acc, State#?MODULE{reader = Reader}};
         {{MtStart, MtEnd}, {RemStart, RemEnd}} ->
-            {Reader, Acc1} = ra_log_reader:fold(RemStart, RemEnd, Fun,
+            {Reader, Acc1} = ra_log_segments:fold(RemStart, RemEnd, Fun,
                                                 Acc0, Reader0),
             Acc = ra_mt:fold(MtStart, MtEnd, Fun, Acc1, Mt),
             NumRead = MtEnd - MtStart + 1,
@@ -595,7 +595,7 @@ sparse_read(Indexes0, #?MODULE{cfg = Cfg,
                             end, Indexes1),
     {Entries0, MemTblNumRead, Indexes} = ra_mt:get_items(Indexes2, Mt),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_MEM_TBL, MemTblNumRead),
-    {Entries1, Reader} = ra_log_reader:sparse_read(Reader0, Indexes, Entries0),
+    {Entries1, Reader} = ra_log_segments:sparse_read(Reader0, Indexes, Entries0),
     %% here we recover the original order of indexes
     Entries = case Sort of
                   descending ->
@@ -658,7 +658,7 @@ partial_read(Indexes0, #?MODULE{cfg = Cfg,
                                maps:put(I, TransformFun(I, T, Cmd), Acc)
                        end, #{}, Entries0),
 
-    Plan = ra_log_reader:read_plan(Reader0, Indexes),
+    Plan = ra_log_segments:read_plan(Reader0, Indexes),
     #read_plan{dir = Cfg#cfg.directory,
                read = Read,
                plan = Plan}.
@@ -666,13 +666,13 @@ partial_read(Indexes0, #?MODULE{cfg = Cfg,
 
 -spec execute_read_plan(read_plan(), undefined | ra_flru:state(),
                         TransformFun :: transform_fun(),
-                        ra_log_reader:read_plan_options()) ->
+                        ra_log_segments:read_plan_options()) ->
     {#{ra_index() => Command :: term()}, ra_flru:state()}.
 execute_read_plan(#read_plan{dir = Dir,
                              read = Read,
                              plan = Plan}, Flru0, TransformFun,
                   Options) ->
-    ra_log_reader:exec_read_plan(Dir, Plan, Flru0, TransformFun,
+    ra_log_segments:exec_read_plan(Dir, Plan, Flru0, TransformFun,
                                  Options, Read).
 
 -spec read_plan_info(read_plan()) -> map().
@@ -781,10 +781,10 @@ handle_event({segments, TidRanges, NewSegs},
                       reader = Reader0,
                       pending = Pend0,
                       mem_table = Mt0} = State0) ->
-    {Reader, OverwrittenSegRefs} = ra_log_reader:update_segments(NewSegs, Reader0),
+    {Reader, OverwrittenSegRefs} = ra_log_segments:update_segments(NewSegs, Reader0),
 
     put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
-                ra_log_reader:segment_ref_count(Reader)),
+                ra_log_segments:segment_ref_count(Reader)),
     %% the tid ranges arrive in the reverse order they were written
     %% (new -> old) so we need to foldr here to process the oldest first
     Mt = lists:foldr(
@@ -824,10 +824,10 @@ handle_event({segments_to_be_deleted, SegRefs},
                                  counter = Counter,
                                  names = Names},
                       reader = Reader} = State) ->
-    ActiveSegs = ra_log_reader:segment_refs(Reader) -- SegRefs,
-    #{max_size := MaxOpenSegments} = ra_log_reader:info(Reader),
+    ActiveSegs = ra_log_segments:segment_refs(Reader) -- SegRefs,
+    #{max_size := MaxOpenSegments} = ra_log_segments:info(Reader),
     % close all open segments
-    ok = ra_log_reader:close(Reader),
+    ok = ra_log_segments:close(Reader),
     ?DEBUG("~ts: ~b obsolete segments - remaining: ~b",
            [LogId, length(SegRefs), length(ActiveSegs)]),
     %% open a new segment with the new max open segment value
@@ -836,7 +836,7 @@ handle_event({segments_to_be_deleted, SegRefs},
                    || {_, F} <- SegRefs],
                   ok
           end,
-    {State#?MODULE{reader = ra_log_reader:init(UId, Dir, MaxOpenSegments,
+    {State#?MODULE{reader = ra_log_segments:init(UId, Dir, MaxOpenSegments,
                                               random,
                                               ActiveSegs, Names, Counter)},
 
@@ -970,7 +970,7 @@ fetch_term(Idx, #?MODULE{mem_table = Mt,
   when ?IS_IN_RANGE(Idx, Range) ->
     case ra_mt:lookup_term(Idx, Mt) of
         undefined ->
-            {Term, Reader} = ra_log_reader:fetch_term(Idx, Reader0),
+            {Term, Reader} = ra_log_segments:fetch_term(Idx, Reader0),
             {Term, State0#?MODULE{reader = Reader}};
         Term when is_integer(Term) ->
             {Term, State0}
@@ -1172,7 +1172,7 @@ should_snapshot(snapshot, Idx,
     % We should take a snapshot if the new snapshot index would allow us
     % to discard any segments or if the we've handled enough commands
     % since the last snapshot.
-    CanFreeSegments = case ra_log_reader:range(Reader) of
+    CanFreeSegments = case ra_log_segments:range(Reader) of
                           undefined ->
                               false;
                           {Start, _End} ->
@@ -1239,9 +1239,9 @@ overview(#?MODULE{range = Range,
       last_index => LastIndex,
       last_term => LastTerm,
       last_written_index_term => LWIT,
-      num_segments => ra_log_reader:segment_ref_count(Reader),
-      segments_range => ra_log_reader:range(Reader),
-      open_segments => ra_log_reader:num_open_segments(Reader),
+      num_segments => ra_log_segments:segment_ref_count(Reader),
+      segments_range => ra_log_segments:range(Reader),
+      open_segments => ra_log_segments:num_open_segments(Reader),
       snapshot_index => case CurrSnap of
                             undefined -> undefined;
                             {I, _} -> I
@@ -1313,12 +1313,12 @@ release_resources(MaxOpenSegments,
                                       counter = Counter,
                                       names = Names},
                            reader = Reader} = State) ->
-    ActiveSegs = ra_log_reader:segment_refs(Reader),
+    ActiveSegs = ra_log_segments:segment_refs(Reader),
     % close all open segments
     % deliberately ignoring return value
-    _ = ra_log_reader:close(Reader),
+    _ = ra_log_segments:close(Reader),
     %% open a new segment with the new max open segment value
-    State#?MODULE{reader = ra_log_reader:init(UId, Dir, MaxOpenSegments,
+    State#?MODULE{reader = ra_log_segments:init(UId, Dir, MaxOpenSegments,
                                               AccessPattern,
                                               ActiveSegs, Names, Counter)}.
 
@@ -1330,7 +1330,7 @@ schedule_compaction(SnapIdx, #?MODULE{cfg = #cfg{uid = _UId,
                                                  segment_writer = _SegWriter},
                                       live_indexes = LiveIndexes,
                                       reader = Reader0}) ->
-    case ra_log_reader:segment_refs(Reader0) of
+    case ra_log_segments:segment_refs(Reader0) of
         [] ->
             [];
         [_ | Compactable] ->
