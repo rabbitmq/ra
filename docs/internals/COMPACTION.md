@@ -75,7 +75,7 @@ higher numbered segments (003, 004) will then have a symlink created (e.g. 003.l
 pointing to the lowest numbered segment (002)
 then the link is renamed to the source file: `003.link -> 003` (NB not atomic).
 
-`002-003-004.compacting` is then deleted (but 002 is still hard linked so the data
+`001-002-003.compacting` is then deleted (but 002 is still hard linked so the data
 will remain).
 
 This naming format means it is easy to identify partially compacted segments

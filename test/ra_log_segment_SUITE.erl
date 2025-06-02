@@ -208,7 +208,7 @@ segref(Config) ->
     {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 128}),
     undefined = ra_log_segment:segref(Seg0),
     {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
-    {{1, 1}, "seg1.seg"} = ra_log_segment:segref(Seg1),
+    {<<"seg1.seg">>, {1, 1}} = ra_log_segment:segref(Seg1),
     ok.
 
 
