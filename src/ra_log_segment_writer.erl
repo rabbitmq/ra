@@ -184,7 +184,7 @@ handle_cast({mem_tables, UIdTidRanges, WalFile},
            "~s in ~bms",
           [System, length(RangesList), WalFile, Diff]),
     {noreply, State};
-handle_cast({truncate_segments, Who, {_Range, Name} = SegRef},
+handle_cast({truncate_segments, Who, {Name, _Range} = SegRef},
             #state{segment_conf = SegConf,
                    system = System} = State0) ->
     %% remove all segments below the provided SegRef
@@ -193,7 +193,7 @@ handle_cast({truncate_segments, Who, {_Range, Name} = SegRef},
     Files = segments_for(Who, State0),
     {_Keep, Discard} = lists:splitwith(
                          fun (F) ->
-                                 ra_lib:to_string(filename:basename(F)) =/= Name
+                                 ra_lib:to_binary(filename:basename(F)) =/= Name
                          end, lists:reverse(Files)),
     case Discard of
         [] ->
@@ -304,7 +304,7 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
     %% order they are kept by the ra_log
     SegRefs = lists:reverse(
                 lists:foldl(
-                  fun ({_, FILE}, [{_, FILE} | _] = Acc) ->
+                  fun ({FILE, _}, [{FILE, _} | _] = Acc) ->
                           Acc;
                       (Seg, Acc) ->
                           [Seg | Acc]
