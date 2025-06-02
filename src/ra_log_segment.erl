@@ -446,7 +446,7 @@ segref(#state{range = undefined}) ->
     undefined;
 segref(#state{range = Range,
               cfg = #cfg{filename = Fn}}) ->
-    {Range, filename:basename(Fn)};
+    {ra_lib:to_binary(filename:basename(Fn)), Range};
 segref(Filename) ->
     {ok, Seg} = open(Filename, #{mode => read}),
     SegRef = segref(Seg),

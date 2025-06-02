@@ -81,8 +81,8 @@ init(UId, Dir, MaxOpen, AccessPattern, SegRefs0, #{}, Counter)
                   end,
     SegRefs = compact_segrefs(SegRefs0, []),
     Range = case SegRefs of
-                  [{{_, L}, _} | _] ->
-                      {{F, _}, _} = lists:last(SegRefs),
+                  [{_, {_, L}} | _] ->
+                      {_, {F, _}} = lists:last(SegRefs),
                       ra_range:new(F, L);
                   _ ->
                       undefined
@@ -95,7 +95,7 @@ init(UId, Dir, MaxOpen, AccessPattern, SegRefs0, #{}, Counter)
             segment_refs =
                 ra_lol:from_list(fun seg_ref_gt/2, SegRefsRev)}.
 
-seg_ref_gt({{Start, _}, Fn1}, {{_, End}, Fn2}) ->
+seg_ref_gt({Fn1, {Start, _}}, {Fn2, {_, End}}) ->
     Start > End andalso Fn1 > Fn2.
 
 -spec close(state()) -> ok.
@@ -117,8 +117,8 @@ update_segments(NewSegmentRefs,
     SegmentRefsCompRev = lists:reverse(SegmentRefsComp),
     SegRefs = ra_lol:from_list(fun seg_ref_gt/2, SegmentRefsCompRev),
     Range = case SegmentRefsComp of
-                [{{_, L}, _} | _] ->
-                    [{{F, _}, _} | _] = SegmentRefsCompRev,
+                [{_, {_, L}} | _] ->
+                    [{_, {F, _}} | _] = SegmentRefsCompRev,
                     ra_range:new(F, L);
                 _ ->
                     undefined
@@ -126,7 +126,7 @@ update_segments(NewSegmentRefs,
     %% check if any of the updated segrefs refer to open segments
     %% we close these segments so that they can be re-opened with updated
     %% indexes if needed
-    Open = lists:foldl(fun ({_, Fn}, Acc0) ->
+    Open = lists:foldl(fun ({Fn, _}, Acc0) ->
                                case ra_flru:evict(Fn, Acc0) of
                                    {_, Acc} -> Acc;
                                    error -> Acc0
@@ -139,26 +139,30 @@ update_segments(NewSegmentRefs,
 
 -record(log_compaction_result,
         {%range :: ra:range(),
-         deleted :: [segment_ref()],
-         new :: [segment_ref()]}).
+         unreferenced :: [segment_ref()],
+         linked :: [segment_ref()],
+         compacted :: [segment_ref()]}).
+
 -spec handle_compaction(#log_compaction_result{}, state()) -> state().
-handle_compaction(#log_compaction_result{deleted = Deleted,
-                                         new = New},
+handle_compaction(#log_compaction_result{unreferenced = Deleted,
+                                         linked = Linked,
+                                         compacted = Compacted},
                   #?STATE{open_segments = Open0,
                           segment_refs = SegRefs0} = State) ->
     SegmentRefs0 = ra_lol:to_list(SegRefs0),
-    SegmentRefs = lists:sort((SegmentRefs0 -- Deleted) ++ New),
+    SegmentRefs = lists:usort(((SegmentRefs0 -- Deleted) -- Linked) ++ Compacted),
     Open = ra_flru:evict_all(Open0),
     State#?MODULE{segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
                                                   lists:reverse(SegmentRefs)),
                   open_segments = Open}.
+
 
 -spec update_first_index(ra_index(), state()) ->
     {state(), [segment_ref()]}.
 update_first_index(FstIdx, #?STATE{segment_refs = SegRefs0,
                                    open_segments = OpenSegs0} = State) ->
     %% TODO: refactor this so that ra_lol just returns plain lists on both sides?
-    case ra_lol:takewhile(fun({{_, To}, _}) ->
+    case ra_lol:takewhile(fun({_Fn, {_, To}}) ->
                                   To >= FstIdx
                           end, SegRefs0) of
         {Active, Obsolete0} ->
@@ -167,7 +171,7 @@ update_first_index(FstIdx, #?STATE{segment_refs = SegRefs0,
                     {State, []};
                 _ ->
                     Obsolete = ra_lol:to_list(Obsolete0),
-                    ObsoleteKeys = [K || {_, K} <- Obsolete],
+                    ObsoleteKeys = [K || {K, _} <- Obsolete],
                     % close any open segments
                     OpenSegs = lists:foldl(fun (K, OS0) ->
                                                    case ra_flru:evict(K, OS0) of
@@ -237,7 +241,7 @@ exec_read_plan(Dir, Plan, Open0, TransformFun, Options, Acc0)
                   Acc#{I => E}
           end,
     lists:foldl(
-      fun ({Idxs, BaseName}, {Acc1, Open1}) ->
+      fun ({BaseName, Idxs}, {Acc1, Open1}) ->
               {Seg, Open2} = get_segment_ext(Dir, Open1, BaseName, Options),
               case ra_log_segment:read_sparse(Seg, Idxs, Fun, Acc1) of
                   {ok, _, Acc} ->
@@ -276,14 +280,14 @@ segment_read_plan(_SegRefs, [], Acc) ->
     lists:reverse(Acc);
 segment_read_plan(SegRefs, [Idx | _] = Indexes, Acc) ->
     case ra_lol:search(seg_ref_search_fun(Idx), SegRefs) of
-        {{Range, Fn}, Cont} ->
+        {{Fn, Range}, Cont} ->
             case sparse_read_split(fun (I) ->
                                            ra_range:in(I, Range)
                                    end, Indexes, []) of
                 {[], _} ->
                     segment_read_plan(Cont, Indexes, Acc);
                 {Idxs, Rem} ->
-                    segment_read_plan(Cont, Rem, [{Idxs, Fn} | Acc])
+                    segment_read_plan(Cont, Rem, [{Fn, Idxs} | Acc])
             end;
         undefined ->
             %% not found
@@ -291,7 +295,7 @@ segment_read_plan(SegRefs, [Idx | _] = Indexes, Acc) ->
     end.
 
 seg_ref_search_fun(Idx) ->
-    fun({{Start, End}, _}) ->
+    fun({__Fn, {Start, End}}) ->
             if Idx > End -> higher;
                Idx < Start -> lower;
                true -> equal
@@ -308,7 +312,7 @@ segment_term_query0(Idx, SegRefs, Open0,
                     #cfg{directory = Dir,
                          access_pattern = AccessPattern} = Cfg) ->
     case ra_lol:search(seg_ref_search_fun(Idx), SegRefs) of
-        {{_Range, Fn}, _Cont} ->
+        {{Fn, _Range}, _Cont} ->
             case ra_flru:fetch(Fn, Open0) of
                 {ok, Seg, Open} ->
                     Term = ra_log_segment:term_query(Seg, Idx),
@@ -331,7 +335,7 @@ segment_fold_plan(_SegRefs, undefined, Acc) ->
     Acc;
 segment_fold_plan(SegRefs, {_ReqStart, ReqEnd} = ReqRange, Acc) ->
     case ra_lol:search(seg_ref_search_fun(ReqEnd), SegRefs) of
-        {{Range, Fn}, Cont} ->
+        {{Fn, Range}, Cont} ->
             This = ra_range:overlap(ReqRange, Range),
             ReqRem = case ra_range:subtract(This, ReqRange) of
                          [] ->
@@ -339,7 +343,7 @@ segment_fold_plan(SegRefs, {_ReqStart, ReqEnd} = ReqRange, Acc) ->
                          [Rem] ->
                              Rem
                      end,
-            segment_fold_plan(Cont, ReqRem, [{This, Fn} | Acc]);
+            segment_fold_plan(Cont, ReqRem, [{Fn, This} | Acc]);
         undefined ->
             %% not found
             Acc
@@ -352,12 +356,11 @@ segment_fold(#?STATE{segment_refs = SegRefs,
     Plan = segment_fold_plan(SegRefs, {RStart, REnd}, []),
     {Op, A} =
         lists:foldl(
-          fun ({{Start, End}, Fn}, {Open0, Ac0}) ->
+          fun ({Fn, {Start, End}}, {Open0, Ac0}) ->
                   {Seg, Open} = get_segment(Cfg, Open0, Fn),
                   {Open, ra_log_segment:fold(Seg, Start, End,
                                              fun binary_to_term/1,
-                                             Fun,
-                                             Ac0)}
+                                             Fun, Ac0)}
           end, {OpenSegs, Acc}, Plan),
     {State#?MODULE{open_segments = Op}, A}.
 
@@ -369,7 +372,7 @@ segment_sparse_read(#?STATE{segment_refs = SegRefs,
                             cfg = Cfg}, Indexes, Entries0) ->
     Plan = segment_read_plan(SegRefs, Indexes, []),
     lists:foldl(
-      fun ({Idxs, Fn}, {Open0, C, En0}) ->
+      fun ({Fn, Idxs}, {Open0, C, En0}) ->
               {Seg, Open} = get_segment(Cfg, Open0, Fn),
               {ok, ReadSparseCount, Entries} =
                   ra_log_segment:read_sparse_no_checks(
@@ -392,7 +395,8 @@ sparse_read_split(_Fun, [], Acc) ->
 
 
 get_segment(#cfg{directory = Dir,
-                 access_pattern = AccessPattern} = Cfg, Open0, Fn) ->
+                 access_pattern = AccessPattern} = Cfg, Open0, Fn)
+  when is_binary(Fn) ->
     case ra_flru:fetch(Fn, Open0) of
         {ok, S, Open1} ->
             {S, Open1};
@@ -434,18 +438,18 @@ compact_segrefs(New, Cur) ->
       fun
           (S, []) ->
               [S];
-          ({{Start, _}, _} = SegRef, Prev) ->
+          ({_, {Start, _}} = SegRef, Prev) ->
               [SegRef | limit(Start, Prev)]
       end, Cur, New).
 
 limit(_LimitIdx, []) ->
     [];
-limit(LimitIdx, [{PrevRange, PrevFn} | PrevRem]) ->
+limit(LimitIdx, [{PrevFn, PrevRange} | PrevRem]) ->
     case ra_range:limit(LimitIdx, PrevRange) of
         undefined ->
             limit(LimitIdx, PrevRem);
         NewPrevRange ->
-            [{NewPrevRange, PrevFn} | PrevRem]
+            [{PrevFn, NewPrevRange} | PrevRem]
     end.
 
 reset_counter(#cfg{counter = Cnt}, Ix)
@@ -467,69 +471,73 @@ decr_counter(#cfg{counter = undefined}, _, _) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
+-define(SR(N, R), {<<N>>, R}).
+
 compact_seg_refs_test() ->
-    NewRefs = [{{10, 100}, "2"}],
-    PrevRefs = [{{10, 75}, "2"}, {{1, 9}, "1"}],
-    ?assertEqual([{{10, 100}, "2"}, {{1, 9}, "1"}],
+    NewRefs = [?SR("2", {10, 100})],
+    PrevRefs = [?SR("2", {10, 75}),
+                ?SR("1", {1, 9})],
+    ?assertEqual([?SR("2", {10, 100}),
+                  ?SR("1", {1, 9})],
                  compact_segrefs(NewRefs, PrevRefs)).
 
 compact_segref_3_test() ->
     Data = [
-            {{2, 7}, "C"},
+            {"C", {2, 7}},
             %% this entry has overwritten the prior two
-            {{5, 10}, "B"},
-            {{1, 4}, "A"}
+            {"B", {5, 10}},
+            {"A", {1, 4}}
            ],
     Res = compact_segrefs(Data, []),
-    ?assertMatch([{{2, 7}, "C"},
-                  {{1, 1}, "A"}], Res),
+    ?assertMatch([{"C", {2, 7}},
+                  {"A", {1, 1}}], Res),
     ok.
 
 compact_segref_2_test() ->
     Data = [
-            {{80, 89}, "80"},
+            {"80", {80, 89}},
             %% this entry has overwritten the prior two
-            {{56, 79}, "71"},
-            {{70, 85}, "70"},
-            {{60, 69}, "60"},
-            {{50, 59}, "50"}
+            {"71", {56, 79}},
+            {"70", {70, 85}},
+            {"60", {60, 69}},
+            {"50", {50, 59}}
            ],
     Res = compact_segrefs(Data, []),
-    ?assertMatch([{{80, 89}, "80"},
-                  {{56, 79}, "71"},
-                  {{50, 55}, "50"}
+    ?assertMatch([{"80", {80, 89}},
+                  {"71", {56, 79}},
+                  {"50", {50, 55}}
                  ], Res),
     ok.
 
 compact_segref_1_test() ->
     Data = [
-            {{80, 89}, "80"},
+            {"80", {80, 89}},
             %% this entry has overwritten the prior one
-            {{70, 79}, "71"},
-            {{70, 85}, "70"},
+            {"71", {70, 79}},
+            {"70", {70, 85}},
             %% partial overwrite
-            {{65, 69}, "65"},
-            {{60, 69}, "60"},
-            {{50, 59}, "50"},
-            {{40, 49}, "40"}
+            {"65", {65, 69}},
+            {"60", {60, 69}},
+            {"50", {50, 59}},
+            {"40", {40, 49}}
            ],
 
     Res = compact_segrefs(Data, [
-                                 {{30, 39}, "30"},
-                                 {{20, 29}, "20"}
+                                 {"30", {30, 39}},
+                                 {"20", {20, 29}}
                                 ]),
 
     %% overwritten entry is no longer there
     %% and the segment prior to the partial overwrite has been limited
     %% to provide a continuous range
-    ?assertMatch([{{80, 89}, "80"},
-                  {{70, 79}, "71"},
-                  {{65, 69}, "65"},
-                  {{60, 64}, "60"},
-                  {{50, 59}, "50"},
-                  {{40, 49}, "40"},
-                  {{30, 39}, "30"},
-                  {{20, 29}, "20"}
+    ?assertMatch([{"80", {80, 89}},
+                  {"71", {70, 79}},
+                  {"65", {65, 69}},
+                  {"60", {60, 64}},
+                  {"50", {50, 59}},
+                  {"40", {40, 49}},
+                  {"30", {30, 39}},
+                  {"20", {20, 29}}
                  ], Res),
     ok.
 
@@ -540,26 +548,26 @@ segrefs_to_read_test() ->
                 fun seg_ref_gt/2,
                 lists:reverse(
                   compact_segrefs(
-                    [{{412,499},"00000006.segment"},
-                     {{284,411},"00000005.segment"},
+                    [{"00000006.segment", {412, 499}},
+                     {"00000005.segment", {284, 411}},
                      %% this segment got overwritten
-                     {{284,500},"00000004.segment"},
-                     {{200,285},"00000003.segment"},
-                     {{128,255},"00000002.segment"},
-                     {{0,127},"00000001.segment"}], []))),
+                     {"00000004.segment",{284, 500}},
+                     {"00000003.segment",{200, 285}},
+                     {"00000002.segment",{128, 255}},
+                     {"00000001.segment", {0, 127}}], []))),
 
 
-    ?assertEqual([{{199, 199}, "00000002.segment"},
-                  {{200, 283}, "00000003.segment"},
-                  {{284, 411}, "00000005.segment"},
-                  {{412, 499}, "00000006.segment"}],
+    ?assertEqual([{"00000002.segment", {199, 199}},
+                  {"00000003.segment", {200, 283}},
+                  {"00000005.segment", {284, 411}},
+                  {"00000006.segment", {412, 499}}],
                  segment_fold_plan(SegRefs, {199, 499}, [])),
 
     %% out of range
     ?assertEqual([], segment_fold_plan(SegRefs, {500, 500}, [])),
     ?assertEqual([
-                  {{127,127},"00000001.segment"},
-                  {{128,128},"00000002.segment"}
+                  {"00000001.segment", {127,127}},
+                  {"00000002.segment", {128,128}}
                  ],
                  segment_fold_plan(SegRefs, {127, 128}, [])),
     ok.

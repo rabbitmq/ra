@@ -1360,7 +1360,7 @@ update_release_cursor(Config) ->
     UId = ?config(uid, Config),
     127 = ra_log_snapshot_state:snapshot(ra_log_snapshot_state, UId),
     % this should delete a single segment
-    ct:pal("Log3 ~p", [ra_log:overview(Log3)]),
+    ct:pal("Log3 ~p", [Log3]),
     Log3b = validate_fold(128, 149, 2, Log3),
     % update the release cursor all the way
     {Log4, Effs2} = ra_log:update_release_cursor(149, #{?N1 => new_peer(),

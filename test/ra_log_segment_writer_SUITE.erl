@@ -97,7 +97,7 @@ accept_mem_tables(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w1.wal")),
     receive
-        {ra_log_event, {segments, TidSeqs, [{{1, 3}, SegFile}]}} ->
+        {ra_log_event, {segments, TidSeqs, [{SegFile, {1, 3}}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), SegFile),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
@@ -137,7 +137,7 @@ accept_mem_tables_append(Config) ->
                                                  make_wal(Config,  "w2.wal")),
     AllEntries = Entries ++ Entries2,
     receive
-        {ra_log_event, {segments, [{Tid, [{4, 5}]}], [{{1, 5}, Fn}]}} ->
+        {ra_log_event, {segments, [{Tid, [{4, 5}]}], [{Fn, {1, 5}}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
@@ -163,10 +163,10 @@ accept_mem_tables_overwrite(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w1.wal")),
     receive
-        {ra_log_event, {segments, [{Tid, [{3, 5}]}], [{{3, 5}, Fn}]}} ->
+        {ra_log_event, {segments, [{Tid, [{3, 5}]}], [{Fn, {3, 5}}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
-            ?assertMatch({{3, 5}, _}, ra_log_segment:segref(Seg)),
+            ?assertMatch({_, {3, 5}}, ra_log_segment:segref(Seg)),
             ra_log_segment:close(Seg),
             ok
     after 3000 ->
@@ -180,10 +180,10 @@ accept_mem_tables_overwrite(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
                                                  make_wal(Config, "w2.wal")),
     receive
-        {ra_log_event, {segments, [{Tid2, [{1, 3}]}], [{{1, 3}, Fn2}]}} ->
+        {ra_log_event, {segments, [{Tid2, [{1, 3}]}], [{Fn2, {1, 3}}]}} ->
             SegmentFile2 = filename:join(?config(server_dir, Config), Fn2),
             {ok, Seg2} = ra_log_segment:open(SegmentFile2, #{mode => read}),
-            ?assertMatch({{1, 3}, _}, ra_log_segment:segref(Seg2)),
+            ?assertMatch({_, {1, 3}}, ra_log_segment:segref(Seg2)),
             C2 = term_to_binary(c2),
             [{1, 43, _}, {2, 43, _}] = read_sparse(Seg2, [1, 2]),
             [{3, 43, C2}] = read_sparse(Seg2, [3]),
@@ -213,10 +213,10 @@ accept_mem_tables_overwrite_same_wal(Config) ->
                                                  make_wal(Config, "w2.wal")),
     receive
         {ra_log_event,
-         {segments, [{Tid2, [{4, 6}]}, {Tid, [{2, 5}]}], [{{2, 6}, Fn}]}} ->
+         {segments, [{Tid2, [{4, 6}]}, {Tid, [{2, 5}]}], [{Fn, {2, 6}}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
-            ?assertMatch({{2, 6}, _}, ra_log_segment:segref(Seg)),
+            ?assertMatch({_, {2, 6}}, ra_log_segment:segref(Seg)),
             [{2, 42, _},
              {3, 42, _},
              {4, 43, _},
@@ -250,7 +250,7 @@ accept_mem_tables_multi_segment(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w.wal")),
     receive
-        {ra_log_event, {segments, TidRanges, [{{9, 10}, _Seg2}, {{1, 8}, _Seg1}]}} ->
+        {ra_log_event, {segments, TidRanges, [{_, {9, 10}}, {_, {1, 8}}]}} ->
             ok
     after 3000 ->
               flush(),
@@ -277,7 +277,7 @@ accept_mem_tables_multi_segment_max_size(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w.wal")),
     receive
-        {ra_log_event, {segments, TidRanges, [{{9, 10}, _Seg2}, {{1, 8}, _Seg1}]}} ->
+        {ra_log_event, {segments, TidRanges, [{_, {9, 10}}, {_, {1, 8}}]}} ->
             ok
     after 3000 ->
               flush(),
@@ -305,7 +305,7 @@ accept_mem_tables_multi_segment_overwrite(Config) ->
                                                  make_wal(Config, "w.wal")),
     LastFile =
     receive
-        {ra_log_event, {segments, TidRanges, [{{9, 10}, Seg2}, {{1, 8}, _Seg1}]}} ->
+        {ra_log_event, {segments, TidRanges, [{Seg2, {9, 10}}, {_Seg1, {1, 8}}]}} ->
             Seg2
             % ok
     after 3000 ->
@@ -322,7 +322,7 @@ accept_mem_tables_multi_segment_overwrite(Config) ->
                                                  make_wal(Config, "w2.wal")),
     receive
         {ra_log_event, {segments, TidRanges2,
-                        [{{13, 15}, _}, {{7, 12}, LastFile}]}} ->
+                        [{_, {13, 15}}, {LastFile, {7, 12}}]}} ->
             ok
     after 3000 ->
               flush(),
@@ -362,7 +362,7 @@ accept_mem_tables_for_down_server(Config) ->
     ok = file:write_file(WalFile, <<"waldata">>),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
     receive
-        {ra_log_event, {segments, [{Tid2, [{1, 3}]}], [{{1, 3}, Fn}]}} ->
+        {ra_log_event, {segments, [{Tid2, [{1, 3}]}], [{Fn, {1, 3}}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
@@ -424,7 +424,7 @@ accept_mem_tables_with_deleted_server(Config) ->
     WalFile = make_wal(Config, "00001.wal"),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
     receive
-        {ra_log_event, {segments, [{Tid2, [{1, 3}]}], [{{1, 3}, Fn}]}} ->
+        {ra_log_event, {segments, [{Tid2, [{1, 3}]}], [{Fn, {1, 3}}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
@@ -475,7 +475,7 @@ accept_mem_tables_with_corrupt_segment(Config) ->
     file:write_file(filename:join(?config(server_dir, Config), "0000001.segment"), <<>>),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
     receive
-        {ra_log_event, {segments, TidRanges, [{{1, 3}, SegFile}]}} ->
+        {ra_log_event, {segments, TidRanges, [{SegFile, {1, 3}}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), SegFile),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert Entries have been fully transferred
@@ -516,10 +516,10 @@ accept_mem_tables_multiple_ranges(Config)->
     receive
         {ra_log_event, {segments, TidRanges, SegRefs}} ->
             ?assertMatch([
-                          {{49, 64}, _},
-                          {{33, 48}, _},
-                          {{17, 32}, _},
-                          {{1, 16}, _}
+                          {_, {49, 64}},
+                          {_, {33, 48}},
+                          {_, {17, 32}},
+                          {_, {1, 16}}
                          ], SegRefs),
             ok
     after 3000 ->
@@ -577,14 +577,14 @@ truncate_segments(Config) ->
     WalFile = make_wal(Config, "0000001.wal"),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
     receive
-        {ra_log_event, {segments, TidRanges, [{{25, 32}, S} = Cur | Rem]}} ->
+        {ra_log_event, {segments, TidRanges, [{S, {25, 32}} = Cur | Rem]}} ->
             % test a lower index _does not_ delete the file
             SegmentFile = filename:join(?config(server_dir, Config), S),
             ?assert(filelib:is_file(SegmentFile)),
             ok = ra_log_segment_writer:truncate_segments(TblWriterPid,
                                                          UId, Cur),
             ra_log_segment_writer:await(?SEGWR),
-            [{_, S1}, {_, S2}] = Rem,
+            [{S1, _}, {S2, _}] = Rem,
             SegmentFile1 = filename:join(?config(server_dir, Config), S1),
             ?assertNot(filelib:is_file(SegmentFile1)),
             SegmentFile2 = filename:join(?config(server_dir, Config), S2),
@@ -618,7 +618,7 @@ truncate_segments_with_pending_update(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
                                                  make_wal(Config, "w2.erl")),
     receive
-        {ra_log_event, {segments, _TidRanges, [{{25, 32}, S} = Cur | Rem]}} ->
+        {ra_log_event, {segments, _TidRanges, [{S, {25, 32}} = Cur | Rem]}} ->
             % this is the event from the first call to accept_mem_tables,
             % the Cur segments has been appended to since so should _not_
             % be deleted when it is provided as the cutoff segref for
@@ -629,7 +629,7 @@ truncate_segments_with_pending_update(Config) ->
                                                          UId, Cur),
             ra_log_segment_writer:await(?SEGWR),
             ?assert(filelib:is_file(SegmentFile)),
-            [{_, S1}, {_, S2}] = Rem,
+            [{S1, _}, {S2, _}] = Rem,
             SegmentFile1 = filename:join(?config(server_dir, Config), S1),
             ?assertNot(filelib:is_file(SegmentFile1)),
             SegmentFile2 = filename:join(?config(server_dir, Config), S2),
@@ -664,7 +664,7 @@ truncate_segments_with_pending_overwrite(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
                                                  make_wal(Config, "w2.wal")),
     receive
-        {ra_log_event, {segments, _Tid, [{{25, 32}, S} = Cur | Rem]}} ->
+        {ra_log_event, {segments, _Tid, [{S, {25, 32}} = Cur | Rem]}} ->
             % test a lower index _does not_ delete the file
             SegmentFile = filename:join(?config(server_dir, Config), S),
             ?assert(filelib:is_file(SegmentFile)),
@@ -673,7 +673,7 @@ truncate_segments_with_pending_overwrite(Config) ->
             _ = ra_log_segment_writer:await(?SEGWR),
             SegmentFile = filename:join(?config(server_dir, Config), S),
             ?assert(filelib:is_file(SegmentFile)),
-            [{_, S1}, {_, S2}] = Rem,
+            [{S1, _}, {S2, _}] = Rem,
             SegmentFile1 = filename:join(?config(server_dir, Config), S1),
             ?assertNot(filelib:is_file(SegmentFile1)),
             SegmentFile2 = filename:join(?config(server_dir, Config), S2),
@@ -685,7 +685,7 @@ truncate_segments_with_pending_overwrite(Config) ->
               throw(ra_log_event_timeout)
     end,
     receive
-        {ra_log_event, {segments, _, [{{16, 25}, F} = Cur2, {{12, 15}, F2}]}} ->
+        {ra_log_event, {segments, _, [{F, {16, 25}} = Cur2, {F2, {12, 15}}]}} ->
             ?assertMatch([_, _], segments_for(UId, Dir)),
             ok = ra_log_segment_writer:truncate_segments(TblWriterPid,
                                                          UId, Cur2),
@@ -720,7 +720,7 @@ my_segments(Config) ->
     WalFile = make_wal(Config, "00001.wal"),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
     receive
-        {ra_log_event, {segments, TidRanges, [{{1, 3}, Fn}]}} ->
+        {ra_log_event, {segments, TidRanges, [{Fn, {1, 3}}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
             [MyFile] = ra_log_segment_writer:my_segments(?SEGWR,UId),
             ?assertEqual(SegmentFile, unicode:characters_to_binary(MyFile)),
@@ -747,7 +747,7 @@ upgrade_segment_name_format(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges, WalFile),
     File =
     receive
-        {ra_log_event, {segments, TidRanges, [{{1, 3}, _Fn}]}} ->
+        {ra_log_event, {segments, TidRanges, [{_, {1, 3}}]}} ->
             [MyFile] = ra_log_segment_writer:my_segments(?SEGWR,UId),
             MyFile
     after 2000 ->
@@ -794,7 +794,7 @@ skip_entries_lower_than_snapshot_index(Config) ->
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w1.wal")),
     receive
-        {ra_log_event, {segments, _Tid, [{{4, 5}, Fn}]}} ->
+        {ra_log_event, {segments, _Tid, [{Fn, {4, 5}}]}} ->
             SegmentFile = filename:join(?config(server_dir, Config), Fn),
             {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
             % assert only entries with a higher index than the snapshot

@@ -64,7 +64,7 @@
 -define(WAL_RESEND_TIMEOUT, 5000).
 
 -type ra_meta_key() :: atom().
--type segment_ref() :: {ra_range:range(), File :: file:filename_all()}.
+-type segment_ref() :: {File :: binary(), ra_range:range()}.
 -type event_body() :: {written, ra_term(), ra_seq:state()} |
                       {segments, [{ets:tid(), ra:range()}], [segment_ref()]} |
                       {resend_write, ra_index()} |
@@ -234,13 +234,13 @@ init(#{uid := UId,
     %% TODO: check ra_range:add/2 actually performas the correct logic we expect
     Range = ra_range:add(MtRange, SegmentRange),
 
-    %% TODO: review this
+    %% TODO: review thi
     [begin
          ?DEBUG("~ts: deleting overwritten segment ~w",
                 [LogId, SR]),
          catch prim_file:delete(filename:join(Dir, F))
      end
-     || {_, F} = SR <- SegRefs -- ra_log_segments:segment_refs(Reader)],
+     || {F, _} = SR <- SegRefs -- ra_log_segments:segment_refs(Reader)],
 
     %% assert there is no gap between the snapshot
     %% and the first index in the log
@@ -813,7 +813,7 @@ handle_event({segments, TidRanges, NewSegs},
                            [LogId, SR]),
                     catch prim_file:delete(filename:join(Dir, F))
                    end
-                   || {_, F} = SR <- OverwrittenSegRefs],
+                   || {F, _} = SR <- OverwrittenSegRefs],
                   ok
           end,
     {State, [{bg_work, Fun, fun (_Err) -> ok end}]};
@@ -833,12 +833,12 @@ handle_event({segments_to_be_deleted, SegRefs},
     %% open a new segment with the new max open segment value
     Fun = fun () ->
                   [prim_file:delete(filename:join(Dir, F))
-                   || {_, F} <- SegRefs],
+                   || {F, _} <- SegRefs],
                   ok
           end,
     {State#?MODULE{reader = ra_log_segments:init(UId, Dir, MaxOpenSegments,
-                                              random,
-                                              ActiveSegs, Names, Counter)},
+                                                 random,
+                                                 ActiveSegs, Names, Counter)},
 
     [{bg_work, Fun, fun (_Err) -> ok end}]};
 handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
@@ -1337,7 +1337,7 @@ schedule_compaction(SnapIdx, #?MODULE{cfg = #cfg{uid = _UId,
             %% never compact the current segment
             %% only take those who have a range lower than the snapshot index as
             %% we never want to compact more than that
-            SegRefs = lists:takewhile(fun ({{_Start, End}, _}) ->
+            SegRefs = lists:takewhile(fun ({_Fn, {_Start, End}}) ->
                                               End =< SnapIdx
                                       end, lists:reverse(Compactable)),
             % SnapDir = ra_snapshot:current_snapshot_dir(SnapState),
@@ -1348,12 +1348,8 @@ schedule_compaction(SnapIdx, #?MODULE{cfg = #cfg{uid = _UId,
             Self = self(),
             Fun =
             fun () ->
-                    % {ok, Indexes} = ra_snapshot:indexes(SnapDir),
-
-                    %% get all current segrefs
-                    % AllSegRefs = my_segrefs(UId, SegWriter),
                     Delete = lists:foldl(
-                               fun({Range, _} = S, Del) ->
+                               fun({_Fn, Range} = S, Del) ->
                                        case ra_seq:in_range(Range,
                                                             LiveIndexes) of
                                            [] ->
