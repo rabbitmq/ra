@@ -230,9 +230,17 @@ init(#{uid := UId,
     SegRefs = my_segrefs(UId, SegWriter),
     Reader = ra_log_reader:init(UId, Dir, MaxOpen, AccessPattern, SegRefs,
                                 Names, Counter),
-    SegRange = ra_log_reader:range(Reader),
+    SegmentRange = ra_log_reader:range(Reader),
     %% TODO: check ra_range:add/2 actually performas the correct logic we expect
-    Range = ra_range:add(MtRange, SegRange),
+    Range = ra_range:add(MtRange, SegmentRange),
+
+    %% TODO: review this
+    [begin
+         ?DEBUG("~ts: deleting overwritten segment ~w",
+                [LogId, SR]),
+         catch prim_file:delete(filename:join(Dir, F))
+     end
+     || {_, F} = SR <- SegRefs -- ra_log_reader:segment_refs(Reader)],
 
     %% assert there is no gap between the snapshot
     %% and the first index in the log
@@ -298,10 +306,10 @@ init(#{uid := UId,
                               {_, LI} ->
                                   fetch_term(LI, State0)
                           end,
-    LastSegRefIdx = case SegRefs of
-                        [] ->
+    LastSegRefIdx = case SegmentRange of
+                        undefined ->
                             -1;
-                        [{{_, L}, _} | _] ->
+                        {_, L} ->
                             L
                     end,
     LastWrittenIdx = case ra_log_wal:last_writer_seq(Wal, UId) of
@@ -311,7 +319,8 @@ init(#{uid := UId,
                          {ok, Idx} ->
                              max(Idx, LastSegRefIdx);
                          {error, wal_down} ->
-                             ?ERROR("~ts: ra_log:init/1 cannot complete as wal process is down.",
+                             ?ERROR("~ts: ra_log:init/1 cannot complete as wal"
+                                    " process is down.",
                                     [State2#?MODULE.cfg#cfg.log_id]),
                              exit(wal_down)
                      end,
@@ -332,9 +341,7 @@ init(#{uid := UId,
     State = maybe_append_first_entry(State4),
     ?DEBUG("~ts: ra_log:init recovered last_index_term ~w"
            " snapshot_index_term ~w, last_written_index_term ~w",
-           [State#?MODULE.cfg#cfg.log_id,
-            last_index_term(State),
-            {SnapIdx, SnapTerm},
+           [LogId, last_index_term(State), {SnapIdx, SnapTerm},
             State#?MODULE.last_written_index_term
            ]),
     assert(State).
@@ -767,11 +774,15 @@ handle_event({written, Term, WrittenSeq},
             end
     end;
 handle_event({segments, TidRanges, NewSegs},
-             #?MODULE{cfg = #cfg{uid = UId, names = Names} = Cfg,
+             #?MODULE{cfg = #cfg{uid = UId,
+                                 log_id = LogId,
+                                 directory = Dir,
+                                 names = Names} = Cfg,
                       reader = Reader0,
                       pending = Pend0,
                       mem_table = Mt0} = State0) ->
-    Reader = ra_log_reader:update_segments(NewSegs, Reader0),
+    {Reader, OverwrittenSegRefs} = ra_log_reader:update_segments(NewSegs, Reader0),
+
     put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
                 ra_log_reader:segment_ref_count(Reader)),
     %% the tid ranges arrive in the reverse order they were written
@@ -782,6 +793,7 @@ handle_event({segments, TidRanges, NewSegs},
                    ok = ra_log_ets:execute_delete(Names, UId, Spec),
                    Acc
            end, Mt0, TidRanges),
+
     %% it is theoretically possible that the segment writer flush _could_
     %% over take WAL notifications
     %%
@@ -795,7 +807,16 @@ handle_event({segments, TidRanges, NewSegs},
     State = State0#?MODULE{reader = Reader,
                            pending = Pend,
                            mem_table = Mt},
-    {State, []};
+    Fun = fun () ->
+                  [begin
+                    ?DEBUG("~ts: deleting overwritten segment ~w",
+                           [LogId, SR]),
+                    catch prim_file:delete(filename:join(Dir, F))
+                   end
+                   || {_, F} = SR <- OverwrittenSegRefs],
+                  ok
+          end,
+    {State, [{bg_work, Fun, fun (_Err) -> ok end}]};
 handle_event({segments_to_be_deleted, SegRefs},
              #?MODULE{cfg = #cfg{uid = UId,
                                  log_id = LogId,
@@ -803,11 +824,6 @@ handle_event({segments_to_be_deleted, SegRefs},
                                  counter = Counter,
                                  names = Names},
                       reader = Reader} = State) ->
-    Fun = fun () ->
-                  [prim_file:delete(filename:join(Dir, F))
-                   || {_, F} <- SegRefs],
-                  ok
-          end,
     ActiveSegs = ra_log_reader:segment_refs(Reader) -- SegRefs,
     #{max_size := MaxOpenSegments} = ra_log_reader:info(Reader),
     % close all open segments
@@ -815,6 +831,11 @@ handle_event({segments_to_be_deleted, SegRefs},
     ?DEBUG("~ts: ~b obsolete segments - remaining: ~b",
            [LogId, length(SegRefs), length(ActiveSegs)]),
     %% open a new segment with the new max open segment value
+    Fun = fun () ->
+                  [prim_file:delete(filename:join(Dir, F))
+                   || {_, F} <- SegRefs],
+                  ok
+          end,
     {State#?MODULE{reader = ra_log_reader:init(UId, Dir, MaxOpenSegments,
                                               random,
                                               ActiveSegs, Names, Counter)},
@@ -824,8 +845,6 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
              #?MODULE{cfg = #cfg{uid = UId,
                                  names = Names} = Cfg,
                       range = {FstIdx, _} = Range,
-                      % first_index = FstIdx,
-                      % last_index = LstIdx,
                       mem_table = Mt0,
                       pending = Pend0,
                       last_written_index_term = {LastWrittenIdx, _} = LWIdxTerm0,
@@ -1307,8 +1326,9 @@ release_resources(MaxOpenSegments,
 %%% Local functions
 
 
-schedule_compaction(SnapIdx, #?MODULE{cfg = #cfg{},
-                                      snapshot_state = SnapState,
+schedule_compaction(SnapIdx, #?MODULE{cfg = #cfg{uid = _UId,
+                                                 segment_writer = _SegWriter},
+                                      live_indexes = LiveIndexes,
                                       reader = Reader0}) ->
     case ra_log_reader:segment_refs(Reader0) of
         [] ->
@@ -1320,29 +1340,34 @@ schedule_compaction(SnapIdx, #?MODULE{cfg = #cfg{},
             SegRefs = lists:takewhile(fun ({{_Start, End}, _}) ->
                                               End =< SnapIdx
                                       end, lists:reverse(Compactable)),
-            SnapDir = ra_snapshot:current_snapshot_dir(SnapState),
+            % SnapDir = ra_snapshot:current_snapshot_dir(SnapState),
 
             %% TODO: minor compactions should also delete / truncate
             %% segments with completely overwritten indexes
 
             Self = self(),
-            Fun = fun () ->
-                          {ok, Indexes} = ra_snapshot:indexes(SnapDir),
-                          {Delete, _} = lists:foldl(
-                                          fun ({Range, _} = S, {Del, Keep}) ->
-                                                  case ra_seq:in_range(Range, Indexes) of
-                                                      [] ->
-                                                          {[S | Del], Keep};
-                                                      _ ->
-                                                          {Del, [S | Keep]}
-                                                  end
-                                          end, {[], []}, SegRefs),
-                          %% need to update the ra_servers list of seg refs _before_
-                          %% the segments can actually be deleted
-                          Self ! {ra_log_event,
-                                  {segments_to_be_deleted, Delete}},
-                          ok
-                  end,
+            Fun =
+            fun () ->
+                    % {ok, Indexes} = ra_snapshot:indexes(SnapDir),
+
+                    %% get all current segrefs
+                    % AllSegRefs = my_segrefs(UId, SegWriter),
+                    Delete = lists:foldl(
+                               fun({Range, _} = S, Del) ->
+                                       case ra_seq:in_range(Range,
+                                                            LiveIndexes) of
+                                           [] ->
+                                               [S | Del];
+                                           _ ->
+                                               Del
+                                       end
+                               end, [], SegRefs),
+                    %% need to update the ra_servers list of seg refs _before_
+                    %% the segments can actually be deleted
+                    Self ! {ra_log_event,
+                            {segments_to_be_deleted, Delete}},
+                    ok
+            end,
 
             [{bg_work, Fun, fun (_Err) ->
                                     ?WARN("bgwork err ~p", [_Err]), ok
