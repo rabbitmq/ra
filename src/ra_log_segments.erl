@@ -4,7 +4,7 @@
 %%
 %% Copyright (c) 2017-2025 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
 %%
--module(ra_log_reader).
+-module(ra_log_segments).
 
 -compile(inline_list_funcs).
 
