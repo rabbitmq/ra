@@ -67,7 +67,9 @@ all_tests() ->
      updated_segment_can_be_read,
      open_segments_limit,
      write_config,
-     sparse_write
+     sparse_write,
+     overwritten_segment_is_cleared,
+     overwritten_segment_is_cleared_on_init
     ].
 
 groups() ->
@@ -665,11 +667,7 @@ updated_segment_can_be_read(Config) ->
     % this should return all entries
     {Entries1, _} = ra_log_take(1, 15, Log4),
     ?assertEqual(15, length(Entries1)),
-    ct:pal("Entries: ~p", [Entries]),
-    ct:pal("Entries1: ~p", [Entries1]),
-    ct:pal("Counters ~p", [ra_counters:overview(?FUNCTION_NAME)]),
     ?assertEqual(15, length(Entries1)),
-    % l18 = length(Entries1),
     ok.
 
 cache_overwrite_then_take(Config) ->
@@ -759,7 +757,6 @@ last_index_reset_before_written(Config) ->
                                    end),
     4 = ra_log:next_index(Log3),
     {3, 1} = ra_log:last_index_term(Log3),
-    % #{cache_size := 0} = ra_log:overview(Log3),
     ok.
 
 recovery(Config) ->
@@ -1606,14 +1603,59 @@ sparse_write(Config) ->
                   {9, _, _}], ResReInit),
     ok.
 
+overwritten_segment_is_cleared(Config) ->
+    Log0 = ra_log_init(Config, #{}),
+    % write a few entries
+    Log1 = write_and_roll(1, 256, 1, Log0),
+    Log2 = assert_log_events(Log1,
+                             fun(L) ->
+                                     #{num_segments := N} = ra_log:overview(L),
+                                     N == 2
+                             end),
+    Log3 = write_and_roll(128, 256 + 128, 2, Log2),
+    UId = ?config(uid, Config),
+    Log = assert_log_events(Log3,
+                            fun(L) ->
+                                    #{num_segments := N} = ra_log:overview(L),
+                                    N == 3 andalso
+                                    3 == length(ra_log_segment_writer:my_segments(ra_log_segment_writer, UId))
+                            end),
+
+    ct:pal("Log overview ~p", [ra_log:overview(Log)]),
+    ok.
+
+overwritten_segment_is_cleared_on_init(Config) ->
+    Log0 = ra_log_init(Config, #{}),
+    % write a few entries
+    Log1 = write_and_roll(1, 256, 1, Log0),
+    Log2 = assert_log_events(Log1,
+                             fun(L) ->
+                                     #{num_segments := N} = ra_log:overview(L),
+                                     N == 2
+                             end),
+    Log3 = write_n(128, 256 + 128, 2, Log2),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    ra_log:close(Log3),
+    % _Log3 = write_and_roll(128, 256 + 128, 2, Log2),
+    UId = ?config(uid, Config),
+    timer:sleep(1000),
+    flush(),
+    Log = ra_log_init(Config, #{}),
+
+    ct:pal("my segments ~p",
+           [ra_log_segment_writer:my_segments(ra_log_segment_writer, UId)]),
+    ct:pal("Log overview ~p", [ra_log:overview(Log)]),
+    ?assertEqual(3, length(
+                      ra_log_segment_writer:my_segments(ra_log_segment_writer, UId))),
+
+    ok.
+
 validate_fold(From, To, Term, Log0) ->
-    {Entries0, Log} = ra_log:fold(From, To,
-                                  fun (E, A) -> [E | A] end,
-                                  [], Log0),
+    {Entries0, Log} = ra_log:fold(From, To, fun ra_lib:cons/2, [], Log0),
     ?assertEqual(To - From + 1, length(Entries0)),
     % validate entries are correctly read
-    Expected = [ {I, Term, <<I:64/integer>>} ||
-                 I <- lists:seq(To, From, -1) ],
+    Expected = [{I, Term, <<I:64/integer>>} ||
+                I <- lists:seq(To, From, -1)],
     ?assertEqual(Expected, Entries0),
     Log.
 
@@ -1728,7 +1770,11 @@ deliver_all_log_events(Log0, Timeout) ->
                             P ! E,
                             Acc;
                        ({next_event, {ra_log_event, E}}, Acc0) ->
-                            {Acc, _} = ra_log:handle_event(E, Acc0),
+                            {Acc, Effs} = ra_log:handle_event(E, Acc0),
+                            run_effs(Effs),
+                            Acc;
+                       ({bg_work, Fun, _}, Acc) ->
+                            Fun(),
                             Acc;
                        (_, Acc) ->
                             Acc
@@ -1743,29 +1789,30 @@ assert_log_events(Log0, AssertPred) ->
     assert_log_events(Log0, AssertPred, 2000).
 
 assert_log_events(Log0, AssertPred, Timeout) ->
-    receive
-        {ra_log_event, Evt} ->
-            ct:pal("log evt: ~p", [Evt]),
-            {Log1, Effs} = ra_log:handle_event(Evt, Log0),
-            run_effs(Effs),
-            %% handle any next events
-            Log = lists:foldl(
-                    fun ({next_event, {ra_log_event, E}}, Acc0) ->
-                            {Acc, Effs} = ra_log:handle_event(E, Acc0),
-                            run_effs(Effs),
-                            Acc;
-                        (_, Acc) ->
-                            Acc
-                    end, Log1, Effs),
-            case AssertPred(Log) of
-                true ->
-                    Log;
-                false ->
+    case AssertPred(Log0) of
+        true ->
+            Log0;
+        false ->
+            receive
+                {ra_log_event, Evt} ->
+                    ct:pal("log evt: ~p", [Evt]),
+                    {Log1, Effs} = ra_log:handle_event(Evt, Log0),
+                    run_effs(Effs),
+                    %% handle any next events
+                    Log = lists:foldl(
+                            fun ({next_event, {ra_log_event, E}}, Acc0) ->
+                                    {Acc, Effs} = ra_log:handle_event(E, Acc0),
+                                    run_effs(Effs),
+                                    Acc;
+                                (_, Acc) ->
+                                    Acc
+                            end, Log1, Effs),
                     assert_log_events(Log, AssertPred, Timeout)
+
+            after Timeout ->
+                      flush(),
+                      exit({assert_log_events_timeout, Log0})
             end
-    after Timeout ->
-              flush(),
-              exit({assert_log_events_timeout, Log0})
     end.
 
 wait_for_segments(Log0, Timeout) ->
