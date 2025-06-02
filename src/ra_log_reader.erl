@@ -103,14 +103,17 @@ close(#?STATE{open_segments = Open}) ->
     _ = ra_flru:evict_all(Open),
     ok.
 
--spec update_segments([segment_ref()], state()) -> state().
+-spec update_segments([segment_ref()], state()) ->
+    {state(), OverwrittenSegments :: [segment_ref()]}.
 update_segments(NewSegmentRefs,
-                #?STATE{open_segments = Open0,
+                #?STATE{cfg = _Cfg,
+                        open_segments = Open0,
                         segment_refs = SegRefs0} = State) ->
 
     SegmentRefs0 = ra_lol:to_list(SegRefs0),
     %% TODO: capture segrefs removed by compact_segrefs/2 and delete them
     SegmentRefsComp = compact_segrefs(NewSegmentRefs, SegmentRefs0),
+    OverwrittenSegments = NewSegmentRefs -- SegmentRefsComp,
     SegmentRefsCompRev = lists:reverse(SegmentRefsComp),
     SegRefs = ra_lol:from_list(fun seg_ref_gt/2, SegmentRefsCompRev),
     Range = case SegmentRefsComp of
@@ -129,9 +132,10 @@ update_segments(NewSegmentRefs,
                                    error -> Acc0
                                end
                        end, Open0, NewSegmentRefs),
-    State#?MODULE{segment_refs = SegRefs,
+    {State#?MODULE{segment_refs = SegRefs,
                   range = Range,
-                  open_segments = Open}.
+                  open_segments = Open},
+     OverwrittenSegments}.
 
 -record(log_compaction_result,
         {%range :: ra:range(),
