@@ -103,8 +103,6 @@
         {cfg = #cfg{},
          %% mutable data below
          range :: ra:range(),
-         % first_index = -1 :: ra_index(),
-         % last_index = -1 :: -1 | ra_index(),
          last_term = 0 :: ra_term(),
          last_written_index_term = {0, 0} :: ra_idxterm(),
          snapshot_state :: ra_snapshot:state(),
@@ -817,30 +815,10 @@ handle_event({segments, TidRanges, NewSegs},
                   ok
           end,
     {State, [{bg_work, Fun, fun (_Err) -> ok end}]};
-handle_event({segments_to_be_deleted, SegRefs},
-             #?MODULE{cfg = #cfg{uid = UId,
-                                 log_id = LogId,
-                                 directory = Dir,
-                                 counter = Counter,
-                                 names = Names},
-                      reader = Reader} = State) ->
-    ActiveSegs = ra_log_segments:segment_refs(Reader) -- SegRefs,
-    #{max_size := MaxOpenSegments} = ra_log_segments:info(Reader),
-    % close all open segments
-    ok = ra_log_segments:close(Reader),
-    ?DEBUG("~ts: ~b obsolete segments - remaining: ~b",
-           [LogId, length(SegRefs), length(ActiveSegs)]),
-    %% open a new segment with the new max open segment value
-    Fun = fun () ->
-                  [prim_file:delete(filename:join(Dir, F))
-                   || {F, _} <- SegRefs],
-                  ok
-          end,
-    {State#?MODULE{reader = ra_log_segments:init(UId, Dir, MaxOpenSegments,
-                                                 random,
-                                                 ActiveSegs, Names, Counter)},
-
-    [{bg_work, Fun, fun (_Err) -> ok end}]};
+handle_event({compaction_result, Result},
+             #?MODULE{reader = Reader0} = State) ->
+    {Reader, Effs} = ra_log_segments:handle_compaction_result(Result, Reader0),
+    {State#?MODULE{reader = Reader}, Effs};
 handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
              #?MODULE{cfg = #cfg{uid = UId,
                                  names = Names} = Cfg,
@@ -904,7 +882,9 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
                                    live_indexes = LiveIndexes,
                                    current_snapshot = Snap,
                                    snapshot_state = SnapState},
-            CompEffs = schedule_compaction(SnapIdx, State),
+            CompEffs = ra_log_segments:schedule_compaction(minor, SnapIdx,
+                                                           LiveIndexes,
+                                                           State#?MODULE.reader),
             Effects = CompEffs ++ Effects0,
             {State, Effects};
         checkpoint ->
@@ -1021,7 +1001,9 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod, LiveIndexes,
                            live_indexes = LiveIndexes,
                            mem_table = Mt,
                            last_written_index_term = IdxTerm},
-    CompEffs = schedule_compaction(SnapIdx, State),
+    CompEffs = ra_log_segments:schedule_compaction(minor, SnapIdx,
+                                                   LiveIndexes,
+                                                   State#?MODULE.reader),
     {ok, State, CompEffs ++ CPEffects}.
 
 
@@ -1326,52 +1308,7 @@ release_resources(MaxOpenSegments,
 %%% Local functions
 
 
-schedule_compaction(SnapIdx, #?MODULE{cfg = #cfg{uid = _UId,
-                                                 segment_writer = _SegWriter},
-                                      live_indexes = LiveIndexes,
-                                      reader = Reader0}) ->
-    case ra_log_segments:segment_refs(Reader0) of
-        [] ->
-            [];
-        [_ | Compactable] ->
-            %% never compact the current segment
-            %% only take those who have a range lower than the snapshot index as
-            %% we never want to compact more than that
-            SegRefs = lists:takewhile(fun ({_Fn, {_Start, End}}) ->
-                                              End =< SnapIdx
-                                      end, lists:reverse(Compactable)),
-            % SnapDir = ra_snapshot:current_snapshot_dir(SnapState),
-
-            %% TODO: minor compactions should also delete / truncate
-            %% segments with completely overwritten indexes
-
-            Self = self(),
-            Fun =
-            fun () ->
-                    Delete = lists:foldl(
-                               fun({_Fn, Range} = S, Del) ->
-                                       case ra_seq:in_range(Range,
-                                                            LiveIndexes) of
-                                           [] ->
-                                               [S | Del];
-                                           _ ->
-                                               Del
-                                       end
-                               end, [], SegRefs),
-                    %% need to update the ra_servers list of seg refs _before_
-                    %% the segments can actually be deleted
-                    Self ! {ra_log_event,
-                            {segments_to_be_deleted, Delete}},
-                    ok
-            end,
-
-            [{bg_work, Fun, fun (_Err) ->
-                                    ?WARN("bgwork err ~p", [_Err]), ok
-                            end}]
-    end.
-
-
-%% unly used by resend to wal functionality and doesn't update the mem table
+%% only used by resend to wal functionality and doesn't update the mem table
 wal_rewrite(#?MODULE{cfg = #cfg{uid = UId,
                                 wal = Wal} = Cfg,
                     range = _Range} = State,
