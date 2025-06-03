@@ -97,7 +97,7 @@
     {discard, MsgIds :: [msg_id()], Customer :: customer_id()} |
     purge.
 
--type command() :: protocol() | ra_machine:builtin_command().
+-type command() :: ra_machine:command(protocol()).
 %% all the command types supported by ra fifo
 
 -type client_msg() :: delivery().
