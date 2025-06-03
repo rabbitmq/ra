@@ -178,7 +178,7 @@
     %% used for tracking valid leader messages
     {record_leader_msg, ra_server_id()} |
     start_election_timeout |
-    {bg_work, fun(() -> ok) | mfargs()}.
+    {bg_work, fun(() -> ok) | mfargs(), fun()}.
 
 -type effects() :: [effect()].
 
