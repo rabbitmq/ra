@@ -103,6 +103,7 @@
 
 -type builtin_command() :: {down, pid(), term()} |
                            {nodeup | nodedown, node()} |
+                           {machine_version, From :: version(), To :: version()} |
                            {timeout, term()}.
 %% These commands may be passed to the {@link apply/2} function in reaction
 %% to monitor effects
@@ -196,7 +197,7 @@
 %% used {@link ra:process_command/2} or
 %% {@link ra:process_command/3}
 
--type command() :: user_command() | builtin_command().
+-type command(UserCommand) :: UserCommand | builtin_command().
 
 -type command_meta_data() :: #{system_time := integer(),
                                index := ra_index(),
@@ -213,6 +214,7 @@
               effects/0,
               reply/0,
               builtin_command/0,
+              command/1,
               command_meta_data/0]).
 
 -optional_callbacks([tick/2,
@@ -239,7 +241,7 @@
 
 -callback init(Conf :: machine_init_args()) -> state().
 
--callback 'apply'(command_meta_data(), command(), State) ->
+-callback 'apply'(command_meta_data(), command(term()), State) ->
     {State, reply(), effects() | effect()} | {State, reply()} when State :: term().
 
 %% Optional callbacks
@@ -302,7 +304,7 @@ init({machine, _, Args} = Machine, Name, Version) ->
     Mod:init(Args#{name => Name,
                    machine_version => Version}).
 
--spec apply(module(), command_meta_data(), command(), State) ->
+-spec apply(module(), command_meta_data(), command(term()), State) ->
     {State, reply(), effects()} | {State, reply()}.
 apply(Mod, Metadata, Cmd, State) ->
     Mod:apply(Metadata, Cmd, State).
