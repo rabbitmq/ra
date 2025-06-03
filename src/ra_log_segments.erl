@@ -13,7 +13,8 @@
          init/7,
          close/1,
          update_segments/2,
-         handle_compaction/2,
+         schedule_compaction/4,
+         handle_compaction_result/2,
          segment_refs/1,
          segment_ref_count/1,
          range/1,
@@ -137,24 +138,75 @@ update_segments(NewSegmentRefs,
                   open_segments = Open},
      OverwrittenSegments}.
 
--record(log_compaction_result,
-        {%range :: ra:range(),
-         unreferenced :: [segment_ref()],
-         linked :: [segment_ref()],
-         compacted :: [segment_ref()]}).
+-record(compaction_result,
+        {unreferenced = [] :: [segment_ref()],
+         linked = [] :: [segment_ref()],
+         compacted = [] :: [segment_ref()]}).
 
--spec handle_compaction(#log_compaction_result{}, state()) -> state().
-handle_compaction(#log_compaction_result{unreferenced = Deleted,
-                                         linked = Linked,
-                                         compacted = Compacted},
-                  #?STATE{open_segments = Open0,
-                          segment_refs = SegRefs0} = State) ->
+-spec schedule_compaction(minor | major, ra:index(),
+                          ra_seq:state(), state()) ->
+    [ra_server:effect()].
+schedule_compaction(minor, SnapIdx, LiveIndexes, State) ->
+    case ra_log_segments:segment_refs(State) of
+        [] ->
+            [];
+        [_ | Compactable] ->
+            %% never compact the current segment
+            %% only take those who have a range lower than the snapshot index as
+            %% we never want to compact more than that
+            SegRefs = lists:takewhile(fun ({_Fn, {_Start, End}}) ->
+                                              End =< SnapIdx
+                                      end, lists:reverse(Compactable)),
+            %% TODO: minor compactions should also delete / truncate
+            %% segments with completely overwritten indexes
+
+            Self = self(),
+            Fun = fun () ->
+                          Delete = lists:foldl(
+                                     fun({_Fn, Range} = S, Del) ->
+                                             case ra_seq:in_range(Range,
+                                                                  LiveIndexes) of
+                                                 [] ->
+                                                     [S | Del];
+                                                 _ ->
+                                                     Del
+                                             end
+                                     end, [], SegRefs),
+                          Result = #compaction_result{unreferenced = Delete},
+                          %% need to update the ra_servers list of seg refs _before_
+                          %% the segments can actually be deleted
+                          Self ! {ra_log_event,
+                                  {compaction_result, Result}},
+                          ok
+                  end,
+
+            [{bg_work, Fun, fun (_Err) ->
+                                    ?WARN("bgwork err ~p", [_Err]), ok
+                            end}]
+    end.
+
+
+-spec handle_compaction_result(#compaction_result{}, state()) ->
+    {state(), [ra_server:effect()]}.
+handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
+                                            linked = Linked,
+                                            compacted = Compacted},
+                         #?STATE{cfg = #cfg{directory = Dir},
+                                 open_segments = Open0,
+                                 segment_refs = SegRefs0} = State) ->
     SegmentRefs0 = ra_lol:to_list(SegRefs0),
-    SegmentRefs = lists:usort(((SegmentRefs0 -- Deleted) -- Linked) ++ Compacted),
+    SegmentRefs = lists:usort(((SegmentRefs0 -- Unreferenced) -- Linked)
+                              ++ Compacted),
     Open = ra_flru:evict_all(Open0),
-    State#?MODULE{segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
-                                                  lists:reverse(SegmentRefs)),
-                  open_segments = Open}.
+    Fun = fun () ->
+                  [prim_file:delete(filename:join(Dir, F))
+                   || {F, _} <- Unreferenced],
+                  ok
+          end,
+    {State#?MODULE{segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
+                                                   SegmentRefs),
+                   open_segments = Open},
+     [{bg_work, Fun, fun (_Err) -> ok end}]}.
 
 
 -spec update_first_index(ra_index(), state()) ->
