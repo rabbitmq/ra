@@ -30,7 +30,6 @@
          tick/1,
          log_tick/1,
          overview/1,
-         metrics/1,
          is_new/1,
          is_fully_persisted/1,
          is_fully_replicated/1,
@@ -1795,28 +1794,6 @@ cfg_to_map(Cfg) ->
                  fun (F, {N, Acc}) ->
                          {N + 1, Acc#{F => element(N, Cfg)}}
                  end, {2, #{}}, record_info(fields, cfg))).
-
--spec metrics(ra_server_state()) ->
-    {atom(), ra_term(),
-     ra_index(), ra_index(),
-     ra_index(), ra_index(), non_neg_integer()}.
-metrics(#{cfg := #cfg{metrics_key = Key},
-          commit_index := CI,
-          last_applied := LA,
-          current_term := CT,
-          log := Log} = State) ->
-    SnapIdx = case ra_log:snapshot_index_term(Log) of
-                  undefined -> 0;
-                  {I, _} -> I
-              end,
-    CL = case  State of
-             #{commit_latency := L} ->
-                 L;
-             _ ->
-                 0
-         end,
-    {LW, _} = ra_log:last_index_term(Log),
-    {Key, CT, SnapIdx, LA, CI, LW, CL}.
 
 -spec is_new(ra_server_state()) -> boolean().
 is_new(#{log := Log}) ->
