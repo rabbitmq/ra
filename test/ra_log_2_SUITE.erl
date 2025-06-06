@@ -311,9 +311,9 @@ validate_sequential_fold(Config) ->
 
     ct:pal("ra_log:overview/1 ~p", [ra_log:overview(FinLog)]),
 
-    #{?FUNCTION_NAME := #{read_mem_table := M1,
-                          open_segments := 2, %% as this is the max
-                          read_segment := M4} = O} = ra_counters:overview(),
+    #{read_mem_table := M1,
+      open_segments := 2, %% as this is the max
+      read_segment := M4} = O = ra_counters:overview(?FUNCTION_NAME),
     ct:pal("counters ~p", [O]),
     ?assertEqual(1000, M1 + M4),
 
@@ -1521,7 +1521,6 @@ open_segments_limit(Config) ->
     ok.
 
 write_config(Config) ->
-
     C = #{cluster_name => ?MODULE,
           id => {?MODULE, node()},
           uid => <<"blah">>,
@@ -1724,8 +1723,8 @@ deliver_log_events_cond(Log0, CondFun, N) ->
                             P ! E,
                             Acc;
                        ({next_event, {ra_log_event, E}}, Acc0) ->
-                            {Acc, Effs} = ra_log:handle_event(E, Acc0),
-                            run_effs(Effs),
+                            {Acc, Effs1} = ra_log:handle_event(E, Acc0),
+                            run_effs(Effs1),
                             Acc;
                        ({bg_work, Fun, _}, Acc) ->
                             Fun(),
@@ -1737,7 +1736,7 @@ deliver_log_events_cond(Log0, CondFun, N) ->
                 {false, Log} ->
                     deliver_log_events_cond(Log, CondFun, N-1);
                 false ->
-                    deliver_log_events_cond(Log2, CondFun, N-1);
+                    deliver_log_events_cond(Log1, CondFun, N-1);
                 {true, Log} ->
                     ct:pal("condition was true!!"),
                     Log;
@@ -1801,8 +1800,8 @@ assert_log_events(Log0, AssertPred, Timeout) ->
                     %% handle any next events
                     Log = lists:foldl(
                             fun ({next_event, {ra_log_event, E}}, Acc0) ->
-                                    {Acc, Effs} = ra_log:handle_event(E, Acc0),
-                                    run_effs(Effs),
+                                    {Acc, Effs1} = ra_log:handle_event(E, Acc0),
+                                    run_effs(Effs1),
                                     Acc;
                                 (_, Acc) ->
                                     Acc
