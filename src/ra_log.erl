@@ -227,12 +227,11 @@ init(#{uid := UId,
     MtRange = ra_mt:range(Mt0),
     SegRefs = my_segrefs(UId, SegWriter),
     Reader = ra_log_segments:init(UId, Dir, MaxOpen, AccessPattern, SegRefs,
-                                Names, Counter),
+                                  Counter, LogId),
     SegmentRange = ra_log_segments:range(Reader),
     %% TODO: check ra_range:add/2 actually performas the correct logic we expect
     Range = ra_range:add(MtRange, SegmentRange),
 
-    %% TODO: review thi
     [begin
          ?DEBUG("~ts: deleting overwritten segment ~w",
                 [LogId, SR]),
@@ -1288,12 +1287,11 @@ delete_everything(#?MODULE{cfg = #cfg{uid = UId,
 
 -spec release_resources(non_neg_integer(),
                         sequential | random, state()) -> state().
-release_resources(MaxOpenSegments,
-                  AccessPattern,
+release_resources(MaxOpenSegments, AccessPattern,
                   #?MODULE{cfg = #cfg{uid = UId,
+                                      log_id = LogId,
                                       directory = Dir,
-                                      counter = Counter,
-                                      names = Names},
+                                      counter = Counter},
                            reader = Reader} = State) ->
     ActiveSegs = ra_log_segments:segment_refs(Reader),
     % close all open segments
@@ -1301,8 +1299,8 @@ release_resources(MaxOpenSegments,
     _ = ra_log_segments:close(Reader),
     %% open a new segment with the new max open segment value
     State#?MODULE{reader = ra_log_segments:init(UId, Dir, MaxOpenSegments,
-                                              AccessPattern,
-                                              ActiveSegs, Names, Counter)}.
+                                                AccessPattern, ActiveSegs,
+                                                Counter, LogId)}.
 
 
 %%% Local functions
@@ -1482,44 +1480,15 @@ my_segrefs(UId, SegWriter) ->
                         %% if a server recovered when a segment had been opened
                         %% but never had any entries written the segref would be
                         %% undefined
-                        case ra_log_segment:segref(File) of
-                            undefined ->
-                                Acc;
-                            SegRef ->
-                                [SegRef | Acc]
+                        case ra_log_segment:info(File) of
+                            #{ref := SegRef,
+                              file_type := regular}
+                              when is_tuple(SegRef) ->
+                                [SegRef | Acc];
+                            _ ->
+                                Acc
                         end
                 end, [], SegFiles).
-
-% recover_ranges(UId, MtRange, SegWriter) ->
-%     % 1. check mem_tables (this assumes wal has finished recovering
-%     % which means it is essential that ra_servers are part of the same
-%     % supervision tree
-%     % 2. check segments
-%     SegFiles = ra_log_segment_writer:my_segments(SegWriter, UId),
-%     SegRefs = lists:foldl(
-%                 fun (File, Acc) ->
-%                         %% if a server recovered when a segment had been opened
-%                         %% but never had any entries written the segref would be
-%                         %% undefined
-%                         case ra_log_segment:segref(File) of
-%                             undefined ->
-%                                 Acc;
-%                             SegRef ->
-%                                 [SegRef | Acc]
-%                         end
-%                 end, [], SegFiles),
-%     SegRanges = [Range || {Range, _} <- SegRefs],
-%     Ranges = [MtRange | SegRanges],
-%     {pick_range(Ranges, undefined), SegRefs}.
-
-% picks the current range from a sorted (newest to oldest) list of ranges
-% pick_range([], Res) ->
-%     Res;
-% pick_range([H | Tail], undefined) ->
-%     pick_range(Tail, H);
-% pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
-%     pick_range(Tail, {min(Fst, CurFst), CurLst}).
-
 
 %% TODO: implement synchronous writes using gen_batch_server:call/3
 await_written_idx(Idx, Term, Log0) ->
@@ -1535,17 +1504,6 @@ await_written_idx(Idx, Term, Log0) ->
     after ?LOG_APPEND_TIMEOUT ->
               throw(ra_log_append_timeout)
     end.
-
-% log_update_wait_n(0) ->
-%     ok;
-% log_update_wait_n(N) ->
-%     receive
-%         ra_log_update_processed ->
-%             log_update_wait_n(N - 1)
-%     after 1500 ->
-%               %% just go ahead anyway
-%               ok
-%     end.
 
 incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
     counters:add(Cnt, Ix, N);

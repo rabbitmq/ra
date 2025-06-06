@@ -22,6 +22,7 @@
          max_count/1,
          filename/1,
          segref/1,
+         info/1,
          is_same_as/2,
          copy/3]).
 
@@ -56,7 +57,7 @@
               fd :: option(file:io_device()),
               index_size :: pos_integer(),
               access_pattern :: sequential | random,
-              file_advise = normal ::  posix_file_advise(),
+              file_advise = normal :: posix_file_advise(),
               mode = append :: read | append,
               compute_checksums = true :: boolean()}).
 
@@ -452,6 +453,39 @@ segref(Filename) ->
     SegRef = segref(Seg),
     close(Seg),
     SegRef.
+
+-spec info(file:filename_all()) ->
+    #{size => non_neg_integer(),
+      max_count => non_neg_integer(),
+      file_type => regular | symlink,
+      ctime => integer(),
+      links => non_neg_integer(),
+      num_entries => non_neg_integer(),
+      ref => option(ra_log:segment_ref()),
+      indexes => ra_seq:state()
+     }.
+info(Filename)
+  when not is_tuple(Filename) ->
+    %% TODO: this can be much optimised by a specialised index parsing
+    %% function
+    {ok, Seg} = open(Filename, #{mode => read}),
+    Index = Seg#state.index,
+    {ok, #file_info{type = T,
+                    links = Links,
+                    ctime = CTime}} = file:read_link_info(Filename,
+                                                          [raw, {time, posix}]),
+
+    Info = #{size => Seg#state.data_write_offset,
+             file_type => T,
+             links => Links,
+             ctime => CTime,
+             max_count => max_count(Seg),
+             num_entries => maps:size(Index),
+             ref => segref(Seg),
+             indexes => ra_seq:from_list(maps:keys(Index))
+            },
+    close(Seg),
+    Info.
 
 -spec is_same_as(state(), file:filename_all()) -> boolean().
 is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
