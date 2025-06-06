@@ -9,8 +9,8 @@
 -compile(inline_list_funcs).
 
 -export([
-         init/5,
-         init/7,
+         init/4,
+         init/6,
          close/1,
          update_segments/2,
          schedule_compaction/4,
@@ -62,15 +62,15 @@
 %% PUBLIC
 
 -spec init(ra_uid(), file:filename(), non_neg_integer(),
-           [segment_ref()], ra_system:names()) -> state().
-init(UId, Dir, MaxOpen, SegRefs, Names) ->
-    init(UId, Dir, MaxOpen, random, SegRefs, Names, undefined).
+           [segment_ref()]) -> state().
+init(UId, Dir, MaxOpen, SegRefs) ->
+    init(UId, Dir, MaxOpen, random, SegRefs, undefined).
 
 -spec init(ra_uid(), file:filename(), non_neg_integer(),
            access_pattern(),
-           [segment_ref()], ra_system:names(),
+           [segment_ref()],
            undefined | counters:counters_ref()) -> state().
-init(UId, Dir, MaxOpen, AccessPattern, SegRefs0, #{}, Counter)
+init(UId, Dir, MaxOpen, AccessPattern, SegRefs0, Counter)
   when is_binary(UId) ->
     Cfg = #cfg{uid = UId,
                counter = Counter,
@@ -146,33 +146,24 @@ update_segments(NewSegmentRefs,
 -spec schedule_compaction(minor | major, ra:index(),
                           ra_seq:state(), state()) ->
     [ra_server:effect()].
-schedule_compaction(minor, SnapIdx, LiveIndexes, State) ->
-    case ra_log_segments:segment_refs(State) of
+schedule_compaction(Type, SnapIdx, LiveIndexes,
+                    #?MODULE{cfg = #cfg{directory = Dir}} = State) ->
+    case compactable_segrefs(SnapIdx, State) of
         [] ->
             [];
-        [_ | Compactable] ->
-            %% never compact the current segment
-            %% only take those who have a range lower than the snapshot index as
-            %% we never want to compact more than that
-            SegRefs = lists:takewhile(fun ({_Fn, {_Start, End}}) ->
-                                              End =< SnapIdx
-                                      end, lists:reverse(Compactable)),
-            %% TODO: minor compactions should also delete / truncate
+        SegRefs ->
+            %% TODO: if LiveIndexes is [] we can just delete all compactable
+            %% segments
             %% segments with completely overwritten indexes
-
             Self = self(),
             Fun = fun () ->
-                          Delete = lists:foldl(
-                                     fun({_Fn, Range} = S, Del) ->
-                                             case ra_seq:in_range(Range,
-                                                                  LiveIndexes) of
-                                                 [] ->
-                                                     [S | Del];
-                                                 _ ->
-                                                     Del
-                                             end
-                                     end, [], SegRefs),
-                          Result = #compaction_result{unreferenced = Delete},
+                          Result = case Type of
+                                       minor ->
+                                           minor_compaction(SegRefs, LiveIndexes);
+                                       major ->
+                                           MajConf = #{dir => Dir},
+                                           major_compaction(MajConf, SegRefs, LiveIndexes)
+                                   end,
                           %% need to update the ra_servers list of seg refs _before_
                           %% the segments can actually be deleted
                           Self ! {ra_log_event,
@@ -185,6 +176,125 @@ schedule_compaction(minor, SnapIdx, LiveIndexes, State) ->
                             end}]
     end.
 
+major_compaction(#{dir := Dir}, SegRefs, LiveIndexes) ->
+    {Compactable, Delete} =
+        lists:foldl(fun({Fn0, Range} = S,
+                        {Comps, Del}) ->
+                            case ra_seq:in_range(Range,
+                                                 LiveIndexes) of
+                                [] ->
+                                    {Comps, [S | Del]};
+                                Seq ->
+                                    Fn = filename:join(Dir, Fn0),
+                                    Info = ra_log_segment:info(Fn),
+                                    {[{Info, Seq, S} | Comps], Del}
+                            end
+                    end, {[], []}, SegRefs),
+    %% group compactable
+    CompactionGroups = compaction_groups(lists:reverse(Compactable), []),
+    % ct:pal("CompactionGroups  ~p", [CompactionGroups  ]),
+    Compacted0 =
+    [begin
+         %% create a new segment with .compacting extension
+         CompactingFn = filename:join(Dir, change_extension(FstFn0, ".compacting")),
+         %% max_count is the sum of all live indexes for segments in the
+         %% compaction group
+         MaxCount = lists:sum([ra_seq:length(S) || {_, S, _} <- All]),
+         %% copy live indexes from all segments in compaction group to
+         %% the compacting segment
+         {ok, CompSeg0} = ra_log_segment:open(CompactingFn,
+                                              #{max_count => MaxCount}),
+         CompSeg = lists:foldl(
+                     fun ({_, Live, {F, _}}, S0) ->
+                             {ok, S} = ra_log_segment:copy(S0, filename:join(Dir, F),
+                                                           ra_seq:expand(Live)),
+                             S
+                     end, CompSeg0, All),
+         ok = ra_log_segment:close(CompSeg),
+
+         %% overwrite rename .compacting segment to the original .segment file
+         CompactedFn = filename:join(Dir, FstFn0),
+         ok = prim_file:rename(CompactingFn, CompactedFn),
+
+         %% perform sym linking of the additional segments in the compaction
+         %% group
+         [begin
+              SymFn = filename:join(Dir, change_extension(Fn, ".link")),
+              SegFn = filename:join(Dir, Fn),
+              %% make a symlink from the compacted target segment to a new .link
+              %% where the compacted indexes now can be found
+              ok = prim_file:make_symlink(CompactedFn, SymFn),
+              %% rename to link to replace original segment
+              ok = prim_file:rename(SymFn, SegFn)
+          end || {_, _, {Fn, _}} <- Additional],
+         %% return the new segref and additional
+         {ra_log_segment:segref(CompactedFn), [element(3, I) || I <- Additional]}
+     end || [{_Info, _, {FstFn0, _}} | Additional] = All
+            <- CompactionGroups],
+
+
+    {Compacted, AddDelete} = lists:unzip(Compacted0),
+
+    #compaction_result{unreferenced = Delete,
+                       linked = lists:append(AddDelete),
+                       compacted = Compacted}.
+
+change_extension(SegFn, NewExt) ->
+    ra_lib:to_list(filename:basename(SegFn, ".segment")) ++ NewExt.
+
+compaction_groups([], Groups) ->
+    lists:reverse(Groups);
+compaction_groups(Infos, Groups) ->
+    case take_group(Infos, #{max_count => 128}, []) of
+        {Group, RemInfos} ->
+            compaction_groups(RemInfos, [Group | Groups])
+    end.
+
+take_group([], _, Acc) ->
+    {lists:reverse(Acc), []};
+take_group([{#{num_entries := NumEnts}, Live, {_, _}} = E | Rem] = All,
+           #{max_count := Mc}, Acc) ->
+    Num = ra_seq:length(Live),
+    case Num < NumEnts div 2 of
+        true ->
+            case Mc - Num < 0 of
+                true ->
+                    {lists:reverse(Acc), All};
+                false ->
+                    take_group(Rem, #{max_count => Mc - Num}, [E | Acc])
+            end;
+            %% skip this secment
+        false when Acc == [] ->
+            take_group(Rem, #{max_count => Mc}, Acc);
+        false ->
+            {lists:reverse(Acc), Rem}
+    end.
+
+
+minor_compaction(SegRefs, LiveIndexes) ->
+    Delete = lists:foldl(fun({_Fn, Range} = S, Del) ->
+                                 case ra_seq:in_range(Range,
+                                                      LiveIndexes) of
+                                     [] ->
+                                         [S | Del];
+                                     _ ->
+                                         Del
+                                 end
+                         end, [], SegRefs),
+    #compaction_result{unreferenced = Delete}.
+
+compactable_segrefs(SnapIdx, State) ->
+    case ra_log_segments:segment_refs(State) of
+        [] ->
+            [];
+        [_ | Compactable] ->
+            %% never compact the current segment
+            %% only take those who have a range lower than the snapshot index as
+            %% we never want to compact more than that
+            lists:takewhile(fun ({_Fn, {_Start, End}}) ->
+                                    End =< SnapIdx
+                            end, lists:reverse(Compactable))
+    end.
 
 -spec handle_compaction_result(#compaction_result{}, state()) ->
     {state(), [ra_server:effect()]}.
@@ -194,9 +304,11 @@ handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
                          #?STATE{cfg = #cfg{directory = Dir},
                                  open_segments = Open0,
                                  segment_refs = SegRefs0} = State) ->
-    SegmentRefs0 = ra_lol:to_list(SegRefs0),
-    SegmentRefs = lists:usort(((SegmentRefs0 -- Unreferenced) -- Linked)
-                              ++ Compacted),
+    SegRefs = ra_lol:to_list(SegRefs0) -- (Linked -- Unreferenced),
+    SegmentRefs0 = maps:merge(
+                     maps:from_list(SegRefs),
+                     maps:from_list(Compacted)),
+    SegmentRefs = maps:to_list(maps:iterator(SegmentRefs0, ordered)),
     Open = ra_flru:evict_all(Open0),
     Fun = fun () ->
                   [prim_file:delete(filename:join(Dir, F))
