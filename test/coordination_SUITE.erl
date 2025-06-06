@@ -1449,8 +1449,6 @@ snapshot_installed(#{machine_version := _,
 
 node_setup(DataDir) ->
     ok = ra_lib:make_dir(DataDir),
-    % NodeDir = filename:join(DataDir, atom_to_list(node())),
-    % ok = ra_lib:make_dir(DataDir),
     LogFile = filename:join(DataDir, "ra.log"),
     SaslFile = filename:join(DataDir, "ra_sasl.log"),
     logger:set_primary_config(level, debug),

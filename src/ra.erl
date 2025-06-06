@@ -73,7 +73,8 @@
          member_overview/1,
          member_overview/2,
          key_metrics/1,
-         key_metrics/2
+         key_metrics/2,
+         trigger_compaction/1
         ]).
 
 -define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
@@ -151,6 +152,18 @@ start(Params) when is_list(Params) ->
     {ok, [Started]} | {error, term()}
       when Started :: term().
 start_in(DataDir) ->
+    ra_env:configure_logger(logger),
+    LogFile = filename:join(DataDir, "ra.log"),
+    SaslFile = filename:join(DataDir, "ra_sasl.log"),
+    logger:remove_handler(ra_handler),
+    ok = logger:set_primary_config(level, debug),
+    Config = #{config => #{file => LogFile}},
+    ok = logger:add_handler(ra_handler, logger_std_h, Config),
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
+    application:stop(sasl),
+    application:start(sasl),
+    _ = error_logger:tty(false),
     start([{data_dir, DataDir}]).
 
 %% @doc Restarts a previously successfully started ra server
@@ -1197,6 +1210,13 @@ key_metrics({Name, N} = ServerId, _Timeout) when N == node() ->
     end;
 key_metrics({_, N} = ServerId, Timeout) ->
     erpc:call(N, ?MODULE, ?FUNCTION_NAME, [ServerId], Timeout).
+
+%% @doc Potentially triggers a major compaction for the provided member
+%% @param ServerId the Ra server to send the request to
+%% @end
+-spec trigger_compaction(ra_server_id()) -> ok.
+trigger_compaction(ServerRef) ->
+    gen_statem:cast(ServerRef, {ra_log_event, major_compaction}).
 
 %% internal
 

@@ -12,6 +12,7 @@
          append/4,
          sync/1,
          fold/6,
+         fold/7,
          is_modified/1,
          read_sparse/4,
          read_sparse_no_checks/4,
@@ -22,6 +23,8 @@
          max_count/1,
          filename/1,
          segref/1,
+         info/1,
+         info/2,
          is_same_as/2,
          copy/3]).
 
@@ -56,7 +59,7 @@
               fd :: option(file:io_device()),
               index_size :: pos_integer(),
               access_pattern :: sequential | random,
-              file_advise = normal ::  posix_file_advise(),
+              file_advise = normal :: posix_file_advise(),
               mode = append :: read | append,
               compute_checksums = true :: boolean()}).
 
@@ -298,7 +301,22 @@ fold(#state{cfg = #cfg{mode = read} = Cfg,
             cache = Cache,
             index = Index},
      FromIdx, ToIdx, Fun, AccFun, Acc) ->
-    fold0(Cfg, Cache, FromIdx, ToIdx, Index, Fun, AccFun, Acc).
+    fold0(Cfg, Cache, FromIdx, ToIdx, Index, Fun, AccFun, Acc,
+          error).
+
+-spec fold(state(),
+           FromIdx :: ra_index(),
+           ToIdx :: ra_index(),
+           fun((binary()) -> term()),
+           fun(({ra_index(), ra_term(), term()}, Acc) -> Acc), Acc,
+            MissingKeyStrat :: error | return) ->
+    Acc when Acc :: term().
+fold(#state{cfg = #cfg{mode = read} = Cfg,
+            cache = Cache,
+            index = Index},
+     FromIdx, ToIdx, Fun, AccFun, Acc, MissingKeyStrat) ->
+    fold0(Cfg, Cache, FromIdx, ToIdx, Index, Fun, AccFun, Acc,
+          MissingKeyStrat).
 
 -spec is_modified(state()) -> boolean().
 is_modified(#state{cfg = #cfg{fd = Fd},
@@ -401,10 +419,10 @@ term_query(#state{index = Index}, Idx) ->
         _ -> undefined
     end.
 
-fold0(_Cfg, _Cache, Idx, FinalIdx, _, _Fun, _AccFun, Acc)
+fold0(_Cfg, _Cache, Idx, FinalIdx, _, _Fun, _AccFun, Acc, _)
   when Idx > FinalIdx ->
     Acc;
-fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0) ->
+fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0, MissingKeyStrat) ->
     case Index of
         #{Idx := {Term, Offset, Length, Crc} = IdxRec} ->
             case pread(Cfg, Cache0, Offset, Length) of
@@ -413,7 +431,8 @@ fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0) ->
                     case validate_checksum(Crc, Data) of
                         true ->
                             Acc = AccFun({Idx, Term, Fun(Data)}, Acc0),
-                            fold0(Cfg, Cache, Idx+1, FinalIdx, Index, Fun, AccFun, Acc);
+                            fold0(Cfg, Cache, Idx+1, FinalIdx,
+                                  Index, Fun, AccFun, Acc, MissingKeyStrat);
                         false ->
                             %% CRC check failures are irrecoverable
                             exit({ra_log_segment_crc_check_failure, Idx, IdxRec,
@@ -424,8 +443,10 @@ fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0) ->
                     exit({ra_log_segment_unexpected_eof, Idx, IdxRec,
                           Cfg#cfg.filename})
             end;
-        _ ->
-            exit({missing_key, Idx, Cfg#cfg.filename})
+        _ when  MissingKeyStrat == error ->
+            exit({missing_key, Idx, Cfg#cfg.filename});
+        _ when  MissingKeyStrat == return ->
+            Acc0
     end.
 
 -spec range(state()) -> option({ra_index(), ra_index()}).
@@ -452,6 +473,60 @@ segref(Filename) ->
     SegRef = segref(Seg),
     close(Seg),
     SegRef.
+
+-type infos() :: #{size => non_neg_integer(),
+                   index_size => non_neg_integer(),
+                   max_count => non_neg_integer(),
+                   file_type => regular | symlink,
+                   ctime => integer(),
+                   links => non_neg_integer(),
+                   num_entries => non_neg_integer(),
+                   ref => option(ra_log:segment_ref()),
+                   indexes => ra_seq:state(),
+                   live_size => non_neg_integer()
+                  }.
+
+-spec info(file:filename_all()) -> infos().
+info(Filename) ->
+    info(Filename, undefined).
+
+-spec info(file:filename_all(), option(ra_seq:state())) -> infos().
+info(Filename, Live0)
+  when not is_tuple(Filename) ->
+    %% TODO: this can be much optimised by a specialised index parsing
+    %% function
+    {ok, Seg} = open(Filename, #{mode => read}),
+    Index = Seg#state.index,
+    {ok, #file_info{type = T,
+                    links = Links,
+                    ctime = CTime}} = file:read_link_info(Filename,
+                                                          [raw, {time, posix}]),
+
+    AllIndexesSeq = ra_seq:from_list(maps:keys(Index)),
+    Live = case Live0 of
+               undefined ->
+                   AllIndexesSeq;
+               _ ->
+                   Live0
+           end,
+    LiveSize = ra_seq:fold(fun (I, Acc) ->
+                                   {_, _, Sz, _} = maps:get(I, Index),
+                                   Acc + Sz
+                           end, 0, Live),
+    Info = #{size => Seg#state.data_write_offset,
+             index_size => Seg#state.data_start,
+             file_type => T,
+             links => Links,
+             ctime => CTime,
+             max_count => max_count(Seg),
+             num_entries => maps:size(Index),
+             ref => segref(Seg),
+             live_size => LiveSize,
+             %% TODO: this is most likely just here for debugging
+             indexes => AllIndexesSeq
+            },
+    close(Seg),
+    Info.
 
 -spec is_same_as(state(), file:filename_all()) -> boolean().
 is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->

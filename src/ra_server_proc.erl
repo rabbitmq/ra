@@ -579,8 +579,13 @@ leader(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse
        Status =:= nodeup ->
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
-leader(info, {update_peer, PeerId, Update}, State0) ->
-    State = update_peer(PeerId, Update, State0),
+leader(info, {unsuspend_peer, PeerId}, State0) ->
+    State = case ra_server:peer_status(PeerId, State0#state.server_state) of
+                suspended ->
+                    update_peer(PeerId, #{status => normal}, State0);
+                _ ->
+                    State0
+            end,
     {keep_state, State, []};
 leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
@@ -661,7 +666,7 @@ candidate(EventType, {aux_command, Cmd}, State0) ->
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
                         State0#state{server_state = ServerState}),
-    {keep_state, State#state{server_state = ServerState}, Actions};
+    {keep_state, State, Actions};
 candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
 candidate(info, {node_event, _Node, _Evt}, State) ->
@@ -717,7 +722,7 @@ pre_vote(EventType, {aux_command, Cmd}, State0) ->
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
                         State0#state{server_state = ServerState}),
-    {keep_state, State#state{server_state = ServerState}, Actions};
+    {keep_state, State, Actions};
 pre_vote({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, pre_vote}}]};
 pre_vote(info, {node_event, _Node, _Evt}, State) ->
@@ -807,7 +812,7 @@ follower(EventType, {aux_command, Cmd}, State0) ->
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
                         State0#state{server_state = ServerState}),
-    {keep_state, State#state{server_state = ServerState}, Actions};
+    {keep_state, State, Actions};
 follower({call, From}, trigger_election, State) ->
     ?DEBUG("~ts: election triggered by ~w", [log_id(State), element(1, From)]),
     {keep_state, State, [{reply, From, ok},
@@ -932,7 +937,7 @@ receive_snapshot(EventType, {aux_command, Cmd}, State0) ->
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
                         State0#state{server_state = ServerState}),
-    {keep_state, State#state{server_state = ServerState}, Actions};
+    {keep_state, State, Actions};
 receive_snapshot(EventType, Msg, State0) ->
     case handle_receive_snapshot(Msg, State0) of
         {receive_snapshot, State1, Effects} ->
@@ -1034,7 +1039,7 @@ await_condition(EventType, {aux_command, Cmd}, State0) ->
     {State, Actions} =
         ?HANDLE_EFFECTS(Effects, EventType,
                         State0#state{server_state = ServerState}),
-    {keep_state, State#state{server_state = ServerState}, Actions};
+    {keep_state, State, Actions};
 await_condition({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, await_condition}}]};
 await_condition({call, From}, trigger_election, State) ->
@@ -1391,13 +1396,15 @@ handle_effects(RaftState, Effects0, EvtType, State0, Actions0) ->
     {State, lists:reverse(Actions)}.
 
 handle_effect(_RaftState, {send_rpc, To, Rpc}, _,
-              #state{conf = Conf} = State0, Actions) ->
+              #state{conf = Conf,
+                     server_state = SS} = State0, Actions) ->
     % fully qualified use only so that we can mock it for testing
     % TODO: review / refactor to remove the mod call here
+    PeerStatus = ra_server:peer_status(To, SS),
     case ?MODULE:send_rpc(To, Rpc, State0) of
         ok ->
             {State0, Actions};
-        nosuspend ->
+        nosuspend when PeerStatus == normal ->
             %% update peer status to suspended and spawn a process
             %% to send the rpc without nosuspend so that it will block until
             %% the data can get through
@@ -1408,9 +1415,13 @@ handle_effect(_RaftState, {send_rpc, To, Rpc}, _,
                                  %% the peer status back to normal
                                  ok = gen_statem:cast(To, Rpc),
                                  incr_counter(Conf, ?C_RA_SRV_MSGS_SENT, 1),
-                                 Self ! {update_peer, To, #{status => normal}}
+                                 Self ! {unsuspend_peer, To}
                          end),
+            % ?DEBUG("~ts: temporarily suspending peer ~w due to full distribution buffer ~W",
+            %        [log_id(State0), To, Rpc, 5]),
             {update_peer(To, #{status => suspended}, State0), Actions};
+        nosuspend ->
+            {State0, Actions};
         noconnect ->
             %% for noconnects just allow it to pipeline and catch up later
             {State0, Actions}
@@ -1533,18 +1544,22 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
               #state{server_state = SS0,
                      monitors = Monitors,
                      conf = #conf{snapshot_chunk_size = ChunkSize,
-                     install_snap_rpc_timeout = InstallSnapTimeout} = Conf} = State0,
+                                  log_id = LogId,
+                                  install_snap_rpc_timeout = InstallSnapTimeout} = Conf}
+              = State0,
               Actions) ->
     case lists:member(ToNode, [node() | nodes()]) of
         true ->
             %% node is connected
             %% leader effect only
             Machine = ra_server:machine(SS0),
+            %% temporary assertion
+            #{To := #{status := normal}} = ra_server:peers(SS0),
             Id = ra_server:id(SS0),
             Pid = spawn(fun () ->
                                 try send_snapshots(Id, Term, To,
                                                    ChunkSize, InstallSnapTimeout,
-                                                   SnapState, Machine) of
+                                                   SnapState, Machine, LogId) of
                                     _ -> ok
                                 catch
                                     C:timeout:S ->
@@ -1905,27 +1920,39 @@ read_entries0(From, Idxs, #state{server_state = #{log := Log}} = State) ->
     {keep_state, State, [{reply, From, {ok, ReadState}}]}.
 
 send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
-               InstallTimeout, SnapState, Machine) ->
+               InstallTimeout, SnapState, Machine, LogId) ->
     Context = ra_snapshot:context(SnapState, ToNode),
     {ok, #{machine_version := SnapMacVer} = Meta, ReadState} =
         ra_snapshot:begin_read(SnapState, Context),
 
-    %% only send the snapshot if the target server can accept it
-    %% TODO: grab the last_applied index also and use this to floor
-    %% the live indexes
+    %% TODO: consolidate getting the context, machinve version and last
+    %% applied index in one rpc, and handle errors
     TheirMacVer = erpc:call(ToNode, ra_machine, version, [Machine]),
 
-    %% rpc the check what their
+    %% only send the snapshot if the target server can accept it
     case SnapMacVer > TheirMacVer of
         true ->
+            ?DEBUG("~ts: not sending snapshot to ~w as their machine version ~b "
+                   "is lower than snapshot machine version ~b",
+                   [LogId, To, TheirMacVer, SnapMacVer]),
             ok;
         false ->
+            #{last_applied := LastApplied} = erpc:call(ToNode,
+                                                       ra_counters,
+                                                       counters,
+                                                       [To, [last_applied]]),
             RPC = #install_snapshot_rpc{term = Term,
                                         leader_id = Id,
                                         meta = Meta},
-            case ra_snapshot:indexes(ra_snapshot:current_snapshot_dir(SnapState)) of
-                {ok, [_|_] = Indexes} ->
+            case ra_snapshot:indexes(
+                   ra_snapshot:current_snapshot_dir(SnapState)) of
+                {ok, [_|_] = Indexes0} ->
+                    %% remove all indexes lower than the target's last applied
+                    Indexes = ra_seq:floor(LastApplied + 1, Indexes0),
+                    ?DEBUG("~ts: sending live indexes ~w to ~w ",
+                           [LogId, ra_seq:range(Indexes), To]),
                     %% there are live indexes to send before the snapshot
+                    %% TODO: write ra_seq:list_chunk function to avoid expansion
                     Idxs = lists:reverse(ra_seq:expand(Indexes)),
                     Flru = lists:foldl(
                              fun (Is, F0) ->
@@ -1936,7 +1963,7 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                                                      data = Ents},
                                      _Res1 = gen_statem:call(To, RPC1,
                                                             {dirty_timeout, InstallTimeout}),
-                                     %% TODO: assert REs1 is successful
+                                     %% TODO: assert Res1 is successful
                                      F
                              end, undefined, ra_lib:lists_chunk(16, Idxs)),
                     _ = ra_flru:evict_all(Flru),
@@ -1957,6 +1984,8 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
             Result = read_chunks_and_send_rpc(RPC, To, ReadState, 1,
                                               ChunkSize, InstallTimeout,
                                               SnapState),
+            ?DEBUG("~ts: sending snapshot to ~w completed",
+                   [LogId, To]),
             ok = gen_statem:cast(Id, {To, Result})
     end.
 

@@ -6,7 +6,6 @@
 %% @hidden
 -module(ra_mt).
 
--include_lib("stdlib/include/assert.hrl").
 -include("ra.hrl").
 
 -export([
@@ -22,6 +21,7 @@
          lookup_term/2,
          tid_for/3,
          fold/5,
+         fold/6,
          get_items/2,
          record_flushed/3,
          set_first/2,
@@ -120,7 +120,16 @@ insert({Idx, _, _} = _Entry,
     end.
 
 -spec insert_sparse(log_entry(), undefined | ra:index(), state()) ->
-    {ok, state()} | {error, overwriting | gap_detected | limit_reached}.
+    {ok, state()} | {error,
+                     overwriting |
+                     gap_detected |
+                     limit_reached}.
+insert_sparse({Idx, _, _} = Entry, _LastIdx,
+              #?MODULE{tid = Tid,
+                       indexes = []} = State) ->
+    %% when the indexes is empty always accept the next entry
+    true = ets:insert(Tid, Entry),
+    {ok, State#?MODULE{indexes = ra_seq:append(Idx, [])}};
 insert_sparse({Idx, _, _} = Entry, LastIdx,
               #?MODULE{tid = Tid,
                        indexes = Seq} = State) ->
@@ -192,23 +201,6 @@ commit(#?MODULE{tid = Tid,
     {PrevStaged ++ Staged, State#?MODULE{staged = undefined,
                                          prev = Prev}}.
 
-% -spec abort(state()) -> state().
-% abort(#?MODULE{staged = undefined} = State) ->
-%     State;
-% abort(#?MODULE{staged = {_, Staged},
-%                indexes = Range,
-%                prev = Prev0} = State) ->
-%     Prev = case Prev0 of
-%                undefined ->
-%                    Prev0;
-%                _ ->
-%                    abort(Prev0)
-%            end,
-%     {Idx, _, _} = lists:last(Staged),
-%     State#?MODULE{staged = undefined,
-%                   indexes = ra_range:limit(Idx, Range),
-%                   prev = Prev}.
-
 -spec lookup(ra:index(), state()) ->
     log_entry() | undefined.
 lookup(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
@@ -257,12 +249,6 @@ lookup_term(Idx, #?MODULE{tid = Tid,
         Term ->
             Term
     end.
-  % when ?IN_RANGE(Idx, Seq) ->
-  %   ets:lookup_element(Tid, Idx, 2);
-% lookup_term(Idx, #?MODULE{prev = #?MODULE{} = Prev}) ->
-  %   lookup_term(Idx, Prev);
-% lookup_term(_Idx, _State) ->
-  %   undefined.
 
 -spec tid_for(ra:index(), ra_term(), state()) ->
     undefined | ets:tid().
@@ -277,16 +263,28 @@ tid_for(Idx, Term, State) ->
             tid_for(Idx, Term, State#?MODULE.prev)
     end.
 
+-spec fold(ra:index(), ra:index(),
+           fun(), term(), state(), MissingKeyStrategy :: error | return) ->
+    term().
+fold(From, To, Fun, Acc, State, MissingKeyStrat)
+  when is_atom(MissingKeyStrat) andalso
+       To >= From ->
+    case lookup(From, State) of
+        undefined when MissingKeyStrat == error ->
+            error({missing_key, From, Acc});
+        undefined when MissingKeyStrat == return ->
+            Acc;
+        E ->
+            fold(From + 1, To, Fun, Fun(E, Acc),
+                 State, MissingKeyStrat)
+    end;
+fold(_From, _To, _Fun, Acc, _State, _Strat) ->
+    Acc.
+
 -spec fold(ra:index(), ra:index(), fun(), term(), state()) ->
     term().
-fold(To, To, Fun, Acc, State) ->
-    E = lookup(To, State),
-    Fun(E, Acc);
-fold(From, To, Fun, Acc, State)
-  when To > From ->
-    E = lookup(From, State),
-    ?assert(E =/= undefined),
-    fold(From + 1, To, Fun, Fun(E, Acc), State).
+fold(From, To, Fun, Acc, State) ->
+    fold(From, To, Fun, Acc, State, error).
 
 -spec get_items([ra:index()], state()) ->
     {[log_entry()],
@@ -298,6 +296,8 @@ get_items(Indexes, #?MODULE{} = State) ->
 -spec delete(delete_spec()) ->
     non_neg_integer().
 delete(undefined) ->
+    0;
+delete({indexes, _Tid, []}) ->
     0;
 delete({indexes, Tid, Seq}) ->
     NumToDelete = ra_seq:length(Seq),
@@ -325,8 +325,9 @@ delete({Op, Tid, Idx})
     DelSpec = [{{'$1', '_', '_'}, [{'<', '$1', Idx}], [true]}],
     ets:select_delete(Tid, DelSpec);
 delete({delete, Tid}) ->
+    Sz= ets:info(Tid, size),
     true = ets:delete(Tid),
-    0.
+    Sz.
 
 -spec range_overlap(ra:range(), state()) ->
     {Overlap :: ra:range(), Remainder :: ra:range()}.
@@ -349,14 +350,18 @@ range_overlap(ReqRange, #?MODULE{} = State) ->
 range(#?MODULE{indexes = Seq,
                prev = undefined}) ->
     ra_seq:range(Seq);
-range(#?MODULE{indexes = []}) ->
-    undefined;
+range(#?MODULE{indexes = [],
+              prev = Prev}) ->
+    range(Prev);
 range(#?MODULE{indexes = Seq,
                prev = Prev}) ->
-    End = ra_seq:last(Seq),
-    Range = ra_seq:range(Seq),
-    PrevRange = ra_range:limit(End, range(Prev)),
-    ra_range:add(Range, PrevRange);
+    {Start, End} = Range = ra_seq:range(Seq),
+    case ra_range:limit(End, range(Prev)) of
+        undefined ->
+            Range;
+        {PrevStart, _PrevEnd} ->
+            ra_range:new(min(Start, PrevStart), End)
+    end;
 range(_State) ->
     undefined.
 
@@ -434,8 +439,12 @@ set_first(Idx, #?MODULE{tid = Tid,
                         %% set_first/2 returned a range spec for
                         %% prev and prev is now empty,
                         %% upgrade to delete spec of whole tid
-                        case range(P) of
-                            undefined ->
+                        %% also upgrade if the outer seq is truncated
+                        %% by the set_first operation
+                        % case range_shallow(P) of
+                        case Idx >= ra_seq:first(Seq) orelse
+                             range_shallow(P) == undefined of
+                            true ->
                                 {[{delete, tid(P)} | Rem],
                                  prev(P)};
                             _ ->
@@ -480,3 +489,5 @@ read_sparse([Next | Rem] = Indexes, State, Num, Acc) ->
             read_sparse(Rem, State, Num + 1, [Entry | Acc])
     end.
 
+range_shallow(#?MODULE{indexes = Seq}) ->
+    ra_seq:range(Seq).

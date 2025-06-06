@@ -21,6 +21,7 @@ all() ->
 all_tests() ->
     [
      basics,
+     fold,
      record_flushed,
      record_flushed_after_set_first,
      record_flushed_prev,
@@ -35,29 +36,12 @@ all_tests() ->
      range_overlap,
      stage_commit_2,
      perf,
-     sparse
+     sparse,
+     sparse_after_non_sparse
     ].
 
 groups() ->
     [{tests, [], all_tests()}].
-
-init_per_suite(Config) ->
-    Config.
-
-end_per_suite(_Config) ->
-    ok.
-
-init_per_group(_Group, Config) ->
-    Config.
-
-end_per_group(_Group, _Config) ->
-    ok.
-
-init_per_testcase(_TestCase, Config) ->
-    Config.
-
-end_per_testcase(_TestCase, _Config) ->
-    ok.
 
 %%%===================================================================
 %%% Test cases
@@ -74,9 +58,40 @@ basics(_Config) ->
     499 = ra_mt:delete(Spec),
     ?assertEqual({500, 1000}, ra_mt:range(Mt2)),
     ?assertEqual(501, ets:info(Tid, size)),
+    ?assertEqual(lists:seq(510, 505, -1),
+                 ra_mt:fold(505, 510, fun ({I, _, _}, Acc) ->
+                                              [I | Acc]
+                                      end, [], Mt2)),
     {Spec2, Mt3} = ra_mt:record_flushed(Tid, [{1, 999}], Mt2),
     500 = ra_mt:delete(Spec2),
     ?assertEqual(1, ra_mt:lookup_term(1000, Mt3)),
+    ok.
+
+fold(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_mt:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 1000)),
+    {[Spec], Mt2} = ra_mt:set_first(500, Mt1),
+    499 = ra_mt:delete(Spec),
+    ?assertEqual({500, 1000}, ra_mt:range(Mt2)),
+    ?assertEqual(501, ets:info(Tid, size)),
+    ?assertEqual(lists:seq(510, 505, -1),
+                 ra_mt:fold(505, 510, fun ({I, _, _}, Acc) ->
+                                              [I | Acc]
+                                      end, [], Mt2)),
+    ?assertError({missing_key, 1001, _},
+                 ra_mt:fold(999, 1010,
+                            fun ({I, _, _}, Acc) ->
+                                    [I | Acc]
+                            end, [], Mt2)),
+    ?assertEqual([1000, 999],
+                 ra_mt:fold(999, 1010,
+                            fun ({I, _, _}, Acc) ->
+                                    [I | Acc]
+                            end, [], Mt2, return)),
     ok.
 
 record_flushed(_Config) ->
@@ -129,11 +144,13 @@ record_flushed_prev(_Config) ->
 
     Tid2 = ets:new(t2, [set, public]),
     Mt2 = ra_mt:init_successor(Tid2, read_write, Mt1),
+    ?assertMatch({1, 100}, ra_mt:range(Mt2)),
     Mt3 = lists:foldl(
             fun (I, Acc) ->
                     element(2, ra_mt:insert({I, 2, <<"banana">>}, Acc))
             end, Mt2, lists:seq(50, 80)),
     ?assertMatch({1, 100}, ra_mt:range(ra_mt:prev(Mt3))),
+    ?assertMatch({1, 80}, ra_mt:range(Mt3)),
     %%
     {Spec, Mt4} = ra_mt:record_flushed(Tid, [{1, 49}], Mt3),
     ?assertMatch({indexes, Tid, [{1, 49}]}, Spec),
@@ -165,12 +182,13 @@ set_first(_Config) ->
             end, Mt2, lists:seq(50, 120)),
     {[Spec1, Spec2], Mt4} = ra_mt:set_first(75, Mt3),
     ?assertMatch({indexes, Tid2, [{50, 74}]}, Spec1),
-    ?assertMatch({indexes, Tid, [{1, 74}]}, Spec2),
+    ?assertMatch({delete, Tid}, Spec2),
     ?assertMatch({75, 120}, ra_mt:range(Mt4)),
+    ?assertMatch(undefined, ra_mt:prev(Mt4)),
 
-    {[Spec3, Spec4], Mt5} = ra_mt:set_first(105, Mt4),
+    {[Spec3], Mt5} = ra_mt:set_first(105, Mt4),
     ?assertMatch({indexes, Tid2, [{75, 104}]}, Spec3),
-    ?assertMatch({delete, Tid}, Spec4),
+    % ?assertMatch({delete, Tid}, Spec4),
     ?assertMatch({105, 120}, ra_mt:range(Mt5)),
     ?assertMatch(undefined, ra_mt:prev(Mt5)),
     ok.
@@ -200,12 +218,10 @@ set_first_with_multi_prev(_Config) ->
     ?assertEqual({1, 200}, ra_mt:range(Mt3)),
 
     {[{indexes, Tid3, [{75, 79}]},
-      {indexes, Tid2, [{50, 79}]},
-      {indexes, Tid1, [{1, 79}]}], Mt4} = ra_mt:set_first(80, Mt3),
-
-    {[{indexes, Tid3, [{80, 159}]},
       {delete, Tid2},
-      {delete, Tid1}], _Mt5} = ra_mt:set_first(160, Mt4),
+      {delete, Tid1}], Mt4} = ra_mt:set_first(80, Mt3),
+
+    {[{indexes, Tid3, [{80, 159}]}], _Mt5} = ra_mt:set_first(160, Mt4),
     ok.
 
 set_first_with_middle_small_range(_Config) ->
@@ -236,11 +252,11 @@ set_first_with_middle_small_range(_Config) ->
 
     {[{indexes, Tid3, [{75, 84}]},
       {delete, Tid2},
-      {indexes, Tid1, [{1, 84}]}], Mt4} = ra_mt:set_first(85, Mt3),
+      {delete, Tid1}], Mt4} = ra_mt:set_first(85, Mt3),
     ?assertEqual({85, 200}, ra_mt:range(Mt4)),
 
-    {[{indexes, Tid3, [{85, 100}]},
-      {delete, Tid1}], Mt5} = ra_mt:set_first(101, Mt4),
+    {[{indexes, Tid3, [{85, 100}]}
+     ], Mt5} = ra_mt:set_first(101, Mt4),
     ?assertEqual({101, 200}, ra_mt:range(Mt5)),
     ?assertEqual(undefined, ra_mt:prev(Mt5)),
 
@@ -263,17 +279,10 @@ set_first_with_old_larger_range(_Config) ->
             end, ra_mt:init_successor(Tid2, read_write, Mt1),
             lists:seq(50, 75)),
     {[{indexes, Tid2, [{50, 75}]},
-      {indexes, Tid1, [{1, 84}]}], Mt3} = ra_mt:set_first(85, Mt2),
+      {delete, Tid1}], Mt3} = ra_mt:set_first(85, Mt2),
     ct:pal("Mt3 ~p", [Mt3]),
     ?assertEqual(undefined, ra_mt:range(Mt3)),
-    %% eventually when set_first passes the end of the old range it gets
-    %% deleted
-    % debugger:start(),
-    % int:i(ra_mt),
-    % int:break(ra_mt, 419),
-
-    {[{delete, Tid1}], Mt4} = ra_mt:set_first(101, Mt3),
-    ?assertEqual(undefined, ra_mt:prev(Mt4)),
+    ?assertEqual(undefined, ra_mt:prev(Mt3)),
     ok.
 
 set_first_with_old_smaller_range(_Config) ->
@@ -307,6 +316,7 @@ successor(_Config) ->
     ?assertMatch({1, 100}, ra_mt:range(Mt1)),
     Tid2 = ets:new(t2, [set, public]),
     Mt2 = ra_mt:init_successor(Tid2, read_write, Mt1),
+    ?assertMatch({1, 100}, ra_mt:range(Mt2)),
     Mt3 = lists:foldl(
             fun (I, Acc) ->
                     element(2, ra_mt:insert({I, 2, <<"banana">>}, Acc))
@@ -476,7 +486,7 @@ perf(_Config) ->
 sparse(_Config) ->
     Tid = ets:new(t1, [set, public]),
     Mt0 = ra_mt:init(Tid),
-    {ok, Mt1} = ra_mt:insert_sparse({2, 1, <<"banana">>}, undefined, Mt0),
+    {ok, Mt1} = ra_mt:insert_sparse({2, 1, <<"banana">>}, 1, Mt0),
     {ok, Mt2} = ra_mt:insert_sparse({5, 1, <<"banana">>}, 2, Mt1),
     ?assertEqual({2, 5}, ra_mt:range(Mt2)),
     {Spec, Mt3} = ra_mt:record_flushed(Tid, ra_seq:from_list([2, 5]), Mt2),
@@ -484,6 +494,33 @@ sparse(_Config) ->
     ?assertMatch(#{size := 0,
                    range := undefined}, ra_mt:info(Mt3)),
     ?assertEqual(0, ets:info(Tid, size)),
+    ok.
+
+sparse_after_non_sparse(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_mt:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, M0) ->
+                    {ok, M} = ra_mt:insert({I, 1, <<"banana">>}, M0),
+                    M
+            end, Mt0, lists:seq(1, 10)),
+    Tid2 = ets:new(t2, [set, public]),
+    Mt2 = ra_mt:init_successor(Tid2, read_write, Mt1),
+
+    {ok, Mt3} = ra_mt:insert_sparse({12, 1, <<"banana">>}, undefined, Mt2),
+    {ok, Mt4} = ra_mt:insert_sparse({15, 1, <<"banana">>}, 12, Mt3),
+    ?assertEqual({1, 15}, ra_mt:range(Mt4)),
+    ?assertMatch(#{size := 2,
+                   range := {1, 15}}, ra_mt:info(Mt4)),
+
+    {Spec, Mt5} = ra_mt:record_flushed(Tid, ra_seq:from_list(lists:seq(1, 10)), Mt4),
+    %% full table delete
+    10 = ra_mt:delete(Spec),
+    {Spec2, Mt6} = ra_mt:record_flushed(Tid2, ra_seq:from_list([12, 15]), Mt5),
+    2 = ra_mt:delete(Spec2),
+    ?assertMatch(#{size := 0,
+                   range := undefined}, ra_mt:info(Mt6)),
+    ?assertEqual(0, ets:info(Tid2, size)),
     ok.
 
 %%% Util

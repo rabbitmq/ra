@@ -18,10 +18,12 @@
 -export([
          start_cluster/3,
          add_member/3,
+         member_overview/1,
 
          put/4,
          get/3,
-         query_get/3
+         query_get/3,
+         take_snapshot/1
         ]).
 
 
@@ -47,7 +49,9 @@
               command/0]).
 
 %% mgmt
--spec start_cluster(atom(), atom(), map()) ->
+-spec start_cluster(System :: atom(),
+                    ClusterName :: atom(),
+                    Config :: #{members := [ra_server_id()]}) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
 start_cluster(System, ClusterName, #{members := ServerIds})
@@ -59,7 +63,8 @@ start_cluster(System, ClusterName, #{members := ServerIds})
                    #{id => Id,
                      uid => UId,
                      cluster_name => ClusterName,
-                     log_init_args => #{uid => UId},
+                     log_init_args => #{uid => UId,
+                                        min_snapshot_interval => 0},
                      initial_members => ServerIds,
                      machine => Machine}
                end || Id <- ServerIds],
@@ -72,12 +77,21 @@ add_member(System, {Name, _} = Id, LeaderId) ->
     Config = #{id => Id,
                uid => UId,
                cluster_name => Name,
-               log_init_args => #{uid => UId},
+               log_init_args => #{uid => UId,
+                                  min_snapshot_interval => 0},
                initial_members => Members,
                machine => Machine},
     ok = ra:start_server(System, Config),
     {ok, _, _} =  ra:add_member(LeaderId, Id),
     ok.
+
+member_overview(ServerId) ->
+    case ra:member_overview(ServerId) of
+        {ok, O, _} ->
+            maps:with([log, machine], O);
+        Err ->
+            Err
+    end.
 
 
 %% client
@@ -134,6 +148,10 @@ query_get(ClusterName, Key, #?STATE{keys = Keys}) ->
             {error, not_found}
     end.
 
+-spec take_snapshot(ra_server_id()) -> ok.
+take_snapshot(ServerId) ->
+    ra:aux_command(ServerId, take_snapshot).
+
 %% state machine
 
 init(_) ->
@@ -153,6 +171,7 @@ live_indexes(#?STATE{keys = Keys}) ->
     maps:fold(fun (_K, [Idx | _], Acc) ->
                       [Idx | Acc]
               end, [], Keys).
+
 
 -record(aux, {}).
 

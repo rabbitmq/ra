@@ -49,6 +49,7 @@
          lists_shuffle/1,
          is_dir/1,
          is_file/1,
+         is_any_file/1,
          ensure_dir/1,
          consult/1,
          cons/2
@@ -344,9 +345,9 @@ retry(Func, Attempt, Sleep) ->
             ok;
         true ->
             ok;
-        _ ->
+        _Err ->
             timer:sleep(Sleep),
-            retry(Func, Attempt - 1)
+            retry(Func, Attempt - 1, Sleep)
     end.
 
 -spec write_file(file:name_all(), iodata()) ->
@@ -461,6 +462,14 @@ is_dir(Dir) ->
 is_file(File) ->
     case prim_file:read_file_info(File) of
         {ok, #file_info{type = regular}} ->
+            true;
+        _ ->
+            false
+    end.
+
+is_any_file(File) ->
+    case prim_file:read_file_info(File) of
+        {ok, #file_info{}} ->
             true;
         _ ->
             false

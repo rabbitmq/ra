@@ -89,15 +89,19 @@ limit(CeilIdx, [{_, _} = T | Rem]) ->
 limit(_CeilIdx, Seq) ->
     Seq.
 
--spec add(state(), state()) -> state().
-add([], Seq2) ->
-    Seq2;
-add(Seq1, Seq2) ->
-    Fst = case lists:last(Seq1) of
-              {I, _} -> I;
-              I -> I
-          end,
-    fold(fun append/2, limit(Fst - 1, Seq2), Seq1).
+%% @doc adds two sequences together where To is
+%% the "lower" sequence
+-spec add(Add :: state(), To :: state()) -> state().
+add([], To) ->
+    To;
+add(Add, []) ->
+    Add;
+add(Add, To) ->
+    Fst = first(Add),
+              % {I, _} -> I;
+              % I -> I
+          % end,
+    fold(fun append/2, limit(Fst - 1, To), Add).
 
 -spec fold(fun ((ra:index(), Acc) -> Acc), Acc, state()) ->
     Acc when Acc :: term().
@@ -199,6 +203,8 @@ range(Seq) ->
     ra_range:new(first(Seq), last(Seq)).
 
 
+-spec in_range(ra:range(), state()) ->
+    state().
 in_range(_Range, []) ->
     [];
 in_range(undefined, _) ->

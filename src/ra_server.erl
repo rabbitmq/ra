@@ -50,6 +50,8 @@
          promote_checkpoint/2,
          checkpoint/3,
          persist_last_applied/1,
+         peers/1,
+         peer_status/2,
          update_peer/3,
          update_disconnected_peers/3,
          handle_down/5,
@@ -167,7 +169,10 @@
     {cast, ra_server_id(), term()} |
     {send_vote_requests, [{ra_server_id(),
                            #request_vote_rpc{} | #pre_vote_rpc{}}]} |
-    {send_rpc, ra_server_id(), #append_entries_rpc{}} |
+    {send_rpc, ra_server_id(),
+     #append_entries_rpc{} |
+     #heartbeat_rpc{} |
+     #info_rpc{}} |
     {send_snapshot, To :: ra_server_id(),
      {Module :: module(), Ref :: term(),
       LeaderId :: ra_server_id(), Term :: ra_term()}} |
@@ -454,9 +459,11 @@ recover(#{cfg := #cfg{log_id = LogId,
     FromScan = CommitIndex + 1,
     {ToScan, _} = ra_log:last_index_term(Log0),
     ?DEBUG("~ts: scanning for cluster changes ~b:~b ", [LogId, FromScan, ToScan]),
+    %% if we're recovering after a partial sparse write phase this will fail
+    %%
     {State, Log} = ra_log:fold(FromScan, ToScan,
                                fun cluster_scan_fun/2,
-                               State1, Log0),
+                               State1, Log0, return),
 
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
     State#{log => Log,
@@ -477,7 +484,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             ?WARN("~ts: saw append_entries_reply from unknown peer ~w",
                   [LogId, PeerId]),
             {leader, State0, []};
-        Peer0 = #{match_index := MI, next_index := NI} ->
+        #{match_index := MI, next_index := NI} = Peer0 ->
             Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, NextIdx)},
             State1 = put_peer(PeerId, Peer, State0),
@@ -1430,7 +1437,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
                                       meta = #{index := SnapIdx,
                                                machine_version := SnapMacVer} = Meta,
                                       leader_id = LeaderId,
-                                      chunk_state = {Num, _ChunkFlag}} = Rpc,
+                                      chunk_state = {Num, ChunkFlag}} = Rpc,
                 #{cfg := #cfg{log_id = LogId,
                               machine_version = MacVer}, log := Log0,
                   last_applied := LastApplied,
@@ -1446,7 +1453,17 @@ handle_follower(#install_snapshot_rpc{term = Term,
            [LogId, SnapIdx, Term]),
     SnapState0 = ra_log:snapshot_state(Log0),
     {ok, SS} = ra_snapshot:begin_accept(Meta, SnapState0),
-    Log = ra_log:set_snapshot_state(SS, Log0),
+    Log1 = ra_log:set_snapshot_state(SS, Log0),
+
+    %% if the snaphost includes pre entries (live entries) then we need
+    %% to reset the log to the last applied index to avoid issues
+    Log = case ChunkFlag of
+              pre ->
+                  {ok, L} = ra_log:set_last_index(LastApplied, Log1),
+                  L;
+              _ ->
+                  Log1
+          end,
     {receive_snapshot, update_term(Term, State0#{log => Log,
                                                  leader_id => LeaderId}),
      [{next_event, Rpc}, {record_leader_msg, LeaderId}]};
@@ -1541,17 +1558,16 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                      last_index = SnapIndex},
     case ChunkFlag of
         pre when is_list(ChunkOrEntries) ->
-            %% TODO: we may need to reset the log here to
-            %% the last applied index as we
-            %% dont know for sure indexes after last applied
+            %% reset last index to last applied
+            %% as we dont know for sure indexes after last applied
             %% are of the right term
-            {LastIndex, _} = ra_log:last_index_term(Log00),
-            {Log0, _} = lists:foldl(
+            {LastIdx, _} = ra_log:last_index_term(Log00),
+            {Log, _} = lists:foldl(
                        fun ({I, _, _} = E, {L0, LstIdx}) ->
                                {ok, L} = ra_log:write_sparse(E, LstIdx, L0),
                                {L, I}
-                       end, {Log00, LastIndex}, ChunkOrEntries),
-            State = update_term(Term, State0#{log => Log0}),
+                       end, {Log00, LastIdx}, ChunkOrEntries),
+            State = update_term(Term, State0#{log => Log}),
             {receive_snapshot, State, [{reply, Reply}]};
         next ->
             SnapState0 = ra_log:snapshot_state(Log00),
@@ -1609,6 +1625,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                         membership =>
                                             get_membership(ClusterIds, State0),
                                         machine_state => MacState}),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapIndex),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
             {follower, persist_last_applied(State), [{reply, Reply} |
@@ -1630,15 +1647,19 @@ handle_receive_snapshot(#append_entries_rpc{term = Term} = Msg,
     {follower, update_term(Term, clear_leader_id(State#{log => Log})),
      [{next_event, Msg}]};
 handle_receive_snapshot({ra_log_event, Evt},
-                        State = #{cfg := #cfg{id = _Id, log_id = LogId},
-                                  log := Log0}) ->
+                        #{cfg := #cfg{log_id = LogId},
+                          log := Log0} = State) ->
     ?DEBUG("~ts: ~s ra_log_event received: ~w",
           [LogId, ?FUNCTION_NAME, Evt]),
     % simply forward all other events to ra_log
     % whilst the snapshot is being received
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {receive_snapshot, State#{log => Log}, Effects};
-handle_receive_snapshot(receive_snapshot_timeout, #{log := Log0} = State) ->
+handle_receive_snapshot(receive_snapshot_timeout,
+                        #{cfg := #cfg{log_id = LogId},
+                          log := Log0} = State) ->
+    ?INFO("~ts: ~s receive snapshot timed out.",
+          [LogId, ?FUNCTION_NAME]),
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:abort_accept(SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
@@ -2522,6 +2543,14 @@ new_peer_with(Map) ->
 peers(#{cfg := #cfg{id = Id}, cluster := Peers}) ->
     maps:remove(Id, Peers).
 
+peer_status(PeerId, #{cluster := Peers}) ->
+    case Peers of
+        #{PeerId := #{status := Status}} ->
+            Status;
+        _ ->
+            undefined
+    end.
+
 %% remove any peers that are currently receiving a snapshot
 peers_with_normal_status(State) ->
     maps:filter(fun (_, #{status := normal}) -> true;
@@ -3294,7 +3323,8 @@ heartbeat_rpc_effects(Peers, Id, Term, QueryIndex) ->
                     end,
                     maps:to_list(Peers)).
 
-heartbeat_rpc_effect_for_peer(PeerId, Peer, Id, Term, QueryIndex) ->
+heartbeat_rpc_effect_for_peer(PeerId, #{status := normal} = Peer,
+                              Id, Term, QueryIndex) ->
     case maps:get(query_index, Peer, 0) < QueryIndex of
         true ->
             {true,
@@ -3304,7 +3334,9 @@ heartbeat_rpc_effect_for_peer(PeerId, Peer, Id, Term, QueryIndex) ->
                              leader_id = Id}}};
         false ->
             false
-    end.
+    end;
+heartbeat_rpc_effect_for_peer(_PeerId, _Peer, _Id, _Term, _QueryIndex) ->
+    false.
 
 heartbeat_rpc_quorum(NewQueryIndex, PeerId,
                      #{queries_waiting_heartbeats := Waiting0} = State) ->

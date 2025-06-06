@@ -179,6 +179,9 @@ setup_log() ->
     meck:expect(ra_log, recover_snapshot, fun ra_log_memory:recover_snapshot/1),
     meck:expect(ra_log, snapshot_index_term, fun ra_log_memory:snapshot_index_term/1),
     meck:expect(ra_log, fold, fun ra_log_memory:fold/5),
+    meck:expect(ra_log, fold, fun  (A, B, C, D, E, _) ->
+                                      ra_log_memory:fold(A, B, C, D, E)
+                              end),
     meck:expect(ra_log, release_resources, fun ra_log_memory:release_resources/3),
     meck:expect(ra_log, append_sync,
                 fun({Idx, Term, _} = E, L0) ->
@@ -272,7 +275,7 @@ recover_restores_cluster_changes(_Config) ->
 
     % n2 joins
     {leader, #{cluster := Cluster,
-               log := Log0}, _} =
+               log := Log0}, _Effs} =
         ra_server:handle_leader({command, {'$ra_join', meta(),
                                            N2, await_consensus}}, State),
     {LIdx, _} = ra_log:last_index_term(Log0),

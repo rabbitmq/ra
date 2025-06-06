@@ -33,6 +33,11 @@ all_tests() ->
      last_written_overwrite,
      last_written_overwrite_2,
      last_index_reset,
+     fold_after_sparse_mem_table,
+     fold_after_sparse_segments,
+     write_sparse_re_init,
+     write_sparse_after_index_reset,
+     write_sparse_after_index_reset_segments,
      last_index_reset_before_written,
      recovery,
      recover_many,
@@ -50,6 +55,7 @@ all_tests() ->
      snapshot_written_after_installation,
      oldcheckpoints_deleted_after_snapshot_install,
      append_after_snapshot_installation,
+     release_cursor_after_snapshot_installation,
      written_event_after_snapshot_installation,
      update_release_cursor,
      update_release_cursor_with_machine_version,
@@ -256,7 +262,6 @@ read_one(Config) ->
     ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     Log0 = ra_log_init(Config, #{counter => ra_counters:fetch(?FUNCTION_NAME)}),
     Log1 = append_n(1, 2, 1, Log0),
-    % Log1 = ra_log:append({1, 1, <<1:64/integer>>}, Log0),
     % ensure the written event is delivered
     Log2 = deliver_all_log_events(Log1, 200),
     {[_], Log} = ra_log_take(1, 1, Log2),
@@ -311,9 +316,9 @@ validate_sequential_fold(Config) ->
 
     ct:pal("ra_log:overview/1 ~p", [ra_log:overview(FinLog)]),
 
-    #{?FUNCTION_NAME := #{read_mem_table := M1,
-                          open_segments := 2, %% as this is the max
-                          read_segment := M4} = O} = ra_counters:overview(),
+    #{read_mem_table := M1,
+      open_segments := 2, %% as this is the max
+      read_segment := M4} = O = ra_counters:overview(?FUNCTION_NAME),
     ct:pal("counters ~p", [O]),
     ?assertEqual(1000, M1 + M4),
 
@@ -721,19 +726,171 @@ last_written_overwrite_2(Config) ->
 
 last_index_reset(Config) ->
     Log0 = ra_log_init(Config),
-    Log1 = write_n(1, 5, 1, Log0),
+    Log1 = write_n(1, 6, 1, Log0),
     Pred = fun (L) ->
-                   {4, 1} == ra_log:last_written(L)
+                   {5, 1} == ra_log:last_written(L)
            end,
     Log2 = assert_log_events(Log1, Pred, 2000),
-    5 = ra_log:next_index(Log2),
-    {4, 1} = ra_log:last_index_term(Log2),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
     % reverts last index to a previous index
     % needs to be done if a new leader sends an empty AER
     {ok, Log3} = ra_log:set_last_index(3, Log2),
     {3, 1} = ra_log:last_written(Log3),
     4 = ra_log:next_index(Log3),
     {3, 1} = ra_log:last_index_term(Log3),
+    O = ra_log:overview(Log3),
+    ct:pal("o ~p", [O]),
+    ?assertMatch(#{range := {0, 3},
+                   %% we have a new mem table but the mem table does not know
+                   %% whatever the first index should be so reports the
+                   %% full previous range, this will be corrected after the
+                   %% next write at index 4
+                   mem_table_range := {0, 5}},
+                 O),
+    {ok, Log} = ra_log:write([{4, 2, hi}], Log3),
+    O2 = ra_log:overview(Log),
+    ct:pal("o ~p", [O2]),
+    ?assertMatch(#{range := {0, 4},
+                   mem_table_range := {0, 4}},
+                 O2),
+    ok.
+
+fold_after_sparse_mem_table(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 500),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log2b} = ra_log:set_last_index(5, Log2),
+    {ok, Log3} = ra_log:write_sparse({7, 1, hi}, undefined, Log2b),
+    {ok, Log4} = ra_log:write_sparse({17, 1, hi}, 7, Log3),
+    Log = deliver_all_log_events(Log4, 500),
+    {Res, _Log} = ra_log:fold(1, 17,
+                              fun ({I, _, _}, Is) ->
+                                      [I | Is]
+                              end, [], Log, return),
+    ct:pal("Res ~p", [Res]),
+    ?assertMatch([5,4,3,2,1], Res),
+    ok.
+
+fold_after_sparse_segments(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 500),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log2b} = ra_log:set_last_index(5, Log2),
+    {ok, Log3} = ra_log:write_sparse({7, 1, hi}, undefined, Log2b),
+    {ok, Log4} = ra_log:write_sparse({17, 1, hi}, 7, Log3),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    Log = deliver_all_log_events(Log4, 500),
+    ra_log:fold(1, 17, fun (_, _) -> ok end, undefined, Log, return),
+    ok.
+
+write_sparse_re_init(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 500),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log2b} = ra_log:set_last_index(5, Log2),
+    {ok, Log3} = ra_log:write_sparse({7, 1, hi}, undefined, Log2b),
+    {ok, Log4} = ra_log:write_sparse({17, 1, hi}, 7, Log3),
+    Log = deliver_all_log_events(Log4, 500),
+
+    O = ra_log:overview(Log),
+    ct:pal("o ~p", [O]),
+    ra_log:close(Log),
+
+    ReInitLog = ra_log_init(Config),
+    O2 = ra_log:overview(ReInitLog ),
+    ct:pal("o2 ~p", [O2]),
+    ?assertEqual(maps:remove(last_wal_write, O),
+                 maps:remove(last_wal_write, O2)),
+
+
+    %% server init does a fold from last applied + 1 to last index which
+    %% will fail if the log head is sparse
+
+    ok.
+
+write_sparse_after_index_reset(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 500),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log3} = ra_log:set_last_index(3, Log2),
+    {3, 1} = ra_log:last_written(Log3),
+    4 = ra_log:next_index(Log3),
+    {3, 1} = ra_log:last_index_term(Log3),
+    O = ra_log:overview(Log3),
+    ct:pal("o ~p", [O]),
+    {ok, Log4} = ra_log:write_sparse({7, 1, hi}, undefined, Log3),
+    {ok, Log} = ra_log:write_sparse({17, 1, hi}, 7, Log4),
+    O2 = ra_log:overview(Log),
+    ct:pal("o ~p", [O2]),
+    ?assertMatch(#{range := {0, 17},
+                   mem_table_range := {0, 17}},
+                 O2),
+    ok.
+
+write_sparse_after_index_reset_segments(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 2000),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    Log2b = deliver_all_log_events(Log2, 500),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log3} = ra_log:set_last_index(3, Log2b),
+    {3, 1} = ra_log:last_written(Log3),
+    4 = ra_log:next_index(Log3),
+    {3, 1} = ra_log:last_index_term(Log3),
+    O = ra_log:overview(Log3),
+    ct:pal("o ~p", [O]),
+    {ok, Log4} = ra_log:write_sparse({7, 1, hi}, undefined, Log3),
+    {ok, Log5} = ra_log:write_sparse({17, 1, hi}, 7, Log4),
+    Log5b = deliver_all_log_events(Log5, 500),
+    O2 = ra_log:overview(Log5b),
+    ?assertMatch(#{range := {0, 17},
+                   mem_table_range := {7, 17}},
+                 O2),
+
+    %% try overwrite again
+    {ok, Log6} = ra_log:set_last_index(3, Log5b),
+    {3, 1} = ra_log:last_index_term(Log6),
+    {ok, Log7} = ra_log:write_sparse({7, 1, hi}, undefined, Log6),
+    {ok, Log8} = ra_log:write_sparse({17, 1, hi}, 7, Log7),
+    Log = deliver_all_log_events(Log8, 500),
+    O5 = ra_log:overview(Log),
+    ct:pal("o ~p", [O5]),
     ok.
 
 last_index_reset_before_written(Config) ->
@@ -1196,6 +1353,34 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
 
     ok.
 
+snapshot_installation_with_live_indexes(Config) ->
+    Log0 = ra_log_init(Config),
+    {0, 0} = ra_log:last_index_term(Log0),
+    Log1 = assert_log_events(write_n(1, 10, 2, Log0),
+                             fun (L) ->
+                                     LW = ra_log:last_written(L),
+                                     {9, 2} == LW
+                             end),
+
+    Log2 = Log1,
+
+    %% create snapshot chunk
+    Meta = meta(15, 2, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, #{}),
+    SnapState0 = ra_log:snapshot_state(Log2),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log3, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log2)),
+
+    run_effs(Effs4),
+    {15, _} = ra_log:last_index_term(Log3),
+    {15, _} = ra_log:last_written(Log3),
+    ok.
+
 snapshot_installation(Config) ->
     Log0 = ra_log_init(Config),
     {0, 0} = ra_log:last_index_term(Log0),
@@ -1284,6 +1469,57 @@ append_after_snapshot_installation(Config) ->
                                   end),
     {[], _} = ra_log_take(1, 9, Log),
     {[_, _], _} = ra_log_take(16, 17, Log),
+    ok.
+
+release_cursor_after_snapshot_installation(Config) ->
+    Log0 = ra_log_init(Config, #{min_snapshot_interval => 0}),
+    {0, 0} = ra_log:last_index_term(Log0),
+    Log1 = assert_log_events(write_n(1, 16, 2, Log0),
+                             fun (L) ->
+                                     LW = ra_log:last_written(L),
+                                     {15, 2} == LW
+                             end),
+
+    Log2 = Log1,
+
+    %% create snapshot chunk
+    Meta = meta(15, 2, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, [1, 5, 10], #{}),
+    SnapState0 = ra_log:snapshot_state(Log2),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log3, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log2)),
+
+    run_effs(Effs4),
+    {15, 2} = ra_snapshot:current(ra_log:snapshot_state(Log3)),
+
+    %% Write some entries
+    Log4 = assert_log_events(write_n(16, 20, 2, Log3),
+                             fun (L) ->
+                                     LW = ra_log:last_written(L),
+                                     {19, 2} == LW
+                             end),
+
+    %% then take a snapshot
+    {Log5, Effs5} = ra_log:update_release_cursor(19, #{?N1 => new_peer(),
+                                                       ?N2 => new_peer()},
+                                                 ?MODULE, [1, 5, 10, 17], Log4),
+
+    run_effs(Effs5),
+    %% ensure snapshot index has been updated and 1 segment deleted
+    Log = assert_log_events(Log5,
+                             fun (L) ->
+                                     {19, 2} == ra_log:snapshot_index_term(L)
+                                     % andalso
+                                     % length(find_segments(Config)) == 1
+                             end),
+
+    ct:pal("Log ~p", [Log]),
+
     ok.
 
 written_event_after_snapshot_installation(Config) ->
@@ -1521,7 +1757,6 @@ open_segments_limit(Config) ->
     ok.
 
 write_config(Config) ->
-
     C = #{cluster_name => ?MODULE,
           id => {?MODULE, node()},
           uid => <<"blah">>,
@@ -1587,7 +1822,12 @@ sparse_write(Config) ->
                                                                      SnapState1),
     run_effs(AEffs),
     Log3 = ra_log:set_snapshot_state(SnapState, Log2),
-    {ok, Log4, _} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes, Log3),
+    {ok, Log4, _} = ra_log:install_snapshot({15, 2}, ?MODULE,
+                                            LiveIndexes, Log3),
+
+    ct:pal("overview Log4 ~p", [ra_log:overview(Log4)]),
+    ?assertEqual(16, ra_log:next_index(Log4)),
+
     {ok, Log} = ra_log:write([{16, 1, <<>>}], Log4),
     {ResFinal, _} = ra_log:sparse_read(LiveIndexes, Log),
     ?assertMatch([{3, _, _},
@@ -1724,8 +1964,8 @@ deliver_log_events_cond(Log0, CondFun, N) ->
                             P ! E,
                             Acc;
                        ({next_event, {ra_log_event, E}}, Acc0) ->
-                            {Acc, Effs} = ra_log:handle_event(E, Acc0),
-                            run_effs(Effs),
+                            {Acc, Effs1} = ra_log:handle_event(E, Acc0),
+                            run_effs(Effs1),
                             Acc;
                        ({bg_work, Fun, _}, Acc) ->
                             Fun(),
@@ -1737,7 +1977,7 @@ deliver_log_events_cond(Log0, CondFun, N) ->
                 {false, Log} ->
                     deliver_log_events_cond(Log, CondFun, N-1);
                 false ->
-                    deliver_log_events_cond(Log2, CondFun, N-1);
+                    deliver_log_events_cond(Log1, CondFun, N-1);
                 {true, Log} ->
                     ct:pal("condition was true!!"),
                     Log;
@@ -1801,8 +2041,8 @@ assert_log_events(Log0, AssertPred, Timeout) ->
                     %% handle any next events
                     Log = lists:foldl(
                             fun ({next_event, {ra_log_event, E}}, Acc0) ->
-                                    {Acc, Effs} = ra_log:handle_event(E, Acc0),
-                                    run_effs(Effs),
+                                    {Acc, Effs1} = ra_log:handle_event(E, Acc0),
+                                    run_effs(Effs1),
                                     Acc;
                                 (_, Acc) ->
                                     Acc
