@@ -478,18 +478,10 @@ consult(Path) ->
             Err
     end.
 
+-spec cons(term(), list()) -> list().
 cons(Item, List)
   when is_list(List) ->
     [Item | List].
-
-tokens(Str) ->
-    case erl_scan:string(Str) of
-        {ok, Tokens, _EndLoc} ->
-            erl_parse:parse_term(Tokens);
-        {error, Err, _ErrLoc} ->
-            {error, Err}
-    end.
-
 
 %% raw copy of ensure_dir
 ensure_dir("/") ->
@@ -516,6 +508,15 @@ ensure_dir(F) ->
                     Err
             end
     end.
+
+tokens(Str) ->
+    case erl_scan:string(Str) of
+        {ok, Tokens, _EndLoc} ->
+            erl_parse:parse_term(Tokens);
+        {error, Err, _ErrLoc} ->
+            {error, Err}
+    end.
+
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
