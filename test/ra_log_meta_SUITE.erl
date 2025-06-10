@@ -44,7 +44,6 @@ init_per_testcase(TestCase, Config) ->
     [{key, TestCase} | Config].
 
 end_per_testcase(_, Config) ->
-    exit(whereis(ra_file_handle), normal),
     Config.
 
 roundtrip(Config) ->
