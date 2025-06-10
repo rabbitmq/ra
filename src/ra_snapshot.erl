@@ -417,7 +417,7 @@ promote_checkpoint(PromotionIdx,
                                 %% sync the checkpoint before promoting it
                                 %% into a snapshot.
                                 ok = Mod:sync(Checkpoint),
-                                ok = prim_file:rename(Checkpoint, Snapshot),
+                                ok = ra_file:rename(Checkpoint, Snapshot),
                                 Self ! {ra_log_event,
                                         {snapshot_written,
                                          {Idx, Term}, snapshot}}

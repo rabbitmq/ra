@@ -9,14 +9,14 @@
 
 -include("ra.hrl").
 
--define(HANDLE_EAGAIN(Op),
+-define(RETRY_ON_ERROR(Op),
     case Op of
-        {error, eagain} ->
-            ?DEBUG("EAGAIN during file operation, retrying once in 10ms...", []),
-            timer:sleep(10),
+        {error, E} when E =:= eagain orelse E =:= eacces ->
+            ?DEBUG("Error `~p` during file operation, retrying once in 20ms...", [E]),
+            timer:sleep(20),
             case Op of
                 {error, eagain} = Err ->
-                    ?DEBUG("EAGAIN again during file operation", []),
+                    ?DEBUG("Error `~p` again during file operation", [E]),
                     Err;
                 Res ->
                     Res
@@ -26,8 +26,12 @@
     end).
 
 -export([
-         sync/1
+         sync/1,
+         rename/2
         ]).
 
 sync(Fd) ->
-    ?HANDLE_EAGAIN(file:sync(Fd)).
+    ?RETRY_ON_ERROR(file:sync(Fd)).
+
+rename(Src, Dst) ->
+    ?RETRY_ON_ERROR(prim_file:rename(Src, Dst)).
