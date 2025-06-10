@@ -32,13 +32,10 @@ init([]) ->
                          start => {ra_metrics_ets, start_link, []}},
     RaMachineEts = #{id => ra_machine_ets,
                      start => {ra_machine_ets, start_link, []}},
-    RaFileHandle = #{id => ra_file_handle,
-                     start => {ra_file_handle, start_link, []}},
     RaSystemsSup = #{id => ra_systems_sup,
                      type => supervisor,
                      start => {ra_systems_sup, start_link, []}},
     Procs = [RaMachineEts,
              RaLogFileMetrics,
-             RaFileHandle,
              RaSystemsSup],
     {ok, {SupFlags, Procs}}.
