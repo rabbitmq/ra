@@ -159,6 +159,22 @@ setup_log() ->
                 fun(_Data, _OutOf, _Flag, SS) ->
                         {ok, SS}
                 end),
+    meck:expect(ra_server_meta, path, fun(_, U) -> U end),
+    meck:expect(ra_server_meta, fetch, fun(P, _, _) ->
+                                               case get(P) of
+                                                   undefined ->
+                                                       {ok, {undefined, 0, 0}};
+                                                   Metadata ->
+                                                       {ok, Metadata}
+                                               end
+                                       end),
+    meck:expect(ra_server_meta, store_sync, fun (P, V, T, L) ->
+                                                    put(P, {V, T, L}), ok
+                                            end),
+    meck:expect(ra_server_meta, update_last_applied, fun (P, L) ->
+                                                             {V, T, _} = get(P),
+                                                             put(P, {V, T, L}), ok
+                                                     end),
     meck:expect(ra_snapshot, abort_accept, fun(SS) -> SS end),
     meck:expect(ra_snapshot, accepting, fun(_SS) -> undefined end),
     meck:expect(ra_log, snapshot_state, fun ra_log_memory:snapshot_state/1),
@@ -215,6 +231,7 @@ init_test(_Config) ->
     ok = ra_log_meta:store(ra_log_meta, UId, voted_for, some_server),
     ok = ra_log_meta:store(ra_log_meta, UId, current_term, CurrentTerm),
     meck:expect(ra_log, init, fun (_) -> Log0 end),
+    meck:expect(ra_server_meta, fetch, fun(_, _, _) -> {ok, {some_server, 5, 0}} end),
     #{current_term := 5,
       voted_for := some_server} = ra_server_init(InitConf),
     % snapshot
@@ -3175,6 +3192,7 @@ base_state(NumServers, MacMod) ->
               },
     #{cfg => Cfg,
       leader_id => ?N1,
+      meta_fd => fake_fd,
       cluster => Servers,
       cluster_index_term => {0, 0},
       cluster_change_permitted => true,
