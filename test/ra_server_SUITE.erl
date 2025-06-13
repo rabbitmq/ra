@@ -205,7 +205,10 @@ setup_log() ->
     meck:expect(ra_server_meta, store_sync, fun (P, V, T, L) ->
                                                     put(P, {V, T, L}), ok
                                             end),
-    meck:expect(ra_server_meta, update_last_applied, fun (P, L) ->
+    meck:expect(ra_server_meta, update_last_applied, fun
+                                                         (undefined, _) ->
+                                                             ok;
+                                                         (P, L) ->
                                                              {V, T, _} = get(P),
                                                              put(P, {V, T, L}), ok
                                                      end),
@@ -3846,7 +3849,7 @@ base_state(NumServers, MacMod) ->
               },
     #{cfg => Cfg,
       leader_id => ?N1,
-      meta_fd => fake_fd,
+      meta_fd => undefined,
       cluster => Servers,
       cluster_index_term => {0, 0},
       cluster_change_permitted => true,
