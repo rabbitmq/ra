@@ -2140,10 +2140,9 @@ is_new(_Config) ->
              log_init_args => #{uid => <<>>},
              machine => {simple, fun erlang:'+'/2, 0}},
     NewState = ra_server:init(Args),
+    true = ra_server:is_new(NewState),
     {leader, State, _} = ra_server:handle_leader(usr_cmd(1), NewState),
     false = ra_server:is_new(State),
-    NewState = ra_server:init(Args),
-    true = ra_server:is_new(NewState),
     ok.
 
 command(_Config) ->
