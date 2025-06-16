@@ -41,7 +41,8 @@ all_tests() ->
      my_segments,
      upgrade_segment_name_format,
      skip_entries_lower_than_snapshot_index,
-     skip_all_entries_lower_than_snapshot_index
+     skip_all_entries_lower_than_snapshot_index,
+     live_indexes_1
     ].
 
 groups() ->
@@ -837,6 +838,47 @@ skip_all_entries_lower_than_snapshot_index(Config) ->
               throw(ra_log_event_timeout)
     end,
     ok = gen_server:stop(TblWriterPid),
+    ok.
+
+live_indexes_1(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
+                                                            name => ?SEGWR,
+                                                            data_dir => Dir}),
+    % first batch
+    Entries = [{1, 42, a},
+               {2, 42, b},
+               {3, 43, c},
+               {4, 43, d},
+               {5, 43, e},
+               {6, 43, f}
+              ],
+    Mt = make_mem_table(UId, Entries),
+    Ranges = #{UId => [{ra_mt:tid(Mt), [ra_mt:range(Mt)]}]},
+    %% update snapshot state table
+    ra_log_snapshot_state:insert(ra_log_snapshot_state, UId, 4, 2, [4, 2]),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
+    receive
+        {ra_log_event, {segments, _Tid, [{Fn, {2, 6}}]}} ->
+            SegmentFile = filename:join(?config(server_dir, Config), Fn),
+            {ok, Seg} = ra_log_segment:open(SegmentFile, #{mode => read}),
+            % assert only entries with a higher index than the snapshot
+            % have been written
+            ok = gen_server:stop(TblWriterPid),
+            ?assertExit({missing_key, 3}, read_sparse(Seg, [2, 3, 4])),
+            [
+             {2, _, _},
+             {4, _, _},
+             {5, _, _},
+             {6, _, _}
+            ] = read_sparse(Seg, [2, 4, 5, 6])
+    after 3000 ->
+              flush(),
+              ok = gen_server:stop(TblWriterPid),
+              throw(ra_log_event_timeout)
+    end,
     ok.
 
 %%% Internal
