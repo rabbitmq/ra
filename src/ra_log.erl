@@ -71,6 +71,8 @@
                       {snapshot_written, ra_idxterm(),
                        LiveIndexes :: ra_seq:state(),
                        ra_snapshot:kind()} |
+                      {compaction_result, term()} |
+                      major_compaction |
                       {down, pid(), term()}.
 
 -type event() :: {ra_log_event, event_body()}.
@@ -818,6 +820,17 @@ handle_event({compaction_result, Result},
              #?MODULE{reader = Reader0} = State) ->
     {Reader, Effs} = ra_log_segments:handle_compaction_result(Result, Reader0),
     {State#?MODULE{reader = Reader}, Effs};
+handle_event(major_compaction, #?MODULE{reader = Reader0,
+                                        live_indexes = LiveIndexes,
+                                        snapshot_state = SS} = State) ->
+    case ra_snapshot:current(SS) of
+        {SnapIdx, _} ->
+            Effs = ra_log_segments:schedule_compaction(major,SnapIdx,
+                                                       LiveIndexes, Reader0),
+            {State, Effs};
+        _ ->
+            {State, []}
+    end;
 handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
              #?MODULE{cfg = #cfg{uid = UId,
                                  names = Names} = Cfg,
