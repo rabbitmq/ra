@@ -21,7 +21,8 @@
 
          put/4,
          get/3,
-         query_get/3
+         query_get/3,
+         take_snapshot/1
         ]).
 
 
@@ -47,7 +48,9 @@
               command/0]).
 
 %% mgmt
--spec start_cluster(atom(), atom(), map()) ->
+-spec start_cluster(System :: atom(),
+                    ClusterName :: atom(),
+                    Config :: #{members := [ra_server_id()]}) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
     {error, cluster_not_formed}.
 start_cluster(System, ClusterName, #{members := ServerIds})
@@ -134,6 +137,10 @@ query_get(ClusterName, Key, #?STATE{keys = Keys}) ->
             {error, not_found}
     end.
 
+-spec take_snapshot(ra_server_id()) -> ok.
+take_snapshot(ServerId) ->
+    ra:aux_command(ServerId, take_snapshot).
+
 %% state machine
 
 init(_) ->
@@ -153,6 +160,7 @@ live_indexes(#?STATE{keys = Keys}) ->
     maps:fold(fun (_K, [Idx | _], Acc) ->
                       [Idx | Acc]
               end, [], Keys).
+
 
 -record(aux, {}).
 
