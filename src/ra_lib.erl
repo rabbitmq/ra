@@ -344,9 +344,9 @@ retry(Func, Attempt, Sleep) ->
             ok;
         true ->
             ok;
-        _ ->
+        _Err ->
             timer:sleep(Sleep),
-            retry(Func, Attempt - 1)
+            retry(Func, Attempt - 1, Sleep)
     end.
 
 -spec write_file(file:name_all(), iodata()) ->

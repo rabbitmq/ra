@@ -73,7 +73,8 @@
          member_overview/1,
          member_overview/2,
          key_metrics/1,
-         key_metrics/2
+         key_metrics/2,
+         trigger_compaction/1
         ]).
 
 -define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
@@ -1197,6 +1198,13 @@ key_metrics({Name, N} = ServerId, _Timeout) when N == node() ->
     end;
 key_metrics({_, N} = ServerId, Timeout) ->
     erpc:call(N, ?MODULE, ?FUNCTION_NAME, [ServerId], Timeout).
+
+%% @doc Potentially triggers a major compaction for the provided member
+%% @param ServerId the Ra server to send the request to
+%% @end
+-spec trigger_compaction(ra_server_id()) -> ok.
+trigger_compaction(ServerRef) ->
+    gen_statem:cast(ServerRef, {ra_log_event, major_compaction}).
 
 %% internal
 
