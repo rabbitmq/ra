@@ -278,8 +278,17 @@
           "Number of checkpoint bytes written"},
          {checkpoints_promoted, ?C_RA_LOG_CHECKPOINTS_PROMOTED, counter,
           "Number of checkpoints promoted to snapshots"},
+         {major_compactions, ?C_RA_LOG_COMPACTIONS_MAJOR_COUNT, counter,
+          "Number of requested major compactions"},
+         {major_compaction_segments_written,
+          ?C_RA_LOG_COMPACTIONS_SEGMENTS_WRITTEN, counter,
+          "Number of segments written during major compactions"},
+         {major_compaction_segments_compacted,
+          ?C_RA_LOG_COMPACTIONS_SEGMENTS_COMPACTED, counter,
+          "Number of segments compacted during major compactions"},
          {reserved_1, ?C_RA_LOG_RESERVED, counter, "Reserved counter"}
          ]).
+
 -define(C_RA_LOG_WRITE_OPS, 1).
 -define(C_RA_LOG_WRITE_RESENDS, 2).
 -define(C_RA_LOG_READ_OPS, 3).
@@ -295,7 +304,10 @@
 -define(C_RA_LOG_CHECKPOINTS_WRITTEN, 13).
 -define(C_RA_LOG_CHECKPOINT_BYTES_WRITTEN, 14).
 -define(C_RA_LOG_CHECKPOINTS_PROMOTED, 15).
--define(C_RA_LOG_RESERVED, 16).
+-define(C_RA_LOG_COMPACTIONS_MAJOR_COUNT, 16).
+-define(C_RA_LOG_COMPACTIONS_SEGMENTS_WRITTEN, 17).
+-define(C_RA_LOG_COMPACTIONS_SEGMENTS_COMPACTED, 18).
+-define(C_RA_LOG_RESERVED, 19).
 
 -define(C_RA_SRV_AER_RECEIVED_FOLLOWER, ?C_RA_LOG_RESERVED + 1).
 -define(C_RA_SRV_AER_REPLIES_SUCCESS, ?C_RA_LOG_RESERVED + 2).
