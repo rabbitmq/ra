@@ -4,6 +4,7 @@
          insert/5,
          delete/2,
          smallest/2,
+         live_indexes/2,
          snapshot/2
         ]).
 
@@ -25,6 +26,11 @@ delete(Table, UId) ->
     ra:index().
 smallest(Table, UId) when is_binary(UId) ->
     ets:lookup_element(Table, UId, 3, 0).
+
+-spec live_indexes(ets:table(), ra:uid()) ->
+    ra:index().
+live_indexes(Table, UId) when is_binary(UId) ->
+    ets:lookup_element(Table, UId, 4, []).
 
 -spec snapshot(ets:table(), ra:uid()) ->
     ra:index() | -1.
