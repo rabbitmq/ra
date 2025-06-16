@@ -256,7 +256,6 @@ read_one(Config) ->
     ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     Log0 = ra_log_init(Config, #{counter => ra_counters:fetch(?FUNCTION_NAME)}),
     Log1 = append_n(1, 2, 1, Log0),
-    % Log1 = ra_log:append({1, 1, <<1:64/integer>>}, Log0),
     % ensure the written event is delivered
     Log2 = deliver_all_log_events(Log1, 200),
     {[_], Log} = ra_log_take(1, 1, Log2),

@@ -3,14 +3,11 @@
 -compile(nowarn_export_all).
 -compile(export_all).
 
--export([
-         ]).
-
--include_lib("src/ra.hrl").
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(SYS, default).
+
 %%%===================================================================
 %%% Common Test callbacks
 %%%===================================================================
@@ -118,7 +115,6 @@ basics(_Config) ->
     {ok, {Reads3, _}} = ra_server_proc:read_entries(KvId2, [LastIdx | Live],
                                                     undefined, 1000),
     ct:pal("ReadRes3 ~p", [Reads3]),
-    % ct:pal("overview3 ~p", [ra:member_overview(KvId2)]),
     ?assertEqual(3, map_size(Reads3)),
 
     %% TODO: test recovery of kv
@@ -128,4 +124,16 @@ basics(_Config) ->
                                                     undefined, 1000),
 
     ?assertEqual(3, map_size(Reads4)),
+    ra:trigger_compaction(KvId),
+    %% wait for compaction by querying counters
+    ok = ra_lib:retry(
+           fun () ->
+                   #{major_compactions := Maj} =
+                       ra_counters:counters(KvId, [major_compactions]),
+                   Maj == 1
+           end, 10, 100),
+    {ok, {Reads5, _}} = ra_server_proc:read_entries(KvId, [LastIdx | Live],
+                                                    undefined, 1000),
+    ?assertEqual(Reads4, Reads5),
+    ct:pal("counters ~p", [ra_counters:overview(KvId)]),
     ok.

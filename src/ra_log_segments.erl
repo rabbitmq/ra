@@ -150,7 +150,7 @@ update_segments(NewSegmentRefs, #?STATE{open_segments = Open0,
     [ra_server:effect()].
 schedule_compaction(Type, SnapIdx, LiveIndexes,
                     #?MODULE{cfg = #cfg{log_id = LogId,
-                                        directory = Dir}} = State) ->
+                                        directory = Dir} = Cfg} = State) ->
     case compactable_segrefs(SnapIdx, State) of
         [] ->
             [];
@@ -170,6 +170,7 @@ schedule_compaction(Type, SnapIdx, LiveIndexes,
         SegRefs ->
             Self = self(),
             Fun = fun () ->
+                          ok = incr_counter(Cfg, ?C_RA_LOG_COMPACTIONS_MAJOR_COUNT, 1),
                           MajConf = #{dir => Dir},
                           Result = major_compaction(MajConf, SegRefs,
                                                     LiveIndexes),
@@ -200,7 +201,7 @@ handle_compaction_result(#compaction_result{unreferenced = [],
 handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
                                             linked = Linked,
                                             compacted = Compacted},
-                         #?STATE{cfg = #cfg{directory = Dir},
+                         #?STATE{cfg = #cfg{directory = Dir} = Cfg,
                                  open_segments = Open0,
                                  segment_refs = SegRefs0} = State) ->
     SegRefs1 = maps:from_list(ra_lol:to_list(SegRefs0)),
@@ -214,6 +215,10 @@ handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
                    || F <- Unreferenced],
                   ok
           end,
+    ok = incr_counter(Cfg, ?C_RA_LOG_COMPACTIONS_SEGMENTS_WRITTEN,
+                      length(Compacted)),
+    ok = incr_counter(Cfg, ?C_RA_LOG_COMPACTIONS_SEGMENTS_COMPACTED,
+                      length(Linked) + length(Compacted)),
     {State#?MODULE{segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
                                                    SegmentRefs),
                    open_segments = Open},
