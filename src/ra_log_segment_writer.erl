@@ -265,19 +265,27 @@ get_overview(#state{data_dir = Dir,
 flush_mem_table_ranges({ServerUId, TidSeqs0},
                        #state{system = System} = State) ->
     SmallestIdx = smallest_live_idx(ServerUId),
-    %% TidRanges arrive here sorted new -> old.
+    LiveIndexes = live_indexes(ServerUId),
+    LastLive = ra_seq:last(LiveIndexes),
+    %% TidSeqs arrive here sorted new -> old.
 
-    %% truncate and limit all ranges to create a contiguous non-overlapping
+    %% TODO: use live indexes from ra_log_snapshot_state table to only
+    %% write live entries below the snapshot index
+
+    %% truncate and limit all seqa to create a contiguous non-overlapping
     %% list of tid ranges to flush to disk
-    %% now TidRanges are sorted old -> new, i.e the correct order of
-    %% processing
     TidSeqs = lists:foldl(
                 fun ({T, Seq0}, []) ->
                         case ra_seq:floor(SmallestIdx, Seq0) of
                             [] ->
                                 [];
+                            Seq when LiveIndexes == []->
+                                [{T, Seq}];
                             Seq ->
-                                [{T, Seq}]
+                                L = ra_seq:in_range(ra_seq:range(Seq),
+                                                    LiveIndexes),
+
+                                [{T, ra_seq:add(ra_seq:floor(LastLive + 1, Seq), L)}]
                         end;
                     ({T, Seq0}, [{_T, PrevSeq} | _] = Acc) ->
                         Start = ra_seq:first(PrevSeq),
@@ -285,8 +293,13 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
                         case ra_seq:limit(Start, Seq1) of
                             [] ->
                                 Acc;
+                            Seq when LiveIndexes == [] ->
+                                [{T, Seq} | Acc];
                             Seq ->
-                                [{T, Seq} | Acc]
+                                L = ra_seq:in_range(ra_seq:range(Seq),
+                                                    LiveIndexes),
+                                [{T, ra_seq:add(ra_seq:floor(LastLive + 1, Seq), L)}
+                                | Acc]
                         end
                 end, [], TidSeqs0),
 
@@ -357,6 +370,9 @@ start_index(ServerUId, StartIdx0) ->
 
 smallest_live_idx(ServerUId) ->
     ra_log_snapshot_state:smallest(ra_log_snapshot_state, ServerUId).
+
+live_indexes(ServerUId) ->
+    ra_log_snapshot_state:live_indexes(ra_log_snapshot_state, ServerUId).
 
 send_segments(System, ServerUId, TidRanges, SegRefs) ->
     case ra_directory:pid_of(System, ServerUId) of
