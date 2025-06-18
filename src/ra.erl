@@ -140,7 +140,6 @@ start(Params) when is_list(Params) ->
     [ok = application:set_env(ra, Param, Value)
      || {Param, Value} <- Params],
     Res = application:ensure_all_started(ra),
-    ra_env:configure_logger(logger),
     _ = ra_system:start_default(),
     Res.
 
@@ -153,6 +152,17 @@ start(Params) when is_list(Params) ->
     {ok, [Started]} | {error, term()}
       when Started :: term().
 start_in(DataDir) ->
+    ra_env:configure_logger(logger),
+    LogFile = filename:join(DataDir, "ra.log"),
+    SaslFile = filename:join(DataDir, "ra_sasl.log"),
+    logger:set_primary_config(level, debug),
+    Config = #{config => #{file => LogFile}},
+    logger:add_handler(ra_handler, logger_std_h, Config),
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
+    application:stop(sasl),
+    application:start(sasl),
+    _ = error_logger:tty(false),
     start([{data_dir, DataDir}]).
 
 %% @doc Restarts a previously successfully started ra server
