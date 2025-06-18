@@ -18,6 +18,7 @@
 -export([
          start_cluster/3,
          add_member/3,
+         member_overview/1,
 
          put/4,
          get/3,
@@ -62,7 +63,8 @@ start_cluster(System, ClusterName, #{members := ServerIds})
                    #{id => Id,
                      uid => UId,
                      cluster_name => ClusterName,
-                     log_init_args => #{uid => UId},
+                     log_init_args => #{uid => UId,
+                                        min_snapshot_interval => 0},
                      initial_members => ServerIds,
                      machine => Machine}
                end || Id <- ServerIds],
@@ -75,12 +77,21 @@ add_member(System, {Name, _} = Id, LeaderId) ->
     Config = #{id => Id,
                uid => UId,
                cluster_name => Name,
-               log_init_args => #{uid => UId},
+               log_init_args => #{uid => UId,
+                                  min_snapshot_interval => 0},
                initial_members => Members,
                machine => Machine},
     ok = ra:start_server(System, Config),
     {ok, _, _} =  ra:add_member(LeaderId, Id),
     ok.
+
+member_overview(ServerId) ->
+    case ra:member_overview(ServerId) of
+        {ok, O, _} ->
+            maps:with([log, machine], O);
+        Err ->
+            Err
+    end.
 
 
 %% client
