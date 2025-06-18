@@ -362,7 +362,7 @@ last_index_for(UId) ->
     end.
 
 -spec begin_snapshot(meta(), MacModule :: module(),
-                     MacStateb :: term(), kind(), state()) ->
+                     MacState :: term(), kind(), state()) ->
     {state(), [effect()]}.
 begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
                #?MODULE{module = Mod,

@@ -50,6 +50,7 @@ all_tests() ->
      snapshot_written_after_installation,
      oldcheckpoints_deleted_after_snapshot_install,
      append_after_snapshot_installation,
+     release_cursor_after_snapshot_installation,
      written_event_after_snapshot_installation,
      update_release_cursor,
      update_release_cursor_with_machine_version,
@@ -1283,6 +1284,57 @@ append_after_snapshot_installation(Config) ->
                                   end),
     {[], _} = ra_log_take(1, 9, Log),
     {[_, _], _} = ra_log_take(16, 17, Log),
+    ok.
+
+release_cursor_after_snapshot_installation(Config) ->
+    Log0 = ra_log_init(Config, #{min_snapshot_interval => 0}),
+    {0, 0} = ra_log:last_index_term(Log0),
+    Log1 = assert_log_events(write_n(1, 16, 2, Log0),
+                             fun (L) ->
+                                     LW = ra_log:last_written(L),
+                                     {15, 2} == LW
+                             end),
+
+    Log2 = Log1,
+
+    %% create snapshot chunk
+    Meta = meta(15, 2, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, [1, 5, 10], #{}),
+    SnapState0 = ra_log:snapshot_state(Log2),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log3, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log2)),
+
+    run_effs(Effs4),
+    {15, 2} = ra_snapshot:current(ra_log:snapshot_state(Log3)),
+
+    %% Write some entries
+    Log4 = assert_log_events(write_n(16, 20, 2, Log3),
+                             fun (L) ->
+                                     LW = ra_log:last_written(L),
+                                     {19, 2} == LW
+                             end),
+
+    %% then take a snapshot
+    {Log5, Effs5} = ra_log:update_release_cursor(19, #{?N1 => new_peer(),
+                                                       ?N2 => new_peer()},
+                                                 ?MODULE, [1, 5, 10, 17], Log4),
+
+    run_effs(Effs5),
+    %% ensure snapshot index has been updated and 1 segment deleted
+    Log = assert_log_events(Log5,
+                             fun (L) ->
+                                     {19, 2} == ra_log:snapshot_index_term(L)
+                                     % andalso
+                                     % length(find_segments(Config)) == 1
+                             end),
+
+    ct:pal("Log ~p", [Log]),
+
     ok.
 
 written_event_after_snapshot_installation(Config) ->

@@ -140,6 +140,7 @@ start(Params) when is_list(Params) ->
     [ok = application:set_env(ra, Param, Value)
      || {Param, Value} <- Params],
     Res = application:ensure_all_started(ra),
+    ra_env:configure_logger(logger),
     _ = ra_system:start_default(),
     Res.
 
