@@ -23,9 +23,9 @@
 %% The structure of the metadata file is as follows:
 %% - 4 bytes magic header (RAM1)
 %% - 1004 bytes VotedFor field, which is a binary
-%%   - 1 byte for the size of the first atom (server name)
+%%   - 2 bytes for the size of the first atom (server name)
 %%   - first atom (server name) as a binary
-%%   - 1 byte for the size of the second atom (node name)
+%%   - 2 bytes for the size of the second atom (node name)
 %%   - second atom (node name) as a binary
 %%   - padding (zeroed)
 %% - 8 bytes CurrentTerm (unsigned 64-bit integer)
@@ -39,8 +39,8 @@
 -define(FILENAME, "server.meta").
 -define(MAGIC, "RAM1").
 -define(TOTAL_SIZE, 1024).
+-define(VOTED_FOR_MAX_SIZE, 1004). %% TOTAL_SIZE minus everything else
 -define(LAST_APPLIED_POSITION, ?TOTAL_SIZE - 8).
--define(TERM_POSITION, ?TOTAL_SIZE - ?LAST_APPLIED_POSITION - 8).
 
 path(DataDir, UId) ->
     ServerDir = filename:join(DataDir, UId),
@@ -99,28 +99,30 @@ update_last_applied(MetaFd, LastApplied) ->
 encode_metadata(VotedFor, CurrentTerm, LastApplied) ->
     VotedForBin = case VotedFor of
                       undefined ->
-                          <<0, 0>>;
+                          <<>>;
                       {NameAtom, NodeAtom} ->
                           NameAtomBin = atom_to_binary(NameAtom, utf8),
                           NodeAtomBin = atom_to_binary(NodeAtom, utf8),
                           NameSize = byte_size(NameAtomBin),
                           NodeSize = byte_size(NodeAtomBin),
-                          <<NameSize:8/unsigned, NameAtomBin/binary,
-                            NodeSize:8/unsigned, NodeAtomBin/binary>>
+                          <<NameSize:16/unsigned, NameAtomBin/binary,
+                            NodeSize:16/unsigned, NodeAtomBin/binary>>
                   end,
 
-    HeaderSize = length(?MAGIC),
     VotedForSize = byte_size(VotedForBin),
-    UsedSize = HeaderSize + VotedForSize,
-    PaddingSize = 1008 - UsedSize,
-    Padding = <<0:PaddingSize/unit:8>>,
+    PaddingSize = ?VOTED_FOR_MAX_SIZE - VotedForSize,
+    case PaddingSize >= 0 of
+        true ->
+            Padding = <<0:PaddingSize/unit:8>>,
+            <<?MAGIC, VotedForBin/binary, Padding/binary,
+            CurrentTerm:64/unsigned, LastApplied:64/unsigned>>;
+        false ->
+            vote_for_binary_too_long
+        end.
 
-    <<?MAGIC, VotedForBin/binary, Padding/binary, 
-      CurrentTerm:64/unsigned, LastApplied:64/unsigned>>.
-
-parse_voted_for(<<NameAtomSize:8/unsigned, Rest/binary>>) when NameAtomSize > 0 ->
+parse_voted_for(<<NameAtomSize:16/unsigned, Rest/binary>>) when NameAtomSize > 0 ->
     case Rest of
-        <<NameAtom:NameAtomSize/binary, NodeAtomSize:8/unsigned, NodeAtom:NodeAtomSize/binary, _/binary>> 
+        <<NameAtom:NameAtomSize/binary, NodeAtomSize:16/unsigned, NodeAtom:NodeAtomSize/binary, _/binary>>
           when NodeAtomSize > 0 ->
             {binary_to_atom(NameAtom, utf8), binary_to_atom(NodeAtom, utf8)};
         _ ->
@@ -174,9 +176,9 @@ v1_format_test() ->
 
     % Test edge cases
 
-    % very long atom names
-    LongName = list_to_atom([$a || _ <- lists:seq(1, 255)]),
-    LongNode = list_to_atom([$b || _ <- lists:seq(1, 255)]),
+    % very long atom names, including UTF-8 in on of the atoms
+    LongName = list_to_atom([$Σ || _ <- lists:seq(1, 255)]),
+    LongNode = list_to_atom([$a || _ <- lists:seq(1, 255)]),
     LongVotedFor = {LongName, LongNode},
     DataLong = encode_metadata(LongVotedFor, 999999, 888888),
     ?assertEqual(1024, byte_size(DataLong)),
