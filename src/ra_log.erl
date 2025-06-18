@@ -725,9 +725,7 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
     {state(), [effect()]}.
 handle_event({written, Term, WrittenSeq},
              #?MODULE{cfg = Cfg,
-                      % range = Range,
                       snapshot_state = SnapState,
-                      % first_index = FirstIdx,
                       pending = Pend0} = State0) ->
     CurSnap = ra_snapshot:current(SnapState),
     %% gap detection
@@ -825,7 +823,7 @@ handle_event(major_compaction, #?MODULE{reader = Reader0,
                                         snapshot_state = SS} = State) ->
     case ra_snapshot:current(SS) of
         {SnapIdx, _} ->
-            Effs = ra_log_segments:schedule_compaction(major,SnapIdx,
+            Effs = ra_log_segments:schedule_compaction(major, SnapIdx,
                                                        LiveIndexes, Reader0),
             {State, Effs};
         _ ->
@@ -841,6 +839,7 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
                       snapshot_state = SnapState0} = State0)
 %% only update snapshot if it is newer than the last snapshot
   when SnapIdx >= FstIdx ->
+    % ?assert(ra_snapshot:pending(SnapState0) =/= undefined),
     SnapState1 = ra_snapshot:complete_snapshot(Snap, SnapKind, LiveIndexes,
                                                SnapState0),
     case SnapKind of

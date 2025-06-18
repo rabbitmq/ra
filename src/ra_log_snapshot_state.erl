@@ -28,7 +28,7 @@ smallest(Table, UId) when is_binary(UId) ->
     ets:lookup_element(Table, UId, 3, 0).
 
 -spec live_indexes(ets:table(), ra:uid()) ->
-    ra:index().
+    ra_seq:state().
 live_indexes(Table, UId) when is_binary(UId) ->
     ets:lookup_element(Table, UId, 4, []).
 
