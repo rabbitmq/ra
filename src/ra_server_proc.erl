@@ -1926,6 +1926,8 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
             case ra_snapshot:indexes(ra_snapshot:current_snapshot_dir(SnapState)) of
                 {ok, [_|_] = Indexes} ->
                     %% there are live indexes to send before the snapshot
+                    %% %% TODO: only send live indexes higher than the follower's
+                    %% last_applied index
                     Idxs = lists:reverse(ra_seq:expand(Indexes)),
                     Flru = lists:foldl(
                              fun (Is, F0) ->
@@ -1936,7 +1938,7 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                                                      data = Ents},
                                      _Res1 = gen_statem:call(To, RPC1,
                                                             {dirty_timeout, InstallTimeout}),
-                                     %% TODO: assert REs1 is successful
+                                     %% TODO: assert Res1 is successful
                                      F
                              end, undefined, ra_lib:lists_chunk(16, Idxs)),
                     _ = ra_flru:evict_all(Flru),

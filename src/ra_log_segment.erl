@@ -23,6 +23,7 @@
          filename/1,
          segref/1,
          info/1,
+         info/2,
          is_same_as/2,
          copy/3]).
 
@@ -454,17 +455,23 @@ segref(Filename) ->
     close(Seg),
     SegRef.
 
--spec info(file:filename_all()) ->
-    #{size => non_neg_integer(),
-      max_count => non_neg_integer(),
-      file_type => regular | symlink,
-      ctime => integer(),
-      links => non_neg_integer(),
-      num_entries => non_neg_integer(),
-      ref => option(ra_log:segment_ref()),
-      indexes => ra_seq:state()
-     }.
-info(Filename)
+-type infos() :: #{size => non_neg_integer(),
+                   max_count => non_neg_integer(),
+                   file_type => regular | symlink,
+                   ctime => integer(),
+                   links => non_neg_integer(),
+                   num_entries => non_neg_integer(),
+                   ref => option(ra_log:segment_ref()),
+                   indexes => ra_seq:state(),
+                   live_size => non_neg_integer()
+                  }.
+
+-spec info(file:filename_all()) -> infos().
+info(Filename) ->
+    info(Filename, undefined).
+
+-spec info(file:filename_all(), option(ra_seq:state())) -> infos().
+info(Filename, Live0)
   when not is_tuple(Filename) ->
     %% TODO: this can be much optimised by a specialised index parsing
     %% function
@@ -475,14 +482,29 @@ info(Filename)
                     ctime = CTime}} = file:read_link_info(Filename,
                                                           [raw, {time, posix}]),
 
-    Info = #{size => Seg#state.data_write_offset,
+    AllIndexesSeq = ra_seq:from_list(maps:keys(Index)),
+    Live = case Live0 of
+               undefined ->
+                   AllIndexesSeq;
+               _ ->
+                   Live0
+           end,
+    LiveSize = ra_seq:fold(fun (I, Acc) ->
+                                   {_, _, Sz, _} = maps:get(I, Index),
+                                   Acc + Sz
+                           end, 0, Live),
+    Info = #{
+             size => Seg#state.data_write_offset,
+             index_size => Seg#state.data_start,
              file_type => T,
              links => Links,
              ctime => CTime,
              max_count => max_count(Seg),
              num_entries => maps:size(Index),
              ref => segref(Seg),
-             indexes => ra_seq:from_list(maps:keys(Index))
+             live_size => LiveSize,
+             %% TODO: this is most likely just here for debugging
+             indexes => AllIndexesSeq
             },
     close(Seg),
     Info.
