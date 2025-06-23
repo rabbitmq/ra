@@ -27,6 +27,7 @@ all_tests() ->
      recover2,
      basics,
      major,
+     major_max_size,
      minor,
      overwrite,
      result_after_segments,
@@ -42,7 +43,10 @@ init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
     ok = ra_lib:make_dir(Dir),
+    CompConf = #{max_count => 128,
+                 max_size => 128_000},
     [{uid, atom_to_binary(TestCase, utf8)},
+     {comp_conf, CompConf},
      {test_case, TestCase},
      {dir, Dir} | Config].
 
@@ -69,7 +73,7 @@ result_after_segments(Config) ->
               end}
     ],
     SegConf = #{max_count => 128},
-    Segs0 = ra_log_segments_init(?config(uid, Config), Dir, seg_refs(Dir)),
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
     run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
     ct:pal("infos ~p", [infos(Dir)]),
     ok.
@@ -95,7 +99,7 @@ result_after_segments_overwrite(Config) ->
      {assert, 2, lists:seq(128 * 3, 128 * 4)}
     ],
     SegConf = #{max_count => 128},
-    Segs0 = ra_log_segments_init(?config(uid, Config), Dir, seg_refs(Dir)),
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
     run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
     ct:pal("infos ~p", [infos(Dir)]),
     ok.
@@ -129,7 +133,7 @@ recover1(Config) ->
     ],
     ct:pal("infos ~p", [infos(Dir)]),
     SegConf = #{max_count => 128},
-    Segs0 = ra_log_segments_init(?config(uid, Config), Dir, seg_refs(Dir)),
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
     run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
     ok.
 
@@ -189,7 +193,7 @@ recover2(Config) ->
 
     ],
     SegConf = #{max_count => 128},
-    Segs0 = ra_log_segments_init(?config(uid, Config), Dir, seg_refs(Dir)),
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
     run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
     ct:pal("infos ~p", [infos(Dir)]),
     ok.
@@ -233,7 +237,7 @@ basics(Config) ->
 
 
     SegConf = #{max_count => 128},
-    Segs0 = ra_log_segments_init(?config(uid, Config), Dir, seg_refs(Dir)),
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
     run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
 
     ct:pal("infos ~p", [infos(Dir)]),
@@ -276,7 +280,7 @@ minor(Config) ->
 
     SegConf = #{max_count => 128},
     Dir = ?config(dir, Config),
-    Segs0 = ra_log_segments_init(?config(uid, Config), Dir, seg_refs(Dir)),
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
     run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
 
     ok.
@@ -302,10 +306,48 @@ overwrite(Config) ->
 
     SegConf = #{max_count => 128},
     Dir = ?config(dir, Config),
-    Segs0 = ra_log_segments_init(?config(uid, Config), Dir, seg_refs(Dir)),
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
     run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
     ok.
 
+major_max_size(Config) ->
+    %% this test could compact 3 segemtns into one just based on entry counts
+    %% however the max_size configuration needs to be taken into account
+    %% with the compaction grouping and not create an oversized taget segment
+    Dir = ?config(dir, Config),
+    Data = crypto:strong_rand_bytes(2000),
+    Entries = [{I, 1, term_to_binary(Data)}
+               || I <- lists:seq(1, 128 * 4)],
+    LiveList = lists:seq(1, 30) ++
+               lists:seq(128, 128 + 30) ++
+               lists:seq(256, 256 + 30),
+    Live = ra_seq:from_list(LiveList),
+    Scen =
+    [
+     {entries, 1, Entries},
+     {assert, 1, lists:seq(1, 128 * 4)},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 4
+              end},
+     {major, 128 * 4, Live},
+     handle_compaction_result,
+     {assert, 1, LiveList},
+     {assert, fun (S) ->
+                      %% infos contain one symlink
+                      Infos = infos(Dir),
+                      ct:pal("Infos ~p", [Infos]),
+                      Symlinks = [I || #{file_type := symlink} = I <- Infos],
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 3 andalso
+                      length(Infos) == 4 andalso
+                      length(Symlinks) == 1
+              end}
+    ],
+    SegConf = #{max_count => 128},
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+    ok.
 
 major(Config) ->
     Dir = ?config(dir, Config),
@@ -355,7 +397,7 @@ major(Config) ->
     ],
 
     SegConf = #{max_count => 128},
-    Segs0 = ra_log_segments_init(?config(uid, Config), Dir, seg_refs(Dir)),
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
     run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
 
     ok.
@@ -443,14 +485,21 @@ run_scenario(_, Segs, []) ->
     Segs;
 run_scenario(Config, Segs0, [reinit | Rem]) ->
     Dir = ?config(dir, Config),
+    CompConf = ?config(comp_conf, Config),
     ra_log_segments:close(Segs0),
     Segs = ra_log_segments:init(?config(uid, Config), Dir, 1, random,
-                                seg_refs(Dir), undefined, ""),
+                                seg_refs(Dir), undefined, CompConf, ""),
     ?FUNCTION_NAME(Config, Segs, Rem);
-run_scenario(Config, Segs0, [{entries, Term, Indexes} | Rem]) ->
+run_scenario(Config, Segs0, [{entries, Term, IndexesOrEntries} | Rem]) ->
     SegConf = ?config(seg_conf, Config),
     Seg0 = open_last_segment(Config, SegConf),
-    Entries = [{I, Term, term_to_binary(<<"data1">>)} || I <- Indexes],
+    Entries = case is_tuple(hd(IndexesOrEntries)) of
+                  true ->
+                      IndexesOrEntries;
+                  false ->
+                      [{I, Term, term_to_binary(<<"data1">>)}
+                       || I <- IndexesOrEntries]
+              end,
     {Seg, Refs} = append_to_segment(Seg0, Entries, [], SegConf),
     _ = ra_log_segment:close(Seg),
     {Segs, _Overwritten} = ra_log_segments:update_segments(Refs, Segs0),
@@ -502,6 +551,9 @@ run_scenario(Config, Segs0, [{print, What} | Rem]) ->
 with_ext(Fn, Ext) when is_binary(Fn) andalso is_list(Ext) ->
     <<(filename:rootname(Fn))/binary, (ra_lib:to_binary(Ext))/binary>>.
 
-ra_log_segments_init(UId, Dir, SegRefs) ->
+ra_log_segments_init(Config, Dir, SegRefs) ->
+    UId = ?config(uid, Config),
+    CompConf = ?config(comp_conf, Config),
     ra_log_segments:init(UId, Dir, 1, random,
-                         SegRefs, undefined, "").
+                         SegRefs, undefined,
+                         CompConf, "").

@@ -188,7 +188,7 @@ init(#{uid := UId,
                                      segment_writer := SegWriter} = Names}
       } = Conf) ->
     Dir = server_data_dir(DataDir, UId),
-    MaxOpen = maps:get(max_open_segments, Conf, 5),
+    MaxOpen = maps:get(max_open_segments, Conf, 1),
     SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
     %% this has to be patched by ra_server
     LogId = maps:get(log_id, Conf, UId),
@@ -228,8 +228,12 @@ init(#{uid := UId,
     % segments it is currently processed have been finished
     MtRange = ra_mt:range(Mt0),
     SegRefs = my_segrefs(UId, SegWriter),
+    SegmentMaxCount = maps:get(segment_max_entries, Conf, ?SEGMENT_MAX_ENTRIES),
+    SegmentMaxSize = maps:get(segment_max_size_bytes, Conf, ?SEGMENT_MAX_SIZE_B),
+    CompConf = #{max_size => SegmentMaxSize,
+                 max_count => SegmentMaxCount},
     Reader = ra_log_segments:init(UId, Dir, MaxOpen, AccessPattern, SegRefs,
-                                  Counter, LogId),
+                                  Counter, CompConf, LogId),
     SegmentRange = ra_log_segments:range(Reader),
     %% TODO: check ra_range:add/2 actually performas the correct logic we expect
     Range = ra_range:add(MtRange, SegmentRange),
@@ -1306,13 +1310,14 @@ release_resources(MaxOpenSegments, AccessPattern,
                                       counter = Counter},
                            reader = Reader} = State) ->
     ActiveSegs = ra_log_segments:segment_refs(Reader),
+    CompConf = ra_log_segments:compaction_conf(Reader),
     % close all open segments
     % deliberately ignoring return value
     _ = ra_log_segments:close(Reader),
     %% open a new segment with the new max open segment value
     State#?MODULE{reader = ra_log_segments:init(UId, Dir, MaxOpenSegments,
                                                 AccessPattern, ActiveSegs,
-                                                Counter, LogId)}.
+                                                Counter, CompConf, LogId)}.
 
 
 %%% Local functions

@@ -11,7 +11,7 @@
 
 -include_lib("kernel/include/file.hrl").
 -export([
-         init/7,
+         init/8,
          close/1,
          update_segments/2,
          schedule_compaction/4,
@@ -27,7 +27,8 @@
          exec_read_plan/6,
          fetch_term/2,
          info/1,
-         purge_symlinks/2
+         purge_symlinks/2,
+         compaction_conf/1
          ]).
 
 -include("ra.hrl").
@@ -36,13 +37,16 @@
 
 -define(SYMLINK_KEEPFOR_S, 60).
 
+-type compaction_conf() :: #{max_count => non_neg_integer(),
+                             max_size => non_neg_integer()}.
 -type access_pattern() :: sequential | random.
 %% holds static or rarely changing fields
 -record(cfg, {uid :: ra_uid(),
               log_id = "" :: unicode:chardata(),
               counter :: undefined | counters:counters_ref(),
               directory :: file:filename(),
-              access_pattern = random :: access_pattern()
+              access_pattern = random :: access_pattern(),
+              compaction_conf :: compaction_conf()
              }).
 
 -type segment_ref() :: ra_log:segment_ref().
@@ -74,14 +78,16 @@
 -spec init(ra_uid(), file:filename_all(), non_neg_integer(),
            access_pattern(), [segment_ref()],
            undefined | counters:counters_ref(),
+           map(),
            unicode:chardata()) -> state().
-init(UId, Dir, MaxOpen, AccessPattern, SegRefs0, Counter, LogId)
+init(UId, Dir, MaxOpen, AccessPattern, SegRefs0, Counter, CompConf, LogId)
   when is_binary(UId) ->
     Cfg = #cfg{uid = UId,
                log_id = LogId,
                counter = Counter,
                directory = Dir,
-               access_pattern = AccessPattern},
+               access_pattern = AccessPattern,
+               compaction_conf = CompConf},
     FlruHandler = fun ({_, Seg}) ->
                           _ = ra_log_segment:close(Seg),
                           decr_counter(Cfg, ?C_RA_LOG_OPEN_SEGMENTS, 1)
@@ -150,6 +156,7 @@ update_segments(NewSegmentRefs, #?STATE{open_segments = Open0,
     [ra_server:effect()].
 schedule_compaction(Type, SnapIdx, LiveIndexes,
                     #?MODULE{cfg = #cfg{log_id = LogId,
+                                        compaction_conf = CompConf,
                                         directory = Dir} = Cfg} = State) ->
     case compactable_segrefs(SnapIdx, State) of
         [] ->
@@ -171,21 +178,25 @@ schedule_compaction(Type, SnapIdx, LiveIndexes,
             Self = self(),
             Fun = fun () ->
                           ok = incr_counter(Cfg, ?C_RA_LOG_COMPACTIONS_MAJOR_COUNT, 1),
-                          MajConf = #{dir => Dir},
+                          MajConf = CompConf#{dir => Dir},
                           Result = major_compaction(MajConf, SegRefs,
                                                     LiveIndexes),
-                          %% TODO: this could be done on a timer if more
-                          %% timely symlink cleanup is needed
-                          purge_symlinks(Dir, ?SYMLINK_KEEPFOR_S),
                           %% need to update the ra_servers list of seg refs
                           %% _before_ the segments can actually be deleted
                           Self ! {ra_log_event,
                                   {compaction_result, Result}},
+                          %% TODO: this could be done on a timer if more
+                          %% timely symlink cleanup is needed
+                          purge_symlinks(Dir, ?SYMLINK_KEEPFOR_S),
                           ok
                   end,
 
             [{bg_work, Fun,
               fun (Err) ->
+                      %% send an empty compaction result to ensure the
+                      %% a future compaction can be performed (TODO:)
+                      Self ! {ra_log_event,
+                              {compaction_result, #compaction_result{}}},
                       ?WARN("~ts: Major compaction failed with ~p",
                             [LogId, Err]), ok
               end}]
@@ -265,6 +276,10 @@ segment_ref_count(#?STATE{segment_refs = SegmentRefs}) ->
 -spec range(state()) -> ra_range:range().
 range(#?STATE{range = Range}) ->
     Range.
+
+-spec compaction_conf(state()) -> map().
+compaction_conf(#?STATE{cfg = #cfg{compaction_conf = Conf}}) ->
+    Conf.
 
 -spec num_open_segments(state()) -> non_neg_integer().
 num_open_segments(#?STATE{open_segments = Open}) ->
@@ -572,7 +587,7 @@ list_files(Dir, Ext, Fun) ->
             []
     end.
 
-major_compaction(#{dir := Dir}, SegRefs, LiveIndexes) ->
+major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
     {Compactable, Delete} =
         lists:foldl(fun({Fn0, Range} = S,
                         {Comps, Del}) ->
@@ -584,7 +599,7 @@ major_compaction(#{dir := Dir}, SegRefs, LiveIndexes) ->
                                     %% get the info map from each
                                     %% potential segment
                                     Fn = filename:join(Dir, Fn0),
-                                    Info = ra_log_segment:info(Fn),
+                                    Info = ra_log_segment:info(Fn, Seq),
                                     {[{Info, Seq, S} | Comps], Del}
                             end
                     end, {[], []}, SegRefs),
@@ -602,7 +617,8 @@ major_compaction(#{dir := Dir}, SegRefs, LiveIndexes) ->
          ok  = prim_file:delete(filename:join(Dir, F))
      end || F <- UnusedFiles],
     %% group compactable
-    CompactionGroups = compaction_groups(lists:reverse(Compactable), []),
+    CompactionGroups = compaction_groups(lists:reverse(Compactable), [],
+                                         CompConf),
     Compacted0 =
     [begin
          %% create a new segment with .compacting extension
@@ -706,31 +722,37 @@ make_links(Dir, To, From)
 with_ext(Fn, Ext) when is_binary(Fn) andalso is_list(Ext) ->
     <<(filename:rootname(Fn))/binary, (ra_lib:to_binary(Ext))/binary>>.
 
-compaction_groups([], Groups) ->
+compaction_groups([], Groups, _Conf) ->
     lists:reverse(Groups);
-compaction_groups(Infos, Groups) ->
-    case take_group(Infos, #{max_count => 128}, []) of
+compaction_groups(Infos, Groups, Conf) ->
+    case take_group(Infos, Conf, []) of
         {Group, RemInfos} ->
-            compaction_groups(RemInfos, [Group | Groups])
+            compaction_groups(RemInfos, [Group | Groups], Conf)
     end.
 
 %% TODO: try to take potential size into account
 take_group([], _, Acc) ->
     {lists:reverse(Acc), []};
-take_group([{#{num_entries := NumEnts}, Live, {_, _}} = E | Rem] = All,
-           #{max_count := Mc}, Acc) ->
+take_group([{#{num_entries := NumEnts,
+               live_size := LiveSize}, Live, {_, _}} = E | Rem] = All,
+           #{max_count := Mc,
+             max_size := MaxSz}, Acc) ->
     Num = ra_seq:length(Live),
-    case Num < NumEnts div 2 of
+    case Num / NumEnts < 0.5 of
         true ->
-            case Mc - Num < 0 of
+            case Mc - Num < 0 orelse
+                 MaxSz - LiveSize < 0 of
                 true ->
                     {lists:reverse(Acc), All};
                 false ->
-                    take_group(Rem, #{max_count => Mc - Num}, [E | Acc])
+                    take_group(Rem, #{max_count => Mc - Num,
+                                      max_size => MaxSz - LiveSize},
+                               [E | Acc])
             end;
             %% skip this secment
         false when Acc == [] ->
-            take_group(Rem, #{max_count => Mc}, Acc);
+            take_group(Rem, #{max_count => Mc,
+                              max_size => MaxSz}, Acc);
         false ->
             {lists:reverse(Acc), Rem}
     end.

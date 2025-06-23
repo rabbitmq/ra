@@ -38,6 +38,8 @@ all_tests() ->
      corrupted_segment,
      large_segment,
      segref,
+     info,
+     info_2,
      versions_v1,
      copy
     ].
@@ -207,6 +209,39 @@ segref(Config) ->
     {<<"seg1.seg">>, {1, 1}} = ra_log_segment:segref(Seg1),
     ok.
 
+info(Config) ->
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 128}),
+    Info1 = ra_log_segment:info(Fn),
+    ?assertMatch(#{ref := undefined}, Info1),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
+    _ = ra_log_segment:flush(Seg1),
+    Info2 = ra_log_segment:info(Fn),
+    ?assertMatch(#{ref := {<<"seg1.seg">>, {1, 1}}}, Info2),
+    ok.
+
+info_2(Config) ->
+    %% passes live indexes which will result in additional info keys
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 128}),
+    Info1 = ra_log_segment:info(Fn, []),
+    ?assertMatch(#{ref := undefined,
+                   live_size := 0}, Info1),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
+    {ok, Seg2} = ra_log_segment:append(Seg1, 2, 2, <<"Adsf">>),
+    _ = ra_log_segment:flush(Seg2),
+    Info2 = ra_log_segment:info(Fn, [1]),
+    ?assertMatch(#{ref := {<<"seg1.seg">>, {1, 2}},
+                   num_entries := 2,
+                   live_size := 4}, Info2),
+    Info3 = ra_log_segment:info(Fn),
+    %% info/1 assumes all indexes are "live"
+    ?assertMatch(#{ref := {<<"seg1.seg">>, {1, 2}},
+                   num_entries := 2,
+                   live_size := 8}, Info3),
+    ok.
 
 full_file(Config) ->
     Dir = ?config(data_dir, Config),
