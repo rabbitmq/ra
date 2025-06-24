@@ -726,32 +726,43 @@ compaction_groups([], Groups, _Conf) ->
     lists:reverse(Groups);
 compaction_groups(Infos, Groups, Conf) ->
     case take_group(Infos, Conf, []) of
+        {[], RemInfos} ->
+            compaction_groups(RemInfos, Groups, Conf);
         {Group, RemInfos} ->
             compaction_groups(RemInfos, [Group | Groups], Conf)
     end.
 
-%% TODO: try to take potential size into account
 take_group([], _, Acc) ->
     {lists:reverse(Acc), []};
 take_group([{#{num_entries := NumEnts,
-               live_size := LiveSize}, Live, {_, _}} = E | Rem] = All,
-           #{max_count := Mc,
+               index_size := IdxSz,
+               size := Sz,
+               live_size := LiveSz}, Live, {_, _}} = E | Rem] = All,
+           #{max_count := MaxCnt,
              max_size := MaxSz}, Acc) ->
-    Num = ra_seq:length(Live),
-    case Num / NumEnts < 0.5 of
+    NumLive = ra_seq:length(Live),
+    AllDataSz = Sz - IdxSz,
+    %% group on either num relaimable entries or data saved
+    case NumLive / NumEnts < 0.5 orelse
+         LiveSz / AllDataSz < 0.5 of
+        %% there are fewer than half live entries in the segment
         true ->
-            case Mc - Num < 0 orelse
-                 MaxSz - LiveSize < 0 of
+            %% check that adding this segment to the current group will no
+            %% exceed entry or size limits
+            case MaxCnt - NumLive < 0 orelse
+                 MaxSz - LiveSz < 0 of
                 true ->
+                    %% adding this segment to the group will exceed limits
+                    %% so returning current group
                     {lists:reverse(Acc), All};
                 false ->
-                    take_group(Rem, #{max_count => Mc - Num,
-                                      max_size => MaxSz - LiveSize},
+                    take_group(Rem, #{max_count => MaxCnt - NumLive,
+                                      max_size => MaxSz - LiveSz},
                                [E | Acc])
             end;
-            %% skip this secment
+        %% skip this segment
         false when Acc == [] ->
-            take_group(Rem, #{max_count => Mc,
+            take_group(Rem, #{max_count => MaxCnt,
                               max_size => MaxSz}, Acc);
         false ->
             {lists:reverse(Acc), Rem}
