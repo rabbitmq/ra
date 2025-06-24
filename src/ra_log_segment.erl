@@ -456,6 +456,7 @@ segref(Filename) ->
     SegRef.
 
 -type infos() :: #{size => non_neg_integer(),
+                   index_size => non_neg_integer(),
                    max_count => non_neg_integer(),
                    file_type => regular | symlink,
                    ctime => integer(),
@@ -493,8 +494,7 @@ info(Filename, Live0)
                                    {_, _, Sz, _} = maps:get(I, Index),
                                    Acc + Sz
                            end, 0, Live),
-    Info = #{
-             size => Seg#state.data_write_offset,
+    Info = #{size => Seg#state.data_write_offset,
              index_size => Seg#state.data_start,
              file_type => T,
              links => Links,

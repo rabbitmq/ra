@@ -20,7 +20,8 @@ all() ->
 
 all_tests() ->
     [
-     basics
+     basics,
+     snapshot_replication
     ].
 
 groups() ->
@@ -55,6 +56,71 @@ end_per_testcase(_TestCase, _Config) ->
 %%% Test cases
 %%%===================================================================
 
+
+snapshot_replication(_Config) ->
+    Members = [{kv1, node()}, {kv2, node()}],
+    KvId = hd(Members),
+    {ok, _, _} = ra_kv:start_cluster(?SYS, ?FUNCTION_NAME,
+                                     #{members => Members}),
+    ra:transfer_leadership(KvId, KvId),
+    {ok, #{}} = ra_kv:put(KvId, <<"k1">>, <<"k1-value01">>, 5000),
+    %% write 10k entries of the same key
+    [{ok, #{}} = ra_kv:put(KvId, integer_to_binary(I), I, 5000)
+     || I <- lists:seq(1, 5000)],
+
+    ?assertMatch({ok, #{machine := #{num_keys := _}}, KvId},
+                 ra:member_overview(KvId)),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    %% wait for rollover processing
+    ra_log_wal:last_writer_seq(ra_log_wal, <<>>),
+    %% wait for segment writer to process
+    ra_log_segment_writer:await(ra_log_segment_writer),
+    %% promt ra_kv to take a snapshot
+    ok = ra:aux_command(KvId, take_snapshot),
+    ok = ra_lib:retry(
+           fun () ->
+                   {ok, #{log := #{snapshot_index := SnapIdx,
+                                   last_index := LastIdx}}, _} =
+                       ra:member_overview(KvId),
+                   SnapIdx == LastIdx
+           end, 100, 100),
+
+    KvId3 = {kv3, node()},
+    ok = ra_kv:add_member(?SYS, KvId3, KvId),
+    KvId3Pid = whereis(kv3),
+    ?assert(is_pid(KvId3Pid)),
+    {ok, #{}} = ra_kv:put(KvId, <<"k3">>, <<"k3-value">>, 5000),
+    {ok, #{}} = ra_kv:put(KvId, <<"k4">>, <<"k4-value">>, 5000),
+    ok = ra:aux_command(KvId, take_snapshot),
+    % timer:sleep(1000),
+    {ok, #{log := #{last_index := Kv1LastIndex  }}, _} = ra:member_overview(KvId),
+    ok = ra_lib:retry(
+           fun () ->
+                   {ok, #{log := #{last_index := LastIdx}}, _} =
+                       ra:member_overview(KvId3),
+                   Kv1LastIndex == LastIdx
+           end, 100, 100),
+    ct:pal("counters ~p", [ra_counters:counters(KvId3, [last_applied])]),
+    %% ensure kv3 did not crash during snapshot replication
+    ?assertEqual(KvId3Pid, whereis(kv3)),
+
+    ok = ra:stop_server(default, KvId3),
+
+    {ok, #{}} = ra_kv:put(KvId, <<"k5">>, <<"k5-value">>, 5000),
+    {ok, #{}} = ra_kv:put(KvId, <<"k6">>, <<"k6-value">>, 5000),
+    ok = ra:aux_command(KvId, take_snapshot),
+
+    ok = ra:restart_server(default, KvId3),
+    {ok, #{log := #{last_index := Kv1LastIndex2}}, _} = ra:member_overview(KvId),
+    ok = ra_lib:retry(
+           fun () ->
+                   {ok, #{log := #{last_index := LastIdx}}, _} =
+                       ra:member_overview(KvId3),
+                   Kv1LastIndex2 == LastIdx
+           end, 100, 100),
+
+    ra:delete_cluster([KvId, {kv2, node()}, KvId3]),
+    ok.
 
 basics(_Config) ->
     Members = [{kv1, node()}],
@@ -136,4 +202,5 @@ basics(_Config) ->
                                                     undefined, 1000),
     ?assertEqual(Reads4, Reads5),
     ct:pal("counters ~p", [ra_counters:overview(KvId)]),
+    ra:delete_cluster([KvId, KvId2]),
     ok.

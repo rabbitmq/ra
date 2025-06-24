@@ -706,10 +706,21 @@ last_written(#?MODULE{last_written_index_term = LWTI}) ->
     {ok, state()} | {not_found, state()}.
 set_last_index(Idx, #?MODULE{cfg = Cfg,
                              range = Range,
+                             snapshot_state = SnapState,
                              last_written_index_term = {LWIdx0, _}} = State0) ->
+    Cur = ra_snapshot:current(SnapState),
     case fetch_term(Idx, State0) of
-        {undefined, State} ->
+        {undefined, State} when element(1, Cur) =/= Idx ->
+            %% not found and Idx isn't equal to latest snapshot index
             {not_found, State};
+        {_, State} when element(1, Cur) =:= Idx ->
+            {_, SnapTerm} = Cur,
+            %% Idx is equal to the current snapshot
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, Idx),
+            {ok, State#?MODULE{range = ra_range:limit(Idx + 1, Range),
+                               last_term = SnapTerm,
+                               last_written_index_term = Cur}};
         {Term, State1} ->
             LWIdx = min(Idx, LWIdx0),
             {LWTerm, State2} = fetch_term(LWIdx, State1),
@@ -1107,12 +1118,11 @@ assert(#?MODULE{cfg = #cfg{log_id = LogId},
                 range = Range,
                 snapshot_state = SnapState,
                 current_snapshot = CurrSnap,
-                live_indexes = LiveIndexes,
-                mem_table = _Mt
+                live_indexes = LiveIndexes
                } = State) ->
     %% TODO: remove this at some point?
-    ?DEBUG("~ts: ra_log: asserting Range ~p Snapshot ~p LiveIndexes ~p",
-           [LogId, Range, CurrSnap, LiveIndexes]),
+    ?DEBUG("~ts: ra_log: asserting Range ~p Snapshot ~p",
+           [LogId, Range, CurrSnap]),
     %% perform assertions to ensure log state is correct
     ?assert(CurrSnap =:= ra_snapshot:current(SnapState)),
     ?assert(Range == undefined orelse

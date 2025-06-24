@@ -120,7 +120,10 @@ insert({Idx, _, _} = _Entry,
     end.
 
 -spec insert_sparse(log_entry(), undefined | ra:index(), state()) ->
-    {ok, state()} | {error, overwriting | gap_detected | limit_reached}.
+    {ok, state()} | {error,
+                     overwriting |
+                     gap_detected |
+                     limit_reached}.
 insert_sparse({Idx, _, _} = Entry, LastIdx,
               #?MODULE{tid = Tid,
                        indexes = Seq} = State) ->
@@ -298,6 +301,8 @@ get_items(Indexes, #?MODULE{} = State) ->
 -spec delete(delete_spec()) ->
     non_neg_integer().
 delete(undefined) ->
+    0;
+delete({indexes, _Tid, []}) ->
     0;
 delete({indexes, Tid, Seq}) ->
     NumToDelete = ra_seq:length(Seq),

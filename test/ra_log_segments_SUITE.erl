@@ -28,6 +28,7 @@ all_tests() ->
      basics,
      major,
      major_max_size,
+     major_max_size_2,
      minor,
      overwrite,
      result_after_segments,
@@ -310,6 +311,48 @@ overwrite(Config) ->
     run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
     ok.
 
+major_max_size_2(Config) ->
+    %% this test could compact 3 segemtns into one just based on entry counts
+    %% however the max_size configuration needs to be taken into account
+    %% with the compaction grouping and not create an oversized taget segment
+    Dir = ?config(dir, Config),
+    Data1 = crypto:strong_rand_bytes(1000),
+    Data2 = crypto:strong_rand_bytes(2000),
+    Entries1 = [{I, 1, term_to_binary(Data1)}
+               || I <- lists:seq(1, 64)],
+    Entries2 = [{I, 1, term_to_binary(Data2)}
+               || I <- lists:seq(65, 130)],
+    %% only the smaller entries are still live
+    LiveList = lists:seq(1, 65),
+    Live = ra_seq:from_list(LiveList),
+    Live = ra_seq:from_list(LiveList),
+    Scen =
+    [
+     {entries, 1, Entries1},
+     {entries, 1, Entries2},
+     {assert, 1, lists:seq(1, 130)},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 2
+              end},
+     {major, 130, Live},
+     handle_compaction_result,
+     {assert, fun (S) ->
+                      %% infos contain one symlink
+                      Infos = infos(Dir),
+                      ct:pal("Infos ~p", [Infos]),
+                      %% assert this segment was compacted due to potential
+                      %% data reclamation and not just for entries
+                      ?assertMatch(#{num_entries := 65}, hd(Infos)),
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 2
+              end}
+    ],
+    SegConf = #{max_count => 128},
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+    ok.
+
 major_max_size(Config) ->
     %% this test could compact 3 segemtns into one just based on entry counts
     %% however the max_size configuration needs to be taken into account
@@ -336,7 +379,6 @@ major_max_size(Config) ->
      {assert, fun (S) ->
                       %% infos contain one symlink
                       Infos = infos(Dir),
-                      ct:pal("Infos ~p", [Infos]),
                       Symlinks = [I || #{file_type := symlink} = I <- Infos],
                       SegRefs = ra_log_segments:segment_refs(S),
                       length(SegRefs) == 3 andalso
