@@ -1430,7 +1430,7 @@ handle_follower(#install_snapshot_rpc{term = Term,
                                       meta = #{index := SnapIdx,
                                                machine_version := SnapMacVer} = Meta,
                                       leader_id = LeaderId,
-                                      chunk_state = {Num, _ChunkFlag}} = Rpc,
+                                      chunk_state = {Num, ChunkFlag}} = Rpc,
                 #{cfg := #cfg{log_id = LogId,
                               machine_version = MacVer}, log := Log0,
                   last_applied := LastApplied,
@@ -1446,7 +1446,17 @@ handle_follower(#install_snapshot_rpc{term = Term,
            [LogId, SnapIdx, Term]),
     SnapState0 = ra_log:snapshot_state(Log0),
     {ok, SS} = ra_snapshot:begin_accept(Meta, SnapState0),
-    Log = ra_log:set_snapshot_state(SS, Log0),
+    Log1 = ra_log:set_snapshot_state(SS, Log0),
+
+    %% if the snaphost includes pre entries (live entries) then we need
+    %% to reset the log to the last applied index to avoid issues
+    Log = case ChunkFlag of
+              pre ->
+                  {ok, L} = ra_log:set_last_index(LastApplied, Log1),
+                  L;
+              _ ->
+                  Log1
+          end,
     {receive_snapshot, update_term(Term, State0#{log => Log,
                                                  leader_id => LeaderId}),
      [{next_event, Rpc}, {record_leader_msg, LeaderId}]};
@@ -1541,17 +1551,18 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                      last_index = SnapIndex},
     case ChunkFlag of
         pre when is_list(ChunkOrEntries) ->
-            %% TODO: we may need to reset the log here to
-            %% the last applied index as we
-            %% dont know for sure indexes after last applied
+            %% reset last index to last applied
+            %% as we dont know for sure indexes after last applied
             %% are of the right term
             {LastIndex, _} = ra_log:last_index_term(Log00),
-            {Log0, _} = lists:foldl(
+            {Log, _} = lists:foldl(
                        fun ({I, _, _} = E, {L0, LstIdx}) ->
                                {ok, L} = ra_log:write_sparse(E, LstIdx, L0),
                                {L, I}
                        end, {Log00, LastIndex}, ChunkOrEntries),
-            State = update_term(Term, State0#{log => Log0}),
+            ?DEBUG("~ts: receiving snapshot log last index ~p",
+                   [LogId, ra_log:last_index_term(Log)]),
+            State = update_term(Term, State0#{log => Log}),
             {receive_snapshot, State, [{reply, Reply}]};
         next ->
             SnapState0 = ra_log:snapshot_state(Log00),
@@ -1609,6 +1620,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                         membership =>
                                             get_membership(ClusterIds, State0),
                                         machine_state => MacState}),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapIndex),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
             {follower, persist_last_applied(State), [{reply, Reply} |

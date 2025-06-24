@@ -1533,7 +1533,9 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
               #state{server_state = SS0,
                      monitors = Monitors,
                      conf = #conf{snapshot_chunk_size = ChunkSize,
-                     install_snap_rpc_timeout = InstallSnapTimeout} = Conf} = State0,
+                                  log_id = LogId,
+                                  install_snap_rpc_timeout = InstallSnapTimeout} = Conf}
+              = State0,
               Actions) ->
     case lists:member(ToNode, [node() | nodes()]) of
         true ->
@@ -1544,7 +1546,7 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
             Pid = spawn(fun () ->
                                 try send_snapshots(Id, Term, To,
                                                    ChunkSize, InstallSnapTimeout,
-                                                   SnapState, Machine) of
+                                                   SnapState, Machine, LogId) of
                                     _ -> ok
                                 catch
                                     C:timeout:S ->
@@ -1905,29 +1907,39 @@ read_entries0(From, Idxs, #state{server_state = #{log := Log}} = State) ->
     {keep_state, State, [{reply, From, {ok, ReadState}}]}.
 
 send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
-               InstallTimeout, SnapState, Machine) ->
+               InstallTimeout, SnapState, Machine, LogId) ->
     Context = ra_snapshot:context(SnapState, ToNode),
     {ok, #{machine_version := SnapMacVer} = Meta, ReadState} =
         ra_snapshot:begin_read(SnapState, Context),
 
-    %% only send the snapshot if the target server can accept it
-    %% TODO: grab the last_applied index also and use this to floor
-    %% the live indexes
+    %% TODO: consolidate getting the context, machinve version and last
+    %% applied index in one rpc, and handle errors
     TheirMacVer = erpc:call(ToNode, ra_machine, version, [Machine]),
 
-    %% rpc the check what their
+    %% only send the snapshot if the target server can accept it
     case SnapMacVer > TheirMacVer of
         true ->
+            ?DEBUG("~ts: not sending snapshot to ~w as their machine version ~b "
+                   "is lower than snapshot machine version ~b",
+                   [LogId, To, TheirMacVer, SnapMacVer]),
             ok;
         false ->
+            #{last_applied := LastApplied} = erpc:call(ToNode,
+                                                       ra_counters,
+                                                       counters,
+                                                       [To, [last_applied]]),
             RPC = #install_snapshot_rpc{term = Term,
                                         leader_id = Id,
                                         meta = Meta},
-            case ra_snapshot:indexes(ra_snapshot:current_snapshot_dir(SnapState)) of
-                {ok, [_|_] = Indexes} ->
+            case ra_snapshot:indexes(
+                   ra_snapshot:current_snapshot_dir(SnapState)) of
+                {ok, [_|_] = Indexes0} ->
+                    %% remove all indexes lower than the target's last applied
+                    Indexes = ra_seq:floor(LastApplied + 1, Indexes0),
+                    ?DEBUG("~ts: sending live indexes ~w to ~w ",
+                           [LogId, ra_seq:range(Indexes), To]),
                     %% there are live indexes to send before the snapshot
-                    %% %% TODO: only send live indexes higher than the follower's
-                    %% last_applied index
+                    %% TODO: write ra_seq:list_chunk function to avoid expansion
                     Idxs = lists:reverse(ra_seq:expand(Indexes)),
                     Flru = lists:foldl(
                              fun (Is, F0) ->
