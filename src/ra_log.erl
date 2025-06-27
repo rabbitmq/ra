@@ -1481,7 +1481,7 @@ stage_entries0(Cfg, [Entry | Rem], Mt0) ->
             stage_entries0(Cfg, Rem, Mt);
         {error, overwriting} ->
             Range = ra_mt:range(Mt0),
-            Msg = io_lib:format("ra_log:verify_entries/2 "
+            Msg = io_lib:format("ra_log:stage_entries/3 "
                                 "tried writing ~p - mem table range ~w",
                                 [Rem, Range]),
             {error, {integrity_error, lists:flatten(Msg)}}
