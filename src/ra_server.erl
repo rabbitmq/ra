@@ -1552,12 +1552,12 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             %% reset last index to last applied
             %% as we dont know for sure indexes after last applied
             %% are of the right term
-            {LastIndex, _} = ra_log:last_index_term(Log00),
+            {LastIdx, _} = ra_log:last_index_term(Log00),
             {Log, _} = lists:foldl(
                        fun ({I, _, _} = E, {L0, LstIdx}) ->
                                {ok, L} = ra_log:write_sparse(E, LstIdx, L0),
                                {L, I}
-                       end, {Log00, LastIndex}, ChunkOrEntries),
+                       end, {Log00, LastIdx}, ChunkOrEntries),
             ?DEBUG("~ts: receiving snapshot log last index ~p",
                    [LogId, ra_log:last_index_term(Log)]),
             State = update_term(Term, State0#{log => Log}),
