@@ -506,7 +506,8 @@ write_sparse({Idx, Term, _} = Entry, PrevIdx0,
     Tid = ra_mt:tid(Mt),
     PrevIdx = case PrevIdx0 of
                   undefined ->
-                      Idx - 1;
+                      %% this is likely to always be accepted
+                      0;
                   _ ->
                       PrevIdx0
               end,
@@ -707,6 +708,7 @@ last_written(#?MODULE{last_written_index_term = LWTI}) ->
 set_last_index(Idx, #?MODULE{cfg = Cfg,
                              range = Range,
                              snapshot_state = SnapState,
+                             mem_table = Mt0,
                              last_written_index_term = {LWIdx0, _}} = State0) ->
     Cur = ra_snapshot:current(SnapState),
     case fetch_term(Idx, State0) of
@@ -716,10 +718,13 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
         {_, State} when element(1, Cur) =:= Idx ->
             {_, SnapTerm} = Cur,
             %% Idx is equal to the current snapshot
+            {ok, Mt} = ra_log_ets:new_mem_table_please(Cfg#cfg.names,
+                                                       Cfg#cfg.uid, Mt0),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, Idx),
             {ok, State#?MODULE{range = ra_range:limit(Idx + 1, Range),
                                last_term = SnapTerm,
+                                mem_table = Mt,
                                last_written_index_term = Cur}};
         {Term, State1} ->
             LWIdx = min(Idx, LWIdx0),
@@ -729,10 +734,13 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
             %% to write to the mem table it will detect this and open
             %% a new one
             true = LWTerm =/= undefined,
+            {ok, Mt} = ra_log_ets:new_mem_table_please(Cfg#cfg.names,
+                                                       Cfg#cfg.uid, Mt0),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LWIdx),
             {ok, State2#?MODULE{range = ra_range:limit(Idx + 1, Range),
                                 last_term = Term,
+                                mem_table = Mt,
                                 last_written_index_term = {LWIdx, LWTerm}}}
     end.
 

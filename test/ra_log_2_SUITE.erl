@@ -33,6 +33,8 @@ all_tests() ->
      last_written_overwrite,
      last_written_overwrite_2,
      last_index_reset,
+     write_sparse_after_index_reset,
+     write_sparse_after_index_reset_segments,
      last_index_reset_before_written,
      recovery,
      recover_many,
@@ -721,19 +723,97 @@ last_written_overwrite_2(Config) ->
 
 last_index_reset(Config) ->
     Log0 = ra_log_init(Config),
-    Log1 = write_n(1, 5, 1, Log0),
+    Log1 = write_n(1, 6, 1, Log0),
     Pred = fun (L) ->
-                   {4, 1} == ra_log:last_written(L)
+                   {5, 1} == ra_log:last_written(L)
            end,
     Log2 = assert_log_events(Log1, Pred, 2000),
-    5 = ra_log:next_index(Log2),
-    {4, 1} = ra_log:last_index_term(Log2),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
     % reverts last index to a previous index
     % needs to be done if a new leader sends an empty AER
     {ok, Log3} = ra_log:set_last_index(3, Log2),
     {3, 1} = ra_log:last_written(Log3),
     4 = ra_log:next_index(Log3),
     {3, 1} = ra_log:last_index_term(Log3),
+    O = ra_log:overview(Log3),
+    ct:pal("o ~p", [O]),
+    ?assertMatch(#{range := {0, 3},
+                   %% we have a new mem table but the mem table does not know
+                   %% whatever the first index should be so reports the
+                   %% full previous range, this will be corrected after the
+                   %% next write at index 4
+                   mem_table_range := {0, 5}},
+                 O),
+    {ok, Log} = ra_log:write([{4, 2, hi}], Log3),
+    O2 = ra_log:overview(Log),
+    ct:pal("o ~p", [O2]),
+    ?assertMatch(#{range := {0, 4},
+                   mem_table_range := {0, 4}},
+                 O2),
+    ok.
+
+write_sparse_after_index_reset(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 2000),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log3} = ra_log:set_last_index(3, Log2),
+    {3, 1} = ra_log:last_written(Log3),
+    4 = ra_log:next_index(Log3),
+    {3, 1} = ra_log:last_index_term(Log3),
+    O = ra_log:overview(Log3),
+    ct:pal("o ~p", [O]),
+    {ok, Log4} = ra_log:write_sparse({7, 1, hi}, undefined, Log3),
+    {ok, Log} = ra_log:write_sparse({17, 1, hi}, 7, Log4),
+    O2 = ra_log:overview(Log),
+    ct:pal("o ~p", [O2]),
+    ?assertMatch(#{range := {0, 17},
+                   mem_table_range := {0, 17}},
+                 O2),
+    ok.
+
+write_sparse_after_index_reset_segments(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 2000),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    Log2b = deliver_all_log_events(Log2, 500),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log3} = ra_log:set_last_index(3, Log2b),
+    {3, 1} = ra_log:last_written(Log3),
+    4 = ra_log:next_index(Log3),
+    {3, 1} = ra_log:last_index_term(Log3),
+    O = ra_log:overview(Log3),
+    ct:pal("o ~p", [O]),
+    {ok, Log4} = ra_log:write_sparse({7, 1, hi}, undefined, Log3),
+    {ok, Log5} = ra_log:write_sparse({17, 1, hi}, 7, Log4),
+    Log5b = deliver_all_log_events(Log5, 500),
+    O2 = ra_log:overview(Log5b),
+    ?assertMatch(#{range := {0, 17},
+                   mem_table_range := {7, 17}},
+                 O2),
+
+    %% try overwrite again
+    {ok, Log6} = ra_log:set_last_index(3, Log5b),
+    {3, 1} = ra_log:last_index_term(Log6),
+    {ok, Log7} = ra_log:write_sparse({7, 1, hi}, undefined, Log6),
+    {ok, Log8} = ra_log:write_sparse({17, 1, hi}, 7, Log7),
+    Log = deliver_all_log_events(Log8, 500),
+    O5 = ra_log:overview(Log),
+    ct:pal("o ~p", [O5]),
     ok.
 
 last_index_reset_before_written(Config) ->
