@@ -452,9 +452,11 @@ recover(#{cfg := #cfg{log_id = LogId,
     FromScan = CommitIndex + 1,
     {ToScan, _} = ra_log:last_index_term(Log0),
     ?DEBUG("~ts: scanning for cluster changes ~b:~b ", [LogId, FromScan, ToScan]),
+    %% if we're recovering after a partial sparse write phase this will fail
+    %%
     {State, Log} = ra_log:fold(FromScan, ToScan,
                                fun cluster_scan_fun/2,
-                               State1, Log0),
+                               State1, Log0, return),
 
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
     State#{log => Log,
@@ -1557,8 +1559,6 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                {ok, L} = ra_log:write_sparse(E, LstIdx, L0),
                                {L, I}
                        end, {Log00, LastIdx}, ChunkOrEntries),
-            ?DEBUG("~ts: receiving snapshot log last index ~p",
-                   [LogId, ra_log:last_index_term(Log)]),
             State = update_term(Term, State0#{log => Log}),
             {receive_snapshot, State, [{reply, Reply}]};
         next ->

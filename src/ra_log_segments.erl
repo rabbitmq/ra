@@ -21,7 +21,7 @@
          range/1,
          num_open_segments/1,
          update_first_index/2,
-         fold/5,
+         fold/6,
          sparse_read/3,
          read_plan/2,
          exec_read_plan/6,
@@ -285,14 +285,15 @@ compaction_conf(#?STATE{cfg = #cfg{compaction_conf = Conf}}) ->
 num_open_segments(#?STATE{open_segments = Open}) ->
      ra_flru:size(Open).
 
--spec fold(ra_index(), ra_index(), fun(), term(), state()) ->
+-spec fold(ra_index(), ra_index(), fun(), term(), state(),
+                                       MissingKeyStrategy :: error | return) ->
     {state(), term()}.
 fold(FromIdx, ToIdx, Fun, Acc,
-    #?STATE{cfg = #cfg{} = Cfg} = State0)
+    #?STATE{cfg = #cfg{} = Cfg} = State0, MissingKeyStrat)
   when ToIdx >= FromIdx ->
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_SEGMENT, ToIdx - FromIdx + 1),
-    segment_fold(State0, FromIdx, ToIdx, Fun, Acc);
-fold(_FromIdx, _ToIdx, _Fun, Acc, #?STATE{} = State) ->
+    segment_fold(State0, FromIdx, ToIdx, Fun, Acc, MissingKeyStrat);
+fold(_FromIdx, _ToIdx, _Fun, Acc, #?STATE{} = State, _Strat) ->
     {State, Acc}.
 
 -spec sparse_read(state(), [ra_index()], [log_entry()]) ->
@@ -453,7 +454,7 @@ segment_fold_plan(SegRefs, {_ReqStart, ReqEnd} = ReqRange, Acc) ->
 segment_fold(#?STATE{segment_refs = SegRefs,
                      open_segments = OpenSegs,
                      cfg = Cfg} = State,
-             RStart, REnd, Fun, Acc) ->
+             RStart, REnd, Fun, Acc, MissingKeyStrat) ->
     Plan = segment_fold_plan(SegRefs, {RStart, REnd}, []),
     {Op, A} =
         lists:foldl(
@@ -461,7 +462,7 @@ segment_fold(#?STATE{segment_refs = SegRefs,
                   {Seg, Open} = get_segment(Cfg, Open0, Fn),
                   {Open, ra_log_segment:fold(Seg, Start, End,
                                              fun binary_to_term/1,
-                                             Fun, Ac0)}
+                                             Fun, Ac0, MissingKeyStrat)}
           end, {OpenSegs, Acc}, Plan),
     {State#?MODULE{open_segments = Op}, A}.
 
