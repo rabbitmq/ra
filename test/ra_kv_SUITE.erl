@@ -21,7 +21,8 @@ all() ->
 all_tests() ->
     [
      basics,
-     snapshot_replication
+     snapshot_replication,
+     snapshot_replication_interrupted
     ].
 
 groups() ->
@@ -56,9 +57,63 @@ end_per_testcase(_TestCase, _Config) ->
 %%% Test cases
 %%%===================================================================
 
+-define(KV(N),
+        binary_to_atom(<<(atom_to_binary(?FUNCTION_NAME))/binary,
+                         (integer_to_binary(N))/binary>>)).
+
+snapshot_replication_interrupted(_Config) ->
+    Kv1 = ?KV(1), Kv2 = ?KV(2), Kv3 = ?KV(3),
+    Members = [{Kv1, node()}, {Kv2, node()}],
+    KvId = hd(Members),
+    {ok, _, _} = ra_kv:start_cluster(?SYS, ?FUNCTION_NAME,
+                                     #{members => Members}),
+    ra:transfer_leadership(KvId, KvId),
+    Data = crypto:strong_rand_bytes(100_000),
+    %% write 10k entries of the same key
+    [{ok, #{}} = ra_kv:put(KvId, term_to_binary(I), Data, 5000)
+     || I <- lists:seq(1, 50_000)],
+    ?assertMatch({ok, #{machine := #{num_keys := 50_000}}, KvId},
+                 ra:member_overview(KvId)),
+
+    ra_log_wal:force_roll_over(ra_log_wal),
+    ra_log_wal:last_writer_seq(ra_log_wal, <<>>),
+    ra_log_segment_writer:await(ra_log_segment_writer),
+    ok = ra:aux_command(KvId, take_snapshot),
+    ok = ra_lib:retry(
+           fun () ->
+                   {ok, #{log := #{snapshot_index := SnapIdx,
+                                   last_index := LastIdx}}, _} =
+                       ra:member_overview(KvId),
+                   SnapIdx == LastIdx
+           end, 100, 100),
+    KvId3 = {Kv3, node()},
+    ok = ra_kv:add_member(?SYS, KvId3, KvId),
+    KvId3Pid = whereis(Kv3),
+    ?assert(is_pid(KvId3Pid)),
+    %% wait for the follower to enter snapshot state
+    ok = ra_lib:retry(
+           fun () ->
+                   receive_snapshot == element(2, hd(ets:lookup(ra_state, Kv3)))
+           end, 100, 100),
+
+    ct:pal("ra_state ~p", [ets:tab2list(ra_state)]),
+    ok = ra:stop_server(?SYS, KvId3),
+    [{ok, #{}} = ra_kv:put(KvId, term_to_binary(I), Data, 5000)
+     || I <- lists:seq(50_001, 50_010)],
+    ok = ra:restart_server(?SYS, KvId3),
+    {ok, #{log := #{last_index := Kv1LastIndex  }}, _} = ra:member_overview(KvId),
+    ok = ra_lib:retry(
+           fun () ->
+                   {ok, #{log := #{last_index := LastIdx}}, _} =
+                       ra:member_overview(KvId3),
+                   Kv1LastIndex == LastIdx
+           end, 100, 100),
+    ra:delete_cluster([KvId, {Kv2, node()}, KvId3]),
+    ok.
 
 snapshot_replication(_Config) ->
-    Members = [{kv1, node()}, {kv2, node()}],
+    Kv1 = ?KV(1), Kv2 = ?KV(2), Kv3 = ?KV(3),
+    Members = [{Kv1, node()}, {Kv2, node()}],
     KvId = hd(Members),
     {ok, _, _} = ra_kv:start_cluster(?SYS, ?FUNCTION_NAME,
                                      #{members => Members}),
@@ -85,9 +140,9 @@ snapshot_replication(_Config) ->
                    SnapIdx == LastIdx
            end, 100, 100),
 
-    KvId3 = {kv3, node()},
+    KvId3 = {Kv3, node()},
     ok = ra_kv:add_member(?SYS, KvId3, KvId),
-    KvId3Pid = whereis(kv3),
+    KvId3Pid = whereis(Kv3),
     ?assert(is_pid(KvId3Pid)),
     {ok, #{}} = ra_kv:put(KvId, <<"k3">>, <<"k3-value">>, 5000),
     {ok, #{}} = ra_kv:put(KvId, <<"k4">>, <<"k4-value">>, 5000),
@@ -101,8 +156,8 @@ snapshot_replication(_Config) ->
                    Kv1LastIndex == LastIdx
            end, 100, 100),
     ct:pal("counters ~p", [ra_counters:counters(KvId3, [last_applied])]),
-    %% ensure kv3 did not crash during snapshot replication
-    ?assertEqual(KvId3Pid, whereis(kv3)),
+    %% ensure Kv3 did not crash during snapshot replication
+    ?assertEqual(KvId3Pid, whereis(Kv3)),
 
     ok = ra:stop_server(default, KvId3),
 
@@ -123,7 +178,8 @@ snapshot_replication(_Config) ->
     ok.
 
 basics(_Config) ->
-    Members = [{kv1, node()}],
+    Kv1 = ?KV(1), Kv2 = ?KV(2), _Kv3 = ?KV(3),
+    Members = [{Kv1, node()}],
     KvId = hd(Members),
     {ok, Members, _} = ra_kv:start_cluster(?SYS, ?FUNCTION_NAME,
                                           #{members => Members}),
@@ -164,7 +220,7 @@ basics(_Config) ->
                                                    undefined, 1000),
     ?assertEqual(3, map_size(Reads)),
     % ct:pal("ReadRes ~p", [Reads]),
-    KvId2 = {kv2, node()},
+    KvId2 = {Kv2, node()},
     ok = ra_kv:add_member(?SYS, KvId2, KvId),
     ok = ra_lib:retry(
            fun () ->
@@ -180,7 +236,6 @@ basics(_Config) ->
     ra_log_segment_writer:await(ra_log_segment_writer),
     {ok, {Reads3, _}} = ra_server_proc:read_entries(KvId2, [LastIdx | Live],
                                                     undefined, 1000),
-    ct:pal("ReadRes3 ~p", [Reads3]),
     ?assertEqual(3, map_size(Reads3)),
 
     %% TODO: test recovery of kv
