@@ -33,6 +33,9 @@ all_tests() ->
      last_written_overwrite,
      last_written_overwrite_2,
      last_index_reset,
+     fold_after_sparse_mem_table,
+     fold_after_sparse_segments,
+     write_sparse_re_init,
      write_sparse_after_index_reset,
      write_sparse_after_index_reset_segments,
      last_index_reset_before_written,
@@ -753,13 +756,87 @@ last_index_reset(Config) ->
                  O2),
     ok.
 
+fold_after_sparse_mem_table(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 500),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log2b} = ra_log:set_last_index(5, Log2),
+    {ok, Log3} = ra_log:write_sparse({7, 1, hi}, undefined, Log2b),
+    {ok, Log4} = ra_log:write_sparse({17, 1, hi}, 7, Log3),
+    Log = deliver_all_log_events(Log4, 500),
+    {Res, _Log} = ra_log:fold(1, 17,
+                              fun ({I, _, _}, Is) ->
+                                      [I | Is]
+                              end, [], Log, return),
+    ct:pal("Res ~p", [Res]),
+    ?assertMatch([5,4,3,2,1], Res),
+    ok.
+
+fold_after_sparse_segments(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 500),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log2b} = ra_log:set_last_index(5, Log2),
+    {ok, Log3} = ra_log:write_sparse({7, 1, hi}, undefined, Log2b),
+    {ok, Log4} = ra_log:write_sparse({17, 1, hi}, 7, Log3),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    Log = deliver_all_log_events(Log4, 500),
+    ra_log:fold(1, 17, fun (_, _) -> ok end, undefined, Log, return),
+    ok.
+
+write_sparse_re_init(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 500),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log2b} = ra_log:set_last_index(5, Log2),
+    {ok, Log3} = ra_log:write_sparse({7, 1, hi}, undefined, Log2b),
+    {ok, Log4} = ra_log:write_sparse({17, 1, hi}, 7, Log3),
+    Log = deliver_all_log_events(Log4, 500),
+
+    O = ra_log:overview(Log),
+    ct:pal("o ~p", [O]),
+    ra_log:close(Log),
+
+    ReInitLog = ra_log_init(Config),
+    O2 = ra_log:overview(ReInitLog ),
+    ct:pal("o2 ~p", [O2]),
+    ?assertEqual(maps:remove(last_wal_write, O),
+                 maps:remove(last_wal_write, O2)),
+
+
+    %% server init does a fold from last applied + 1 to last index which
+    %% will fail if the log head is sparse
+
+    ok.
+
 write_sparse_after_index_reset(Config) ->
     Log0 = ra_log_init(Config),
     Log1 = write_n(1, 6, 1, Log0),
     Pred = fun (L) ->
                    {5, 1} == ra_log:last_written(L)
            end,
-    Log2 = assert_log_events(Log1, Pred, 2000),
+    Log2 = assert_log_events(Log1, Pred, 500),
     6 = ra_log:next_index(Log2),
     {5, 1} = ra_log:last_index_term(Log2),
     % reverts last index to a previous index

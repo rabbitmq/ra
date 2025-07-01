@@ -12,6 +12,7 @@
          append/4,
          sync/1,
          fold/6,
+         fold/7,
          is_modified/1,
          read_sparse/4,
          read_sparse_no_checks/4,
@@ -300,7 +301,22 @@ fold(#state{cfg = #cfg{mode = read} = Cfg,
             cache = Cache,
             index = Index},
      FromIdx, ToIdx, Fun, AccFun, Acc) ->
-    fold0(Cfg, Cache, FromIdx, ToIdx, Index, Fun, AccFun, Acc).
+    fold0(Cfg, Cache, FromIdx, ToIdx, Index, Fun, AccFun, Acc,
+          error).
+
+-spec fold(state(),
+           FromIdx :: ra_index(),
+           ToIdx :: ra_index(),
+           fun((binary()) -> term()),
+           fun(({ra_index(), ra_term(), term()}, Acc) -> Acc), Acc,
+            MissingKeyStrat :: error | return) ->
+    Acc when Acc :: term().
+fold(#state{cfg = #cfg{mode = read} = Cfg,
+            cache = Cache,
+            index = Index},
+     FromIdx, ToIdx, Fun, AccFun, Acc, MissingKeyStrat) ->
+    fold0(Cfg, Cache, FromIdx, ToIdx, Index, Fun, AccFun, Acc,
+          MissingKeyStrat).
 
 -spec is_modified(state()) -> boolean().
 is_modified(#state{cfg = #cfg{fd = Fd},
@@ -403,10 +419,10 @@ term_query(#state{index = Index}, Idx) ->
         _ -> undefined
     end.
 
-fold0(_Cfg, _Cache, Idx, FinalIdx, _, _Fun, _AccFun, Acc)
+fold0(_Cfg, _Cache, Idx, FinalIdx, _, _Fun, _AccFun, Acc, _)
   when Idx > FinalIdx ->
     Acc;
-fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0) ->
+fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0, MissingKeyStrat) ->
     case Index of
         #{Idx := {Term, Offset, Length, Crc} = IdxRec} ->
             case pread(Cfg, Cache0, Offset, Length) of
@@ -415,7 +431,8 @@ fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0) ->
                     case validate_checksum(Crc, Data) of
                         true ->
                             Acc = AccFun({Idx, Term, Fun(Data)}, Acc0),
-                            fold0(Cfg, Cache, Idx+1, FinalIdx, Index, Fun, AccFun, Acc);
+                            fold0(Cfg, Cache, Idx+1, FinalIdx,
+                                  Index, Fun, AccFun, Acc, MissingKeyStrat);
                         false ->
                             %% CRC check failures are irrecoverable
                             exit({ra_log_segment_crc_check_failure, Idx, IdxRec,
@@ -426,8 +443,10 @@ fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0) ->
                     exit({ra_log_segment_unexpected_eof, Idx, IdxRec,
                           Cfg#cfg.filename})
             end;
-        _ ->
-            exit({missing_key, Idx, Cfg#cfg.filename})
+        _ when  MissingKeyStrat == error ->
+            exit({missing_key, Idx, Cfg#cfg.filename});
+        _ when  MissingKeyStrat == return ->
+            Acc0
     end.
 
 -spec range(state()) -> option({ra_index(), ra_index()}).

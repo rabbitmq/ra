@@ -21,6 +21,7 @@ all() ->
 all_tests() ->
     [
      basics,
+     fold,
      record_flushed,
      record_flushed_after_set_first,
      record_flushed_prev,
@@ -42,24 +43,6 @@ all_tests() ->
 groups() ->
     [{tests, [], all_tests()}].
 
-init_per_suite(Config) ->
-    Config.
-
-end_per_suite(_Config) ->
-    ok.
-
-init_per_group(_Group, Config) ->
-    Config.
-
-end_per_group(_Group, _Config) ->
-    ok.
-
-init_per_testcase(_TestCase, Config) ->
-    Config.
-
-end_per_testcase(_TestCase, _Config) ->
-    ok.
-
 %%%===================================================================
 %%% Test cases
 %%%===================================================================
@@ -75,9 +58,40 @@ basics(_Config) ->
     499 = ra_mt:delete(Spec),
     ?assertEqual({500, 1000}, ra_mt:range(Mt2)),
     ?assertEqual(501, ets:info(Tid, size)),
+    ?assertEqual(lists:seq(510, 505, -1),
+                 ra_mt:fold(505, 510, fun ({I, _, _}, Acc) ->
+                                              [I | Acc]
+                                      end, [], Mt2)),
     {Spec2, Mt3} = ra_mt:record_flushed(Tid, [{1, 999}], Mt2),
     500 = ra_mt:delete(Spec2),
     ?assertEqual(1, ra_mt:lookup_term(1000, Mt3)),
+    ok.
+
+fold(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_mt:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 1000)),
+    {[Spec], Mt2} = ra_mt:set_first(500, Mt1),
+    499 = ra_mt:delete(Spec),
+    ?assertEqual({500, 1000}, ra_mt:range(Mt2)),
+    ?assertEqual(501, ets:info(Tid, size)),
+    ?assertEqual(lists:seq(510, 505, -1),
+                 ra_mt:fold(505, 510, fun ({I, _, _}, Acc) ->
+                                              [I | Acc]
+                                      end, [], Mt2)),
+    ?assertError({missing_key, 1001, _},
+                 ra_mt:fold(999, 1010,
+                            fun ({I, _, _}, Acc) ->
+                                    [I | Acc]
+                            end, [], Mt2)),
+    ?assertEqual([1000, 999],
+                 ra_mt:fold(999, 1010,
+                            fun ({I, _, _}, Acc) ->
+                                    [I | Acc]
+                            end, [], Mt2, return)),
     ok.
 
 record_flushed(_Config) ->

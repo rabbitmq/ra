@@ -21,6 +21,7 @@
          append_sync/2,
          write_sync/2,
          fold/5,
+         fold/6,
          sparse_read/2,
          partial_read/3,
          execute_read_plan/4,
@@ -491,7 +492,7 @@ write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
                                       [UId, Idx, Range])),
     {error, {integrity_error, Msg}}.
 
--spec write_sparse(log_entry(), ra:index(), state()) ->
+-spec write_sparse(log_entry(), option(ra:index()), state()) ->
     {ok, state()} | {error, wal_down | gap_detected}.
 write_sparse({Idx, Term, _} = Entry, PrevIdx0,
              #?MODULE{cfg = #cfg{uid = UId,
@@ -533,11 +534,18 @@ write_sparse({Idx, Term, _} = Entry, PrevIdx0,
 -spec fold(FromIdx :: ra_index(), ToIdx :: ra_index(),
            fun((log_entry(), Acc) -> Acc), Acc, state()) ->
     {Acc, state()} when Acc :: term().
+fold(From0, To0, Fun, Acc0, State) ->
+    fold(From0, To0, Fun, Acc0, State, error).
+
+-spec fold(FromIdx :: ra_index(), ToIdx :: ra_index(),
+           fun((log_entry(), Acc) -> Acc), Acc, state(),
+            MissingKeyStrategy :: error | return) ->
+    {Acc, state()} when Acc :: term().
 fold(From0, To0, Fun, Acc0,
      #?MODULE{cfg = Cfg,
               mem_table = Mt,
               range = {StartIdx, EndIdx},
-              reader = Reader0} = State)
+              reader = Reader0} = State, MissingKeyStrat)
   when To0 >= From0 andalso
        To0 >= StartIdx ->
 
@@ -550,22 +558,27 @@ fold(From0, To0, Fun, Acc0,
     case MtOverlap of
         {undefined, {RemStart, RemEnd}} ->
             {Reader, Acc} = ra_log_segments:fold(RemStart, RemEnd, Fun,
-                                               Acc0, Reader0),
+                                                 Acc0, Reader0,
+                                                 MissingKeyStrat),
             {Acc, State#?MODULE{reader = Reader}};
         {{MtStart, MtEnd}, {RemStart, RemEnd}} ->
             {Reader, Acc1} = ra_log_segments:fold(RemStart, RemEnd, Fun,
-                                                Acc0, Reader0),
-            Acc = ra_mt:fold(MtStart, MtEnd, Fun, Acc1, Mt),
+                                                  Acc0, Reader0,
+                                                  MissingKeyStrat),
+            Acc = ra_mt:fold(MtStart, MtEnd, Fun, Acc1, Mt, MissingKeyStrat),
             NumRead = MtEnd - MtStart + 1,
             ok = incr_counter(Cfg, ?C_RA_LOG_READ_MEM_TBL, NumRead),
             {Acc, State#?MODULE{reader = Reader}};
         {{MtStart, MtEnd}, undefined} ->
-            Acc = ra_mt:fold(MtStart, MtEnd, Fun, Acc0, Mt),
+            Acc = ra_mt:fold(MtStart, MtEnd, Fun, Acc0, Mt, MissingKeyStrat),
+            %% TODO: if fold is short circuited with MissingKeyStrat == return
+            %% this count isn't correct, it doesn't massively matter so leaving
+            %% for now
             NumRead = MtEnd - MtStart + 1,
             ok = incr_counter(Cfg, ?C_RA_LOG_READ_MEM_TBL, NumRead),
             {Acc, State}
     end;
-fold(_From, _To, _Fun, Acc, State) ->
+fold(_From, _To, _Fun, Acc, State, _) ->
     {Acc, State}.
 
 %% @doc Reads a list of indexes.

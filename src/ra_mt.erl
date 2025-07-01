@@ -6,7 +6,6 @@
 %% @hidden
 -module(ra_mt).
 
--include_lib("stdlib/include/assert.hrl").
 -include("ra.hrl").
 
 -export([
@@ -22,6 +21,7 @@
          lookup_term/2,
          tid_for/3,
          fold/5,
+         fold/6,
          get_items/2,
          record_flushed/3,
          set_first/2,
@@ -249,12 +249,6 @@ lookup_term(Idx, #?MODULE{tid = Tid,
         Term ->
             Term
     end.
-  % when ?IN_RANGE(Idx, Seq) ->
-  %   ets:lookup_element(Tid, Idx, 2);
-% lookup_term(Idx, #?MODULE{prev = #?MODULE{} = Prev}) ->
-  %   lookup_term(Idx, Prev);
-% lookup_term(_Idx, _State) ->
-  %   undefined.
 
 -spec tid_for(ra:index(), ra_term(), state()) ->
     undefined | ets:tid().
@@ -269,16 +263,28 @@ tid_for(Idx, Term, State) ->
             tid_for(Idx, Term, State#?MODULE.prev)
     end.
 
+-spec fold(ra:index(), ra:index(),
+           fun(), term(), state(), MissingKeyStrategy :: error | return) ->
+    term().
+fold(From, To, Fun, Acc, State, MissingKeyStrat)
+  when is_atom(MissingKeyStrat) andalso
+       To >= From ->
+    case lookup(From, State) of
+        undefined when MissingKeyStrat == error ->
+            error({missing_key, From, Acc});
+        undefined when MissingKeyStrat == return ->
+            Acc;
+        E ->
+            fold(From + 1, To, Fun, Fun(E, Acc),
+                 State, MissingKeyStrat)
+    end;
+fold(_From, _To, _Fun, Acc, _State, _Strat) ->
+    Acc.
+
 -spec fold(ra:index(), ra:index(), fun(), term(), state()) ->
     term().
-fold(To, To, Fun, Acc, State) ->
-    E = lookup(To, State),
-    Fun(E, Acc);
-fold(From, To, Fun, Acc, State)
-  when To > From ->
-    E = lookup(From, State),
-    ?assert(E =/= undefined),
-    fold(From + 1, To, Fun, Fun(E, Acc), State).
+fold(From, To, Fun, Acc, State) ->
+    fold(From, To, Fun, Acc, State, error).
 
 -spec get_items([ra:index()], state()) ->
     {[log_entry()],
