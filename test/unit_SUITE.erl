@@ -21,7 +21,7 @@ mods() ->
      ra_flru,
      ra_lib,
      ra_log,
-     ra_log_reader,
+     ra_log_segments,
      ra_log_segment,
      ra_monitors,
      ra_server,
