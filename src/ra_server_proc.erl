@@ -1410,6 +1410,8 @@ handle_effect(_RaftState, {send_rpc, To, Rpc}, _,
                                  incr_counter(Conf, ?C_RA_SRV_MSGS_SENT, 1),
                                  Self ! {update_peer, To, #{status => normal}}
                          end),
+            ?DEBUG("~ts: temporarily suspending peer ~w due to full distribution buffer",
+                   [log_id(State0), To]),
             {update_peer(To, #{status => suspended}, State0), Actions};
         noconnect ->
             %% for noconnects just allow it to pipeline and catch up later
@@ -1542,6 +1544,8 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
             %% node is connected
             %% leader effect only
             Machine = ra_server:machine(SS0),
+            %% temporary assertion
+            #{To := #{status := normal}} = ra_server:peers(SS0),
             Id = ra_server:id(SS0),
             Pid = spawn(fun () ->
                                 try send_snapshots(Id, Term, To,
