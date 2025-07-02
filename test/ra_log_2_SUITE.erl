@@ -1353,6 +1353,34 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
 
     ok.
 
+snapshot_installation_with_live_indexes(Config) ->
+    Log0 = ra_log_init(Config),
+    {0, 0} = ra_log:last_index_term(Log0),
+    Log1 = assert_log_events(write_n(1, 10, 2, Log0),
+                             fun (L) ->
+                                     LW = ra_log:last_written(L),
+                                     {9, 2} == LW
+                             end),
+
+    Log2 = Log1,
+
+    %% create snapshot chunk
+    Meta = meta(15, 2, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, #{}),
+    SnapState0 = ra_log:snapshot_state(Log2),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log3, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log2)),
+
+    run_effs(Effs4),
+    {15, _} = ra_log:last_index_term(Log3),
+    {15, _} = ra_log:last_written(Log3),
+    ok.
+
 snapshot_installation(Config) ->
     Log0 = ra_log_init(Config),
     {0, 0} = ra_log:last_index_term(Log0),
@@ -1794,7 +1822,12 @@ sparse_write(Config) ->
                                                                      SnapState1),
     run_effs(AEffs),
     Log3 = ra_log:set_snapshot_state(SnapState, Log2),
-    {ok, Log4, _} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes, Log3),
+    {ok, Log4, _} = ra_log:install_snapshot({15, 2}, ?MODULE,
+                                            LiveIndexes, Log3),
+
+    ct:pal("overview Log4 ~p", [ra_log:overview(Log4)]),
+    ?assertEqual(16, ra_log:next_index(Log4)),
+
     {ok, Log} = ra_log:write([{16, 1, <<>>}], Log4),
     {ResFinal, _} = ra_log:sparse_read(LiveIndexes, Log),
     ?assertMatch([{3, _, _},
