@@ -51,6 +51,7 @@
          promote_checkpoint/2,
          checkpoint/3,
          persist_last_applied/1,
+         peers/1,
          update_peer/3,
          update_disconnected_peers/3,
          handle_down/5,
@@ -168,7 +169,10 @@
     {cast, ra_server_id(), term()} |
     {send_vote_requests, [{ra_server_id(),
                            #request_vote_rpc{} | #pre_vote_rpc{}}]} |
-    {send_rpc, ra_server_id(), #append_entries_rpc{}} |
+    {send_rpc, ra_server_id(),
+     #append_entries_rpc{} |
+     #heartbeat_rpc{} |
+     #info_rpc{}} |
     {send_snapshot, To :: ra_server_id(),
      {Module :: module(), Ref :: term(),
       LeaderId :: ra_server_id(), Term :: ra_term()}} |
@@ -477,7 +481,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             ?WARN("~ts: saw append_entries_reply from unknown peer ~w",
                   [LogId, PeerId]),
             {leader, State0, []};
-        Peer0 = #{match_index := MI, next_index := NI} ->
+        #{match_index := MI, next_index := NI} = Peer0 ->
             Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, NextIdx)},
             State1 = put_peer(PeerId, Peer, State0),
@@ -1639,15 +1643,19 @@ handle_receive_snapshot(#append_entries_rpc{term = Term} = Msg,
     {follower, update_term(Term, clear_leader_id(State#{log => Log})),
      [{next_event, Msg}]};
 handle_receive_snapshot({ra_log_event, Evt},
-                        State = #{cfg := #cfg{id = _Id, log_id = LogId},
-                                  log := Log0}) ->
+                        #{cfg := #cfg{log_id = LogId},
+                          log := Log0} = State) ->
     ?DEBUG("~ts: ~s ra_log_event received: ~w",
           [LogId, ?FUNCTION_NAME, Evt]),
     % simply forward all other events to ra_log
     % whilst the snapshot is being received
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {receive_snapshot, State#{log => Log}, Effects};
-handle_receive_snapshot(receive_snapshot_timeout, #{log := Log0} = State) ->
+handle_receive_snapshot(receive_snapshot_timeout,
+                        #{cfg := #cfg{log_id = LogId},
+                          log := Log0} = State) ->
+    ?INFO("~ts: ~s receive snapshot timed out.",
+          [LogId, ?FUNCTION_NAME]),
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:abort_accept(SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
@@ -3312,7 +3320,8 @@ heartbeat_rpc_effects(Peers, Id, Term, QueryIndex) ->
                     end,
                     maps:to_list(Peers)).
 
-heartbeat_rpc_effect_for_peer(PeerId, Peer, Id, Term, QueryIndex) ->
+heartbeat_rpc_effect_for_peer(PeerId, #{status := normal} = Peer,
+                              Id, Term, QueryIndex) ->
     case maps:get(query_index, Peer, 0) < QueryIndex of
         true ->
             {true,
@@ -3322,7 +3331,9 @@ heartbeat_rpc_effect_for_peer(PeerId, Peer, Id, Term, QueryIndex) ->
                              leader_id = Id}}};
         false ->
             false
-    end.
+    end;
+heartbeat_rpc_effect_for_peer(_PeerId, _Peer, _Id, _Term, _QueryIndex) ->
+    false.
 
 heartbeat_rpc_quorum(NewQueryIndex, PeerId,
                      #{queries_waiting_heartbeats := Waiting0} = State) ->
