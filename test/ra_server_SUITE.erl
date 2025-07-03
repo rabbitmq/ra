@@ -273,7 +273,7 @@ recover_restores_cluster_changes(_Config) ->
 
     % n2 joins
     {leader, #{cluster := Cluster,
-               log := Log0}, _} =
+               log := Log0}, _Effs} =
         ra_server:handle_leader({command, {'$ra_join', meta(),
                                            N2, await_consensus}}, State),
     {LIdx, _} = ra_log:last_index_term(Log0),
