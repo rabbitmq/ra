@@ -51,6 +51,7 @@
          checkpoint/3,
          persist_last_applied/1,
          peers/1,
+         peer_status/2,
          update_peer/3,
          update_disconnected_peers/3,
          handle_down/5,
@@ -2528,6 +2529,14 @@ new_peer_with(Map) ->
 
 peers(#{cfg := #cfg{id = Id}, cluster := Peers}) ->
     maps:remove(Id, Peers).
+
+peer_status(PeerId, #{cluster := Peers}) ->
+    case Peers of
+        #{PeerId := #{status := Status}} ->
+            Status;
+        _ ->
+            undefined
+    end.
 
 %% remove any peers that are currently receiving a snapshot
 peers_with_normal_status(State) ->

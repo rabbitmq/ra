@@ -579,8 +579,13 @@ leader(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse
        Status =:= nodeup ->
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
-leader(info, {update_peer, PeerId, Update}, State0) ->
-    State = update_peer(PeerId, Update, State0),
+leader(info, {unsuspend_peer, PeerId}, State0) ->
+    State = case ra_server:peer_status(PeerId, State0#state.server_state) of
+                suspended ->
+                    update_peer(PeerId, #{status => normal}, State0);
+                _ ->
+                    State0
+            end,
     {keep_state, State, []};
 leader(_, tick_timeout, State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
@@ -1391,13 +1396,15 @@ handle_effects(RaftState, Effects0, EvtType, State0, Actions0) ->
     {State, lists:reverse(Actions)}.
 
 handle_effect(_RaftState, {send_rpc, To, Rpc}, _,
-              #state{conf = Conf} = State0, Actions) ->
+              #state{conf = Conf,
+                     server_state = SS} = State0, Actions) ->
     % fully qualified use only so that we can mock it for testing
     % TODO: review / refactor to remove the mod call here
+    PeerStatus = ra_server:peer_status(To, SS),
     case ?MODULE:send_rpc(To, Rpc, State0) of
         ok ->
             {State0, Actions};
-        nosuspend ->
+        nosuspend when PeerStatus == normal ->
             %% update peer status to suspended and spawn a process
             %% to send the rpc without nosuspend so that it will block until
             %% the data can get through
@@ -1408,11 +1415,13 @@ handle_effect(_RaftState, {send_rpc, To, Rpc}, _,
                                  %% the peer status back to normal
                                  ok = gen_statem:cast(To, Rpc),
                                  incr_counter(Conf, ?C_RA_SRV_MSGS_SENT, 1),
-                                 Self ! {update_peer, To, #{status => normal}}
+                                 Self ! {unsuspend_peer, To}
                          end),
-            ?DEBUG("~ts: temporarily suspending peer ~w due to full distribution buffer",
-                   [log_id(State0), To]),
+            % ?DEBUG("~ts: temporarily suspending peer ~w due to full distribution buffer ~W",
+            %        [log_id(State0), To, Rpc, 5]),
             {update_peer(To, #{status => suspended}, State0), Actions};
+        nosuspend ->
+            {State0, Actions};
         noconnect ->
             %% for noconnects just allow it to pipeline and catch up later
             {State0, Actions}
@@ -1975,6 +1984,8 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
             Result = read_chunks_and_send_rpc(RPC, To, ReadState, 1,
                                               ChunkSize, InstallTimeout,
                                               SnapState),
+            ?DEBUG("~ts: sending snapshot to ~w completed",
+                   [LogId, To]),
             ok = gen_statem:cast(Id, {To, Result})
     end.
 
