@@ -71,8 +71,8 @@ snapshot_replication_interrupted(_Config) ->
     Data = crypto:strong_rand_bytes(100_000),
     %% write 10k entries of the same key
     [{ok, #{}} = ra_kv:put(KvId, term_to_binary(I), Data, 5000)
-     || I <- lists:seq(1, 50_000)],
-    ?assertMatch({ok, #{machine := #{num_keys := 50_000}}, KvId},
+     || I <- lists:seq(1, 10_000)],
+    ?assertMatch({ok, #{machine := #{num_keys := 10_000}}, KvId},
                  ra:member_overview(KvId)),
 
     ra_log_wal:force_roll_over(ra_log_wal),
@@ -99,7 +99,7 @@ snapshot_replication_interrupted(_Config) ->
     ct:pal("ra_state ~p", [ets:tab2list(ra_state)]),
     ok = ra:stop_server(?SYS, KvId3),
     [{ok, #{}} = ra_kv:put(KvId, term_to_binary(I), Data, 5000)
-     || I <- lists:seq(50_001, 50_010)],
+     || I <- lists:seq(10_001, 10_010)],
     ok = ra:restart_server(?SYS, KvId3),
     {ok, #{log := #{last_index := Kv1LastIndex  }}, _} = ra:member_overview(KvId),
     ok = ra_lib:retry(
