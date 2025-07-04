@@ -573,6 +573,14 @@ decr_counter(#cfg{counter = undefined}, _, _) ->
 segment_files(Dir, Fun) ->
     list_files(Dir, ".segment", Fun).
 
+% delete_files(Dir, Ext) ->
+%     case list_files(Dir, Ext, fun (_) -> true end) of
+%         [] ->
+%             ok;
+%         Files ->
+%             [prim_file:delete(filename:join(Dir, F)) || F <- Files]
+%     end.
+
 list_files(Dir, Ext) ->
     list_files(Dir, Ext, fun (_) -> true end).
 
@@ -622,10 +630,13 @@ major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
                                          CompConf),
     Compacted0 =
     [begin
+         %% create a compaction marker with the compaction group i
+         CompactionMarker = filename:join(Dir, with_ext(CompGroupLeaderFn,
+                                                        ".compaction_group")),
+         ok = ra_lib:write_file(CompactionMarker, term_to_binary(All)),
          %% create a new segment with .compacting extension
-         AllShortFns = [F || {_, _, {F, _}} <- All],
-         CompactingShortFn = make_compacting_file_name(AllShortFns),
-         CompactingFn = filename:join(Dir, CompactingShortFn),
+         CompactingFn = filename:join(Dir, with_ext(CompGroupLeaderFn,
+                                                    ".compacting")),
          %% max_count is the sum of all live indexes for segments in the
          %% compaction group
          MaxCount = lists:sum([ra_seq:length(S) || {_, S, _} <- All]),
@@ -641,28 +652,24 @@ major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
                      end, CompSeg0, All),
          ok = ra_log_segment:close(CompSeg),
 
-         %% link .compacting segment to the original .segment file
-         %% first we have to create a hard link to a new .compacted file
-         %% from the .compacting file (as we need to keep this as a marker
-         %% until the end
-         %% then we can rename this on top of the first segment file in the
-         %% group (the target)
-         FirstSegmentFn = filename:join(Dir, FstFn0),
-         CompactedFn = filename:join(Dir, with_ext(FstFn0, ".compacted")),
-         ok = prim_file:make_link(CompactingFn, CompactedFn),
-         ok = prim_file:rename(CompactedFn, FirstSegmentFn),
+         FirstSegmentFn = filename:join(Dir, CompGroupLeaderFn),
 
          %% perform sym linking of the additional segments in the compaction
-         %% group
-         ok = make_links(Dir, FirstSegmentFn,
-                         [F || {_, _, {F, _}} <- Additional]),
-         %% finally deleted the .compacting file to signal compaction group
-         %% is complete
-         ok = prim_file:delete(CompactingFn),
+         %% group, the target is not yet updated which can be detected at
+         %% recovery by the presence of a sym link _and_ the .compacting
+         %% file
+         ok = make_symlinks(Dir, FirstSegmentFn,
+                            [F || {_, _, {F, _}} <- Additional]),
+
+         %% rename the .compacting segment on top of the group leader
+         ok = prim_file:rename(CompactingFn, FirstSegmentFn),
+         %% finally delete the .compaction_marker file to signal
+         %% compaction group is complete
+         ok = prim_file:delete(CompactionMarker),
          %% return the new segref and additional segment keys
          {ra_log_segment:segref(FirstSegmentFn),
           [A || {_, _, {A, _}} <- Additional]}
-     end || [{_Info, _, {FstFn0, _}} | Additional] = All
+     end || [{_Info, _, {CompGroupLeaderFn, _}} | Additional] = All
             <- CompactionGroups],
 
     {Compacted, AddDelete} = lists:unzip(Compacted0),
@@ -705,7 +712,7 @@ compactable_segrefs(SnapIdx, State) ->
                         end, [], Compactable)
     end.
 
-make_links(Dir, To, From)
+make_symlinks(Dir, To, From)
   when is_list(From) ->
     [begin
          SymFn = filename:join(Dir, with_ext(FromFn, ".link")),
@@ -769,55 +776,77 @@ take_group([{#{num_entries := NumEnts,
             {lists:reverse(Acc), Rem}
     end.
 
-
-parse_compacting_filename(Fn) when is_binary(Fn) ->
-    binary:split(filename:rootname(Fn), <<"-">>, [global]).
-
-make_compacting_file_name([N1 | Names]) ->
-    Root = lists:foldl(fun (N, Acc) ->
-                               [filename:rootname(N), <<"-">> | Acc]
-                       end, [N1], Names),
-    iolist_to_binary(lists:reverse([<<".compacting">> | Root])).
-
 recover_compaction(Dir) ->
-    case list_files(Dir, ".compacting") of
+    case list_files(Dir, ".compaction_group") of
         [] ->
             %% no pending compactions
             #compaction_result{};
-        [ShortFn] ->
-            %% compaction recovery is needed
-            CompactingFn = filename:join(Dir, ShortFn),
-            {ok, #file_info{links = Links}} =
-                file:read_link_info(CompactingFn, [raw, {time, posix}]),
-            case Links of
-                1 ->
-                    %% must have exited before the target file was renamed
-                    %% just delete
-                    ok = prim_file:delete(CompactingFn),
-                    #compaction_result{};
-                2 ->
-                    [FstFn | RemFns] = parse_compacting_filename(ShortFn),
-                    %% there may be a .compacted file
-                    Target = filename:join(Dir, with_ext(FstFn, ".segment")),
-                    case list_files(Dir, ".compacted") of
-                        [CompactedShortFn] ->
-                            CompactedFn = filename:join(Dir, CompactedShortFn),
-                            %% all entries were copied but it failed before
-                            %% this hard link could be renamed over the target
-                            ok = prim_file:rename(CompactedFn, Target),
-                            ok;
-                        [] ->
-                            %% links may not have been fully created,
-                            %% delete all .link files then relink
-                            ok
-                    end,
-                    ok = make_links(Dir, Target, RemFns),
-                    ok = prim_file:delete(CompactingFn),
+        [CompactionGroupFn0] ->
+            %% compaction recovery is needed as there is a .compaction_group file
+            CompactionGroupFn = filename:join(Dir, CompactionGroupFn0),
+            %% if corrupt, just delete .compaction_group file
+            {ok, Bin} = prim_file:read_file(CompactionGroupFn),
+            CompactionGroup = try binary_to_term(Bin) of
+                                  Group ->
+                                      Group
+                              catch _:_ ->
+                                        %% any error just return empty
+                                        _ = prim_file:delete(CompactionGroupFn),
+                                        []
+                              end,
 
-                    Linked = [with_ext(L, ".segment") || L <- RemFns],
-                    Compacted = [ra_log_segment:segref(Target)],
-                    #compaction_result{compacted = Compacted,
-                                       linked = Linked}
+            %% there _may_ be a .compacting file
+            CompactingFn = filename:join(Dir, with_ext(CompactionGroupFn0,
+                                                       ".compacting")),
+
+            case CompactionGroup of
+                [] ->
+                    #compaction_result{};
+                [_] ->
+                    %% single segment compaction, we cannot know if the
+                    %% compaction into the compacting segment completed or
+                    %% not
+                    %% ignore return value as CompactingFn may not exist
+                    _ = prim_file:delete(CompactingFn),
+                    ok = prim_file:delete(CompactionGroupFn),
+                    #compaction_result{};
+                [TargetShortFn | [FstLinkSeg | _] = LinkTargets] ->
+                    %% multiple segments in group,
+                    %% if any of the additional segments is a symlink
+                    %% the writes to the .compacting segment completed and we
+                    %% can complete the compaction work
+                    FstLinkSegFn = filename:join(Dir, FstLinkSeg),
+                    FstLinkSegLinkFn = filename:join(Dir, with_ext(FstLinkSeg, ".link")),
+                    Target = filename:join(Dir, TargetShortFn),
+                    AtLeastOneLink = ra_lib:is_any_file(FstLinkSegLinkFn),
+                    CompactingExists = ra_lib:is_any_file(CompactingFn),
+                    case file:read_link_info(FstLinkSegFn, [raw]) of
+                        {ok, #file_info{type = Type}}
+                          when Type == symlink orelse
+                               AtLeastOneLink ->
+                            %% it is a symlink, recreate all symlinks and delete
+                            %% compaction marker
+                            ok = make_symlinks(Dir, Target, LinkTargets),
+                            %% if compacting file exists, rename it to target
+                            if CompactingExists ->
+                                   ok = prim_file:rename(CompactingFn, Target);
+                               true ->
+                                   ok
+                            end,
+                            ok = prim_file:delete(CompactionGroupFn),
+                            Compacted = [ra_log_segment:segref(Target)],
+                            #compaction_result{compacted = Compacted,
+                                               linked = LinkTargets};
+                        {error, enoent} ->
+                            %% segment does not exist indicates what exactly?
+                            _ = prim_file:delete(CompactingFn),
+                            ok = prim_file:delete(CompactionGroupFn),
+                            #compaction_result{};
+                        {ok, #file_info{type = regular}} ->
+                            _ = prim_file:delete(CompactingFn),
+                            ok = prim_file:delete(CompactionGroupFn),
+                            #compaction_result{}
+                    end
             end
     end.
 
