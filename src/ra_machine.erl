@@ -72,6 +72,7 @@
          snapshot_installed/5,
          state_enter/3,
          overview/2,
+         live_indexes/2,
          query/3,
          module/1,
          init_aux/2,
@@ -224,6 +225,7 @@
                      handle_aux/5,
                      handle_aux/6,
                      overview/1,
+                     live_indexes/1,
                      snapshot_module/0,
                      version/0,
                      which_module/1
@@ -289,6 +291,8 @@
 
 -callback overview(state()) -> map().
 
+-callback live_indexes(state()) -> [ra:index()].
+
 -callback snapshot_module() -> module().
 
 -callback version() -> version().
@@ -346,11 +350,17 @@ state_enter(Mod, RaftState, State) ->
 overview(Mod, State) ->
     ?OPT_CALL(Mod:overview(State), State).
 
+-spec live_indexes(module(), state()) -> [ra:index()].
+live_indexes(Mod, State) ->
+    ?OPT_CALL(Mod:live_indexes(State), []).
+
 %% @doc used to discover the latest machine version supported by the current
 %% code
--spec version(machine()) -> version().
+-spec version(machine() | module()) -> version().
+version(Mod) when is_atom(Mod) ->
+    ?OPT_CALL(assert_version(Mod:version()), ?DEFAULT_VERSION);
 version({machine, Mod, _}) ->
-    ?OPT_CALL(assert_version(Mod:version()), ?DEFAULT_VERSION).
+    version(Mod).
 
 -spec is_versioned(machine()) -> boolean().
 is_versioned({machine, Mod, _}) ->
