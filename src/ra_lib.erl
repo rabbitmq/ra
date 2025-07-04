@@ -49,6 +49,7 @@
          lists_shuffle/1,
          is_dir/1,
          is_file/1,
+         is_any_file/1,
          ensure_dir/1,
          consult/1,
          cons/2
@@ -461,6 +462,14 @@ is_dir(Dir) ->
 is_file(File) ->
     case prim_file:read_file_info(File) of
         {ok, #file_info{type = regular}} ->
+            true;
+        _ ->
+            false
+    end.
+
+is_any_file(File) ->
+    case prim_file:read_file_info(File) of
+        {ok, #file_info{}} ->
             true;
         _ ->
             false

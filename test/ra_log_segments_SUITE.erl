@@ -25,6 +25,8 @@ all_tests() ->
     [
      recover1,
      recover2,
+     recover3,
+     recover4,
      basics,
      major,
      major_max_size,
@@ -117,22 +119,48 @@ recover1(Config) ->
     %% where linked (.compacting link count > 1)
 
     Dir = ?config(dir, Config),
-    CompactingFn = <<"0000000000000001-0000000000000002-0000000000000003.compacting">>,
+    CompactionGroupFn = filename:join(Dir, <<"0000000000000001.compaction_group">>),
+    SegmentFn = <<"0000000000000001.segment">>,
+    CompactingFn = filename:join(Dir, <<"0000000000000001.compacting">>),
     Scen =
     [
      {entries, 1, lists:seq(1, 128 * 4)},
      {assert, fun (_) ->
-                      ok = ra_lib:write_file(filename:join(Dir, CompactingFn), <<>>),
+                      Group = term_to_binary([SegmentFn]),
+                      ok = ra_lib:write_file(CompactionGroupFn, Group),
+                      ok = ra_lib:write_file(CompactingFn, <<>>),
                       true
               end},
      reinit,
      {assert, fun (_) ->
-                      %% a compacting file with 1 link only should just be deleted
-                      %% during init
-                      not filelib:is_file(filename:join(Dir, CompactingFn))
+                      %% compaction groups and compacting files should be removed
+                      not filelib:is_file(CompactionGroupFn) andalso
+                      not filelib:is_file(CompactingFn)
+              end},
+     {assert, fun (_) ->
+                      %% only compaction_group case
+                      Group = term_to_binary([SegmentFn]),
+                      ok = ra_lib:write_file(CompactionGroupFn, Group),
+                      true
+              end},
+     reinit,
+     {assert, fun (_) ->
+                      %% compaction groups and compacting files should be removed
+                      not filelib:is_file(CompactionGroupFn) andalso
+                      not filelib:is_file(CompactingFn)
+              end},
+     {assert, fun (_) ->
+                      %% partially written compaction_group file case
+                      ok = ra_lib:write_file(CompactionGroupFn, <<"banana">>),
+                      true
+              end},
+     reinit,
+     {assert, fun (_) ->
+                      %% compaction groups and compacting files should be removed
+                      not filelib:is_file(CompactionGroupFn) andalso
+                      not filelib:is_file(CompactingFn)
               end}
     ],
-    ct:pal("infos ~p", [infos(Dir)]),
     SegConf = #{max_count => 128},
     Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
     run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
@@ -142,61 +170,161 @@ recover2(Config) ->
     Dir = ?config(dir, Config),
     LiveList = lists:seq(1, 128 * 3, 8),
     Live = ra_seq:from_list(LiveList),
-    CompactingShortFn = <<"0000000000000001-0000000000000002-0000000000000003.compacting">>,
-    CompactingFn = filename:join(Dir, CompactingShortFn),
+    CompactionGroupFn = filename:join(Dir, <<"0000000000000001.compaction_group">>),
+    CompactingFn = filename:join(Dir, <<"0000000000000001.compacting">>),
     Scen =
     [
      {entries, 1, lists:seq(1, 128 * 4)},
      {assert, fun (_) ->
-                      %% fake a .compacting file, and perform a copy
-                      %% (this code is copied from ra_log_segments
-                      All = lists:reverse(tl(seg_refs(Dir))),
-                      {ok, CompSeg0} = ra_log_segment:open(CompactingFn,
-                                                           #{max_count => 128}),
-                      CompSeg = lists:foldl(
-                                  fun ({F, R}, S0) ->
-                                          L = ra_seq:in_range(R, Live),
-                                          {ok, S} = ra_log_segment:copy(
-                                                      S0, filename:join(Dir, F),
-                                                      ra_seq:expand(L)),
-                                          S
-                                  end, CompSeg0, All),
-                      ok = ra_log_segment:close(CompSeg),
-                      [{FstFn, _}, {SndFn, _}, {_ThrFn, _}] = All,
+                      %% compactable segrefs
+                      SegRefs = lists:reverse(tl(seg_refs(Dir))),
+                      Segments = [F || {F, _} <- SegRefs],
+                      %% write compaction_group file
+                      ok = ra_lib:write_file(CompactionGroupFn,
+                                             term_to_binary(Segments)),
+                      do_compaction(Dir, CompactingFn, Live, SegRefs),
 
-                      CompactedFn = filename:join(Dir, with_ext(FstFn, ".compacted")),
-                      ok = prim_file:make_link(CompactingFn, CompactedFn),
+                      [{FstFn, _}, {SndFn, _}, {_ThrFn, _}] = SegRefs,
+
+                      %% create a .link for for the second compacted segment
+                      %% and symlink it to the first segment in the compaction
+                      %% group
                       FirstSegmentFn = filename:join(Dir, FstFn),
-                      ok = prim_file:rename(CompactedFn, FirstSegmentFn),
-                      % SecondFn = filename:join(Dir, SndFn),
                       SndLinkFn = filename:join(Dir, with_ext(SndFn, ".link")),
                       ok = prim_file:make_symlink(FirstSegmentFn, SndLinkFn),
-                      %% the first segment has now been replaced with a link
-                      %% to the compacting segment but not all symlinks may have been created
+
+                      %% rename the .link file on top of the .segment file
+                      SndSegFn = filename:join(Dir, SndFn),
+                      ok = prim_file:rename(SndLinkFn, SndSegFn),
+                      %% this simulates a case where it stopped after only
+                      %% creating 1 of the two symlinks
                       true
             end},
      reinit,
+     {assert, 1, LiveList},
      {assert, fun (_) ->
                       Infos = infos(Dir),
+                      ct:pal("Infos ~p", [Infos]),
                       NumLinks = length([a || #{file_type := symlink} <- Infos]),
                       %% a compacting file with 1 link only should just be deleted
                       %% during init
                       not filelib:is_file(CompactingFn) andalso
+                      not filelib:is_file(CompactionGroupFn) andalso
                       NumLinks == 2
               end},
+     {assert, 1, LiveList},
+     {assert, fun(S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      SegRefs == seg_refs(Dir)
+              end}
+    ],
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, #{max_count => 128}} | Config], Segs0, Scen),
+    ok.
+
+recover3(Config) ->
+    Dir = ?config(dir, Config),
+    LiveList = lists:seq(1, 128 * 3, 8),
+    Live = ra_seq:from_list(LiveList),
+    CompactionGroupFn = filename:join(Dir, <<"0000000000000001.compaction_group">>),
+    CompactingFn = filename:join(Dir, <<"0000000000000001.compacting">>),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 128 * 4)},
+     {assert, fun (_) ->
+                      %% compactable segrefs
+                      SegRefs = lists:reverse(tl(seg_refs(Dir))),
+                      Segments = [F || {F, _} <- SegRefs],
+                      %% write compaction_group file
+                      ok = ra_lib:write_file(CompactionGroupFn,
+                                             term_to_binary(Segments)),
+                      do_compaction(Dir, CompactingFn, Live, SegRefs),
+
+                      [{FstFn, _}, {SndFn, _}, {_ThrFn, _}] = SegRefs,
+
+                      %% create a .link for for the second compacted segment
+                      %% and symlink it to the first segment in the compaction
+                      %% group
+                      FirstSegmentFn = filename:join(Dir, FstFn),
+                      SndLinkFn = filename:join(Dir, with_ext(SndFn, ".link")),
+                      ok = prim_file:make_symlink(FirstSegmentFn, SndLinkFn),
+                      true
+            end},
+     reinit,
+     {assert, 1, LiveList},
+     {assert, fun (_) ->
+                      Infos = infos(Dir),
+                      ct:pal("Infos ~p", [Infos]),
+                      NumLinks = length([a || #{file_type := symlink} <- Infos]),
+                      %% a compacting file with 1 link only should just be deleted
+                      %% during init
+                      not filelib:is_file(CompactingFn) andalso
+                      not filelib:is_file(CompactionGroupFn) andalso
+                      NumLinks == 2
+              end},
+     {assert, 1, LiveList},
+     {assert, fun(S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      SegRefs == seg_refs(Dir)
+              end}
+    ],
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, #{max_count => 128}} | Config], Segs0, Scen),
+    ok.
+
+recover4(Config) ->
+    Dir = ?config(dir, Config),
+    LiveList = lists:seq(1, 128 * 3, 8),
+    Live = ra_seq:from_list(LiveList),
+    CompactionGroupFn = filename:join(Dir, <<"0000000000000001.compaction_group">>),
+    CompactingFn = filename:join(Dir, <<"0000000000000001.compacting">>),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 128 * 4)},
+     {assert, fun (_) ->
+                      %% compactable segrefs
+                      SegRefs = lists:reverse(tl(seg_refs(Dir))),
+                      Segments = [F || {F, _} <- SegRefs],
+                      %% write compaction_group file
+                      ok = ra_lib:write_file(CompactionGroupFn,
+                                             term_to_binary(Segments)),
+                      do_compaction(Dir, CompactingFn, Live, SegRefs),
+
+                      [{FstFn, _}, {SndFn, _}, {ThrFn, _}] = SegRefs,
+
+                      %% create a .link for for the second compacted segment
+                      %% and symlink it to the first segment in the compaction
+                      %% group
+                      FirstSegmentFn = filename:join(Dir, FstFn),
+                      SndLinkFn = filename:join(Dir, with_ext(SndFn, ".link")),
+                      ok = prim_file:make_symlink(FirstSegmentFn, SndLinkFn),
+                      ThrLinkFn = filename:join(Dir, with_ext(ThrFn, ".link")),
+                      ok = prim_file:make_symlink(FirstSegmentFn, ThrLinkFn),
+                      %% all symlinks completed but .compacting file was not
+                      %% renamed
+                      true
+            end},
+     reinit,
+     {assert, 1, LiveList},
+     {assert, fun (_) ->
+                      Infos = infos(Dir),
+                      ct:pal("Infos ~p", [Infos]),
+                      NumLinks = length([a || #{file_type := symlink} <- Infos]),
+                      %% a compacting file with 1 link only should just be deleted
+                      %% during init
+                      not filelib:is_file(CompactingFn) andalso
+                      not filelib:is_file(CompactionGroupFn) andalso
+                      NumLinks == 2
+              end},
+     {assert, 1, LiveList},
      {assert, fun(S) ->
                       SegRefs = ra_log_segments:segment_refs(S),
                       ct:pal("SegRefs ~p, ~p", [SegRefs, seg_refs(Dir)]),
                       SegRefs == seg_refs(Dir)
               end}
-
-
-
     ],
-    SegConf = #{max_count => 128},
     Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
-    run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
-    ct:pal("infos ~p", [infos(Dir)]),
+    run_scenario([{seg_conf, #{max_count => 128}} | Config], Segs0, Scen),
     ok.
 
 basics(Config) ->
@@ -501,8 +629,8 @@ segment_files(Dir) ->
                         begin
                             Ext = filename:extension(F),
                             lists:member(Ext, [".segment",
-                                               ".compacting",
-                                               ".compacted",
+                                               % ".compacting",
+                                               % ".compacted",
                                                ".link"])
                         end],
             lists:sort(Files);
@@ -599,3 +727,17 @@ ra_log_segments_init(Config, Dir, SegRefs) ->
     ra_log_segments:init(UId, Dir, 1, random,
                          SegRefs, undefined,
                          CompConf, "").
+
+do_compaction(Dir, CompactingFn, Live, All) ->
+    {ok, CompSeg0} = ra_log_segment:open(CompactingFn,
+                                         #{max_count => 128}),
+    CompSeg = lists:foldl(
+                fun ({F, R}, S0) ->
+                        L = ra_seq:in_range(R, Live),
+                        {ok, S} = ra_log_segment:copy(
+                                    S0, filename:join(Dir, F),
+                                    ra_seq:expand(L)),
+                        S
+                end, CompSeg0, All),
+    ok = ra_log_segment:close(CompSeg),
+    ok.
