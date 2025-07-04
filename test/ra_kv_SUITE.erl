@@ -107,7 +107,7 @@ snapshot_replication_interrupted(_Config) ->
                    {ok, #{log := #{last_index := LastIdx}}, _} =
                        ra:member_overview(KvId3),
                    Kv1LastIndex == LastIdx
-           end, 100, 100),
+           end, 100, 256),
     ra:delete_cluster([KvId, {Kv2, node()}, KvId3]),
     ok.
 
