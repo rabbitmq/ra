@@ -18,6 +18,7 @@
 -export([
          start_cluster/3,
          add_member/3,
+         remove_member/3,
          member_overview/1,
 
          put/4,
@@ -70,8 +71,13 @@ start_cluster(System, ClusterName, #{members := ServerIds})
                end || Id <- ServerIds],
     ra:start_cluster(System, Configs).
 
-add_member(System, {Name, _} = Id, LeaderId) ->
-    {ok, Members, _} = ra:members(LeaderId),
+-spec add_member(System :: atom(),
+                 NewMemberId :: ra_server_id(),
+                 LeaderId :: ra_server_id()) ->
+    ok | {error, term()}.
+add_member(System, {Name, _} = Id, LeaderId0) ->
+    {ok, Members, LeaderId1} = ra:members(LeaderId0),
+    ?assert(not lists:member(Id, Members)),
     UId = ra:new_uid(ra_lib:to_binary(Name)),
     Machine = {module, ?MODULE, #{}},
     Config = #{id => Id,
@@ -81,9 +87,38 @@ add_member(System, {Name, _} = Id, LeaderId) ->
                                   min_snapshot_interval => 0},
                initial_members => Members,
                machine => Machine},
-    ok = ra:start_server(System, Config),
-    {ok, _, _} =  ra:add_member(LeaderId, Id),
-    ok.
+    %% TODO: rollback handling
+    maybe
+        %% first start the server
+        ok ?= ra:start_server(System, Config),
+        %% then add the member
+        {ok, {_, _} = IdxTerm, LeaderId} ?= ra:add_member(LeaderId1, Id),
+        %% then wait for the cluster change command to become applied
+        {ok, _, _} ?= ra:local_query(LeaderId, {ra_lib, ignore, []},
+                                    #{timeout => 30_000,
+                                      condition => {applied, IdxTerm}}),
+        ok
+    end.
+
+-spec remove_member(System :: atom(),
+                    NewMemberId :: ra_server_id(),
+                    LeaderId :: ra_server_id()) ->
+    ok | {error, term()}.
+remove_member(System, Id, LeaderId0) ->
+    {ok, Members, LeaderId1} = ra:members(LeaderId0),
+    ?assert(lists:member(Id, Members)),
+    maybe
+        ok ?= ra:stop_server(System, Id),
+        %% first remove the mem
+        {ok, {_, _} = IdxTerm, LeaderId} ?= ra:remove_member(LeaderId1, Id),
+        %% first start the server
+        %% then wait for the cluster change command to become applied
+        {ok, _, _} ?= ra:local_query(LeaderId, {ra_lib, ignore, []},
+                                    #{timeout => 30_000,
+                                      condition => {applied, IdxTerm}}),
+        ok ?= ra:force_delete_server(System, Id),
+        ok
+    end.
 
 member_overview(ServerId) ->
     case ra:member_overview(ServerId) of

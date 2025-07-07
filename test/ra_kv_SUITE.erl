@@ -257,5 +257,7 @@ basics(_Config) ->
                                                     undefined, 1000),
     ?assertEqual(Reads4, Reads5),
     ct:pal("counters ~p", [ra_counters:overview(KvId)]),
-    ra:delete_cluster([KvId, KvId2]),
+    ok = ra_kv:remove_member(?SYS, KvId2, KvId),
+    ct:pal("members ~p", [ra:members(KvId)]),
+    ra:delete_cluster([KvId]),
     ok.
