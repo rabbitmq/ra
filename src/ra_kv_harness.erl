@@ -200,7 +200,7 @@ run_operations(State, _ClusterName) ->
         true ->
             State;
         false ->
-            case RemainingOps rem 100000 of
+            case RemainingOps rem 1000 of
                 0 -> log("~s ~p operations remaining~n", [timestamp(), RemainingOps]);
                 _ -> ok
             end,
