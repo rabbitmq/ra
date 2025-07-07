@@ -1039,8 +1039,13 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod, LiveIndexes,
                         end,
     %% TODO: more mt entries could potentially be cleared up in the
     %% mem table here
-    {Spec, Mt} = ra_mt:set_first(SmallestLiveIndex, Mt0),
+    {Spec, Mt1} = ra_mt:set_first(SmallestLiveIndex, Mt0),
     ok = exec_mem_table_delete(Names, UId, Spec),
+    %% always create a new mem table here as we could have written
+    %% sparese entries in the snapshot install
+    %% TODO: check an empty mt doesn't leak
+    {ok, Mt} = ra_log_ets:new_mem_table_please(Cfg#cfg.names,
+                                               Cfg#cfg.uid, Mt1),
     State = State0#?MODULE{snapshot_state = SnapState,
                            current_snapshot = IdxTerm,
                            range = undefined,
