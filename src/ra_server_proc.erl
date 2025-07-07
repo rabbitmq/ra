@@ -1798,6 +1798,8 @@ gen_statem_safe_call(ServerId, Msg, Timeout) ->
             {error, nodedown};
          exit:{shutdown, _} ->
             {error, shutdown};
+         exit:{{shutdown, delete}, _} ->
+            {error, shutdown};
          exit:{Reason, _} ->
             {error, Reason}
     end.
