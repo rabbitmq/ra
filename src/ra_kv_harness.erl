@@ -383,13 +383,16 @@ execute_operation(#{options := Opts} = State, {add_member}) ->
                    failed_ops => FailedOps + 1};
         false ->
 
+            log("~s Adding member on node ~p.~n",
+                [timestamp(), NextNodeId]),
     case start_new_peer_node(NextNodeId, Opts)  of
         {ok, PeerRef, NodeName} ->
             NewMember = {?CLUSTER_NAME, NodeName},
 
             % Pick a random existing member to send the add_member command to
             MembersList = maps:keys(Members),
-            ExistingMember = lists:nth(rand:uniform(length(MembersList)), MembersList),
+            ExistingMember = lists:nth(rand:uniform(length(MembersList)),
+                                       MembersList),
 
             try ra_kv:add_member(?SYS, NewMember, ExistingMember) of
                 ok ->
@@ -402,7 +405,8 @@ execute_operation(#{options := Opts} = State, {add_member}) ->
                            next_node_id => NextNodeId + 1}
             catch
                 _:Reason ->
-                    log("~s Failed to add member ~p: ~p~n", [timestamp(), NewMember, Reason]),
+                    log("~s Failed to add member ~p: ~p~n",
+                        [timestamp(), NewMember, Reason]),
                     % Clean up the peer node since add failed
                     catch peer:stop(PeerRef),
                     State#{operations_count => OpCount + 1,
@@ -431,12 +435,15 @@ execute_operation(State, {remove_member}) ->
         false ->
             % Pick a random member to remove
             MembersList = maps:keys(Members),
-            MemberToRemove = lists:nth(rand:uniform(length(MembersList)), MembersList),
-            log("~s Removing member ~p...", [timestamp(), MemberToRemove]),
+            MemberToRemove = lists:nth(rand:uniform(length(MembersList)),
+                                       MembersList),
 
             % Pick a different member to send the remove command to
             RemainingMembers = MembersList -- [MemberToRemove],
-            CommandTarget = lists:nth(rand:uniform(length(RemainingMembers)), RemainingMembers),
+            CommandTarget = lists:nth(rand:uniform(length(RemainingMembers)),
+                                      RemainingMembers),
+            log("~s Removing member ~w... command target ~w~n",
+                [timestamp(), MemberToRemove, CommandTarget]),
 
             case ra_kv:remove_member(?SYS, MemberToRemove, CommandTarget) of
                 ok ->
@@ -456,7 +463,8 @@ execute_operation(State, {remove_member}) ->
                            operations_count => OpCount + 1,
                            successful_ops => SuccessOps + 1};
                 {error, Reason} ->
-                    log("~s Failed to remove member ~p: ~p~n", [timestamp(), MemberToRemove, Reason]),
+                    log("~s Failed to remove member ~p: ~p~n",
+                        [timestamp(), MemberToRemove, Reason]),
                     State#{operations_count => OpCount + 1,
                            failed_ops => FailedOps + 1}
             end
@@ -475,13 +483,14 @@ wait_for_applied_index_convergence(Members, MaxRetries) when MaxRetries > 0 ->
     end;
 wait_for_applied_index_convergence(Members, 0) ->
     IndicesMap = get_applied_indices(Members),
-    log("~s WARNING: Applied index convergence timeout. Reported values: ~0p~n", [timestamp(), IndicesMap]),
+    log("~s WARNING: Applied index convergence timeout. Reported values: ~0p~n",
+        [timestamp(), IndicesMap]),
     ok.
 
 -spec get_applied_indices([ra:server_id()]) -> #{ra:server_id() => ra:index() | undefined}.
 get_applied_indices(Members) ->
     maps:from_list([{Member, case ra:member_overview(Member, 1000) of
-                                 {ok, #{log := #{last_applied_index := Index}}, _} ->
+                                 {ok, #{last_applied := Index}, _} ->
                                      Index;
                                  _ ->
                                      undefined
@@ -500,16 +509,25 @@ validate_consistency(State) ->
     ValidationResults = [validate_member_consistency(Member, RefMap) || Member <- MembersList],
 
     Result1 = hd(ValidationResults),
-    case lists:all(fun(Result) -> Result =:= Result1 end, ValidationResults) of
+    case lists:all(fun(Result) ->
+                           is_map(Result) andalso
+                           is_map(Result1) andalso
+                           lists:sort(maps:get(live_indexes, Result)) =:=
+                           lists:sort(maps:get(live_indexes, Result1))
+                   end, ValidationResults) of
         true ->
             State;
         false ->
             % Brief console output with live_indexes summary
             LiveIndexesSummary = [{Member, case Result of
-                                             #{live_indexes := LI} -> length(LI);
+                                             #{live_indexes := LI,
+                                               log := #{last_index := LastIndex}} ->
+                                                   {length(LI), LastIndex};
                                              _ -> error
-                                         end} || {Member, Result} <- lists:zip(MembersList, ValidationResults)],
-            log("~s Consistency check failed. Live indexes per node: ~p~n", [timestamp(), LiveIndexesSummary]),
+                                         end} || {Member, Result} <-
+                                                 lists:zip(MembersList, ValidationResults)],
+            log("~s Consistency check failed. Live indexes per node: ~p~n",
+                [timestamp(), LiveIndexesSummary ]),
             log("~s STOPPING: No more operations will be performed due to consistency failure~n", [timestamp()]),
 
             % Write full details to log file with difference analysis
@@ -568,13 +586,16 @@ analyze_field_differences(Results) ->
 
 -spec validate_member_consistency(ra:server_id(), map()) -> map() | error.
 validate_member_consistency(Member, _RefMap) ->
-    NodeName = element(2, Member),
-    case erpc:call(NodeName, ra_kv, member_overview, [Member]) of
-        #{machine := #{live_indexes := Live, num_keys := Num}} ->
+    case ra_kv:member_overview(Member) of
+        #{log := Log,
+          machine := #{live_indexes := Live, num_keys := Num}} ->
             %io:format("Member ~p overview: Live indexes ~p, Num keys ~p", [Member, Live, Num]),
-            #{live_indexes => Live, num_keys => Num};
+            #{log => Log,
+              live_indexes => Live,
+              num_keys => Num};
         Error ->
-            log("~s Member ~p failed overview check: ~p~n", [timestamp(), Member, Error]),
+            log("~s Member ~p failed overview check: ~p~n",
+                [timestamp(), Member, Error]),
             error
     end.
 
