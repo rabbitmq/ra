@@ -134,6 +134,8 @@ get(ServerId, Key, Timeout) ->
                 Err ->
                     Err
             end;
+        {ok, Err, _} ->
+            Err;
         Err ->
             Err
     end.

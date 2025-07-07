@@ -67,14 +67,14 @@ new_state() ->
 run(NumOperations) ->
     run(NumOperations, #{}).
 
-read_all_keys_loop(Members) when is_list(Members) ->
-    Member = lists:nth(rand:uniform(length(Members)), Members),
-    T1 = erlang:monotonic_time(),
-    [{ok, _, _} = ra_kv:get(Member, <<"key_", (integer_to_binary(N))/binary>>, 1000) || N <- lists:seq(1, ?MAX_KEY)],
-    T2 = erlang:monotonic_time(),
-    Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
-    log("~s Read all keys from member ~p in ~bms~n", [timestamp(), Member, Diff]),
-    read_all_keys_loop(Members).
+% read_all_keys_loop(Members) when is_list(Members) ->
+%     Member = lists:nth(rand:uniform(length(Members)), Members),
+%     T1 = erlang:monotonic_time(),
+%     [{ok, _, _} = ra_kv:get(Member, <<"key_", (integer_to_binary(N))/binary>>, 1000) || N <- lists:seq(1, ?MAX_KEY)],
+%     T2 = erlang:monotonic_time(),
+%     Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
+%     log("~s Read all keys from member ~p in ~bms~n", [timestamp(), Member, Diff]),
+%     read_all_keys_loop(Members).
 
 -spec run(NumOperations :: pos_integer(),
           Options :: map()) ->
@@ -301,10 +301,10 @@ execute_operation(State, {get, Key}) ->
     RefValue = maps:get(Key, RefMap, not_found),
 
     case ra_kv:get(Member, Key, ?TIMEOUT) of
-        {ok, {error, not_found}, _Value} when RefValue =:= not_found ->
+        {error, not_found} when RefValue =:= not_found ->
             State#{operations_count => OpCount + 1,
                    successful_ops => SuccessOps + 1};
-        {ok, {error, not_found}} when RefValue =/= not_found ->
+        {error, not_found} when RefValue =/= not_found ->
             log("~s CONSISTENCY ERROR: Key ~p should exist but not found~n", [timestamp(), Key]),
             State#{operations_count => OpCount + 1,
                    failed_ops => FailedOps + 1};
@@ -474,7 +474,7 @@ wait_for_applied_index_convergence(Members, 0) ->
 -spec get_applied_indices([ra:server_id()]) -> #{ra:server_id() => ra:index() | undefined}.
 get_applied_indices(Members) ->
     maps:from_list([{Member, case ra:member_overview(Member, 1000) of
-                                 #{log := #{last_applied_index := Index}} ->
+                                 {ok, #{log := #{last_applied_index := Index}}, _} ->
                                      Index;
                                  _ ->
                                      undefined
