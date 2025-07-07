@@ -105,17 +105,18 @@ add_member(System, {Name, _} = Id, LeaderId0) ->
                     LeaderId :: ra_server_id()) ->
     ok | {error, term()}.
 remove_member(System, Id, LeaderId0) ->
-    {ok, Members, LeaderId1} = ra:members(LeaderId0),
+    {ok, Members, _} = ra:members(LeaderId0),
+    RemainingMembers = lists:delete(Id, Members),
     ?assert(lists:member(Id, Members)),
     maybe
-        ok ?= ra:stop_server(System, Id),
         %% first remove the mem
-        {ok, {_, _} = IdxTerm, LeaderId} ?= ra:remove_member(LeaderId1, Id),
+        {ok, {_, _} = IdxTerm, LeaderId} ?= ra:remove_member(RemainingMembers, Id),
         %% first start the server
         %% then wait for the cluster change command to become applied
         {ok, _, _} ?= ra:local_query(LeaderId, {ra_lib, ignore, []},
                                     #{timeout => 30_000,
                                       condition => {applied, IdxTerm}}),
+        % ok ?= ra:stop_server(System, Id),
         ok ?= ra:force_delete_server(System, Id),
         ok
     end.
@@ -127,7 +128,6 @@ member_overview(ServerId) ->
         Err ->
             Err
     end.
-
 
 %% client
 -spec put(ra:server_id(), key(), value(), non_neg_integer()) ->
