@@ -3,7 +3,6 @@
 -export([
          run/1,
          run/2,
-         setup_cluster/1,
          teardown_cluster/1,
          timestamp/0,
          log/2
@@ -18,7 +17,8 @@
 -define(MIN_VALUE_SIZE, 1).
 -define(MAX_VALUE_SIZE, 10_000_000). % 10MB
 
--type state() :: #{members := #{ra:server_id() => peer:server_ref()},
+-type state() :: #{options => map(),
+                   members := #{ra:server_id() => peer:server_ref()},
                    reference_map := #{binary() => term()},
                    operations_count := non_neg_integer(),
                    successful_ops := non_neg_integer(),
@@ -55,6 +55,7 @@ new_state() ->
 -type operation() :: {put, Key :: binary(), Value :: term()} |
                      {get, Key :: binary()} |
                      {snapshot} |
+                     {major_compaction} |
                      {update_almost_all_keys} |
                      {add_member} |
                      {remove_member}.
@@ -82,17 +83,20 @@ run(NumOperations) ->
            failed := non_neg_integer(),
            consistency_checks := non_neg_integer()}} |
     {error, term()}.
-run(NumOperations, _Options) when NumOperations > 0 ->
+run(NumOperations, Options) when NumOperations > 0 ->
     % Start with a random number of nodes between 1 and 7
     NumNodes = rand:uniform(7),
     logger:set_primary_config(level, warning),
     application:set_env(sasl, sasl_error_logger, false),
     application:stop(sasl),
     log("~s Starting cluster with ~p nodes~n", [timestamp(), NumNodes]),
-    case setup_cluster(NumNodes) of
+    case setup_cluster(NumNodes, Options) of
         {ok, Members, PeerNodes} ->
             MembersMap = maps:from_list(lists:zip(Members, PeerNodes)),
-            InitialState = (new_state())#{members => MembersMap, next_node_id => NumNodes + 1, remaining_ops => NumOperations},
+            InitialState = (new_state())#{members => MembersMap,
+                                          next_node_id => NumNodes + 1,
+                                          remaining_ops => NumOperations,
+                                          options => Options},
             try
                 State = execute_operation(InitialState, {put, <<"never_updated">>, <<"never_updated">>}),
                 %% keep reading all keys while the other operations are running
@@ -118,26 +122,11 @@ run(NumOperations, _Options) when NumOperations > 0 ->
             {error, Reason}
     end.
 
--spec setup_cluster(NumNodes :: pos_integer()) ->
-    {ok, [ra:server_id()], [peer:server_ref()]} | {error, term()}.
-setup_cluster(NumNodes) when NumNodes > 0 ->
+setup_cluster(NumNodes, Opts) when NumNodes > 0 ->
     % Start peer nodes
-    case start_peer_nodes(NumNodes) of
+    case start_peer_nodes(NumNodes, Opts) of
         {ok, PeerNodes, NodeNames} ->
             Members = [{?CLUSTER_NAME, NodeName} || NodeName <- NodeNames],
-
-            % Start ra application on all peer nodes
-            [
-             begin
-                 % Set logger level to reduce verbosity on peer node
-                 erpc:call(NodeName, logger, set_primary_config, [level, warning]),
-		 erpc:call(NodeName, application, set_env, [sasl, sasl_error_logger, false]),
-		 erpc:call(NodeName, application, stop, [sasl]),
-                 {ok, _} = erpc:call(NodeName, ra, start_in, [NodeName])
-                 % {ok, _} = erpc:call(NodeName, ra_system, start, [#{name => default, data_dir => atom_to_list(NodeName), names => ra_system:derive_names(default)}])
-             end
-             || NodeName <- NodeNames],
-
             case ra_kv:start_cluster(?SYS, ?CLUSTER_NAME, #{members => Members}) of
                 {ok, StartedMembers, _} ->
                     log("~s Started cluster with ~p members~n", [timestamp(), length(StartedMembers)]),
@@ -150,25 +139,22 @@ setup_cluster(NumNodes) when NumNodes > 0 ->
             {error, Reason}
     end.
 
--spec start_peer_nodes(pos_integer()) ->
-    {ok, [peer:server_ref()], [node()]} | {error, term()}.
-start_peer_nodes(NumNodes) ->
-    start_peer_nodes(NumNodes, [], []).
+start_peer_nodes(NumNodes, Opts) ->
+    start_peer_nodes(NumNodes, [], [], Opts).
 
-start_peer_nodes(0, PeerRefs, NodeNames) ->
+start_peer_nodes(0, PeerRefs, NodeNames, _Opts) ->
     {ok, lists:reverse(PeerRefs), lists:reverse(NodeNames)};
-start_peer_nodes(N, PeerRefs, NodeNames) when N > 0 ->
-    case start_single_peer_node(N) of
+start_peer_nodes(N, PeerRefs, NodeNames, Opts) when N > 0 ->
+    case start_single_peer_node(N, Opts) of
         {ok, PeerRef, NodeName} ->
-            start_peer_nodes(N - 1, [PeerRef | PeerRefs], [NodeName | NodeNames]);
+            start_peer_nodes(N - 1, [PeerRef | PeerRefs], [NodeName | NodeNames], Opts);
         {error, Reason} ->
             % Clean up any already started peers
             [peer:stop(PeerRef) || PeerRef <- PeerRefs],
             {error, Reason}
     end.
 
--spec start_single_peer_node(pos_integer()) -> {ok, peer:server_ref(), node()} | {error, term()}.
-start_single_peer_node(NodeId) ->
+start_single_peer_node(NodeId, Opts) ->
     NodeName = list_to_atom("ra_test_" ++ integer_to_list(NodeId) ++ "@" ++
                             inet_db:gethostname()),
 
@@ -180,18 +166,21 @@ start_single_peer_node(NodeId) ->
     case peer:start_link(#{name => NodeName,
                            args => PaArgs ++ BufferSize}) of
         {ok, PeerRef, NodeName} ->
-            % Set logger level to reduce verbosity on peer node
+            BaseDir = maps:get(dir, Opts, ""),
             erpc:call(NodeName, logger, set_primary_config, [level, warning]),
+            erpc:call(NodeName, application, set_env, [sasl, sasl_error_logger, false]),
+            erpc:call(NodeName, application, stop, [sasl]),
+            Dir = filename:join(BaseDir, NodeName),
+            {ok, _} = erpc:call(NodeName, ra, start_in, [Dir]),
+            % Set logger level to reduce verbosity on peer node
             % Start ra application on the new peer node
-            {ok, _} = erpc:call(NodeName, ra, start_in, [NodeName]),
             {ok, PeerRef, NodeName};
         {error, Reason} ->
             {error, Reason}
     end.
 
--spec start_new_peer_node(pos_integer()) -> {ok, peer:server_ref(), node()} | {error, term()}.
-start_new_peer_node(NodeId) ->
-    start_single_peer_node(NodeId).
+start_new_peer_node(NodeId, Opts) ->
+    start_single_peer_node(NodeId, Opts).
 
 -spec teardown_cluster(state()) -> ok.
 teardown_cluster(#{members := Members}) ->
@@ -239,8 +228,10 @@ generate_operation() ->
             {add_member};
         3 -> % 1% remove member
             {remove_member};
-        N when N =< 7 -> % 1% snapshot
+        N when N =< 7 -> % 4% snapshot
             {snapshot};
+        N when N =< 9 -> % 2% major compactions
+            {major_compaction};
         N when N =< 80 ->
             Key = generate_key(),
             Value = generate_value(),
@@ -355,14 +346,30 @@ execute_operation(State, {snapshot}) ->
         undefined ->
             State;
         _Pid ->
-            log("~s Rollover/snapshot/compaction on node ~p...~n", [timestamp(), NodeName]),
+            log("~s Rollover/snapshot on node ~p...~n", [timestamp(), NodeName]),
             erpc:call(NodeName, ra_log_wal, force_roll_over, [ra_log_wal]),
             erpc:call(NodeName, ra, aux_command, [Member, take_snapshot]),
+            State
+    end;
+
+execute_operation(State, {major_compaction}) ->
+    Members = maps:get(members, State),
+
+    % Pick a random cluster member to send snapshot command to
+    MembersList = maps:keys(Members),
+    Member = lists:nth(rand:uniform(length(MembersList)), MembersList),
+    NodeName = element(2, Member),
+
+    case erpc:call(NodeName, erlang, whereis, [?CLUSTER_NAME]) of
+        undefined ->
+            State;
+        _Pid ->
+            log("~s Triggering major compaction on node ~p...~n", [timestamp(), NodeName]),
             erpc:call(NodeName, ra, trigger_compaction, [Member]),
             State
     end;
 
-execute_operation(State, {add_member}) ->
+execute_operation(#{options := Opts} = State, {add_member}) ->
     Members = maps:get(members, State),
     OpCount = maps:get(operations_count, State),
     SuccessOps = maps:get(successful_ops, State),
@@ -376,7 +383,7 @@ execute_operation(State, {add_member}) ->
                    failed_ops => FailedOps + 1};
         false ->
 
-    case start_new_peer_node(NextNodeId) of
+    case start_new_peer_node(NextNodeId, Opts)  of
         {ok, PeerRef, NodeName} ->
             NewMember = {?CLUSTER_NAME, NodeName},
 
@@ -431,7 +438,7 @@ execute_operation(State, {remove_member}) ->
             RemainingMembers = MembersList -- [MemberToRemove],
             CommandTarget = lists:nth(rand:uniform(length(RemainingMembers)), RemainingMembers),
 
-            case ra_kv:remove_member(?SYS, CommandTarget, MemberToRemove) of
+            case ra_kv:remove_member(?SYS, MemberToRemove, CommandTarget) of
                 ok ->
                     % Stop the peer node for the removed member
                     case maps:get(MemberToRemove, Members, undefined) of
