@@ -171,7 +171,7 @@ start_peer_nodes(N, PeerRefs, NodeNames) when N > 0 ->
 start_single_peer_node(NodeId) ->
     NodeName = list_to_atom("ra_test_" ++ integer_to_list(NodeId) ++ "@" ++
                             inet_db:gethostname()),
-    
+
     % Get all code paths from current node
     CodePaths = code:get_path(),
     PaArgs = lists:flatmap(fun(Path) -> ["-pa", Path] end, CodePaths),
@@ -217,16 +217,16 @@ run_operations(State, _ClusterName) ->
             end,
             Operation = generate_operation(),
             NewState = execute_operation(State, Operation),
-            
+
             % Update remaining operations count
             UpdatedState = NewState#{remaining_ops => RemainingOps - 1},
-            
+
             % Validate consistency every 100 operations
             ValidationState = case maps:get(operations_count, UpdatedState) rem 100 of
                                   0 -> validate_consistency(UpdatedState);
                                   _ -> UpdatedState
                               end,
-            
+
             run_operations(ValidationState, _ClusterName)
     end.
 
@@ -368,22 +368,22 @@ execute_operation(State, {add_member}) ->
     SuccessOps = maps:get(successful_ops, State),
     FailedOps = maps:get(failed_ops, State),
     NextNodeId = maps:get(next_node_id, State),
-    
+
     % Don't add members if we already have 7 (maximum 7 nodes)
     case maps:size(Members) >= 7 of
         true ->
             State#{operations_count => OpCount + 1,
                    failed_ops => FailedOps + 1};
         false ->
-    
+
     case start_new_peer_node(NextNodeId) of
         {ok, PeerRef, NodeName} ->
             NewMember = {?CLUSTER_NAME, NodeName},
-            
+
             % Pick a random existing member to send the add_member command to
             MembersList = maps:keys(Members),
             ExistingMember = lists:nth(rand:uniform(length(MembersList)), MembersList),
-            
+
             try ra_kv:add_member(?SYS, NewMember, ExistingMember) of
                 ok ->
                     NewMembers = Members#{NewMember => PeerRef},
@@ -426,13 +426,13 @@ execute_operation(State, {remove_member}) ->
             MembersList = maps:keys(Members),
             MemberToRemove = lists:nth(rand:uniform(length(MembersList)), MembersList),
             log("~s Removing member ~p...", [timestamp(), MemberToRemove]),
-            
+
             % Pick a different member to send the remove command to
             RemainingMembers = MembersList -- [MemberToRemove],
             CommandTarget = lists:nth(rand:uniform(length(RemainingMembers)), RemainingMembers),
-            
-            case ra:remove_member(CommandTarget, MemberToRemove, ?TIMEOUT) of
-                {ok, _Meta, _} ->
+
+            case ra_kv:remove_member(?SYS, CommandTarget, MemberToRemove) of
+                ok ->
                     % Stop the peer node for the removed member
                     case maps:get(MemberToRemove, Members, undefined) of
                         undefined ->
@@ -440,11 +440,11 @@ execute_operation(State, {remove_member}) ->
                         PeerRef ->
                             catch peer:stop(PeerRef)
                     end,
-                    
+
                     NewMembers = maps:remove(MemberToRemove, Members),
                     NewMembersList = maps:keys(NewMembers),
                     log("~s done. Cluster now has ~p members: ~0p~n", [timestamp(), length(NewMembersList), NewMembersList]),
-                    
+
                     State#{members => NewMembers,
                            operations_count => OpCount + 1,
                            successful_ops => SuccessOps + 1};
@@ -488,7 +488,7 @@ validate_consistency(State) ->
     % Wait for all nodes to converge to the same applied index
     MembersList = maps:keys(Members),
     wait_for_applied_index_convergence(MembersList, 300), % Wait up to 30 seconds
-    
+
     % Check that all members have the same view
     ValidationResults = [validate_member_consistency(Member, RefMap) || Member <- MembersList],
 
@@ -504,11 +504,11 @@ validate_consistency(State) ->
                                          end} || {Member, Result} <- lists:zip(MembersList, ValidationResults)],
             log("~s Consistency check failed. Live indexes per node: ~p~n", [timestamp(), LiveIndexesSummary]),
             log("~s STOPPING: No more operations will be performed due to consistency failure~n", [timestamp()]),
-            
+
             % Write full details to log file with difference analysis
             LogEntry = format_consistency_failure(MembersList, ValidationResults),
             file:write_file("ra_kv_harness.log", LogEntry, [append]),
-            
+
             FailedOps = maps:get(failed_ops, State),
             State#{failed_ops => FailedOps + 1, remaining_ops => 0, consistency_failed => true}
     end.
@@ -516,15 +516,15 @@ validate_consistency(State) ->
 -spec format_consistency_failure([ra:server_id()], [map() | error]) -> iolist().
 format_consistency_failure(Members, Results) ->
     MemberResults = lists:zip(Members, Results),
-    
+
     % Extract all unique results for comparison
     UniqueResults = lists:usort([R || {_, R} <- MemberResults, R =/= error]),
-    
+
     Header = io_lib:format("~s Consistency check failed:~n", [timestamp()]),
-    
+
     % Log raw data
     RawData = [io_lib:format("  Member ~p: ~p~n", [Member, Result]) || {Member, Result} <- MemberResults],
-    
+
     % Analyze differences
     DiffAnalysis = case UniqueResults of
         [] ->
@@ -532,13 +532,13 @@ format_consistency_failure(Members, Results) ->
         [_SingleResult] ->
             ["  ANALYSIS: All successful members have identical results (errors may exist)\n"];
         MultipleResults ->
-            ["  ANALYSIS: Found ~p different result patterns:\n" | 
-             [io_lib:format("    Pattern ~p: ~p\n", [I, Pattern]) || 
+            ["  ANALYSIS: Found ~p different result patterns:\n" |
+             [io_lib:format("    Pattern ~p: ~p\n", [I, Pattern]) ||
               {I, Pattern} <- lists:zip(lists:seq(1, length(MultipleResults)), MultipleResults)] ++
              ["  DIFFERENCES:\n"] ++
              analyze_field_differences(MultipleResults)]
     end,
-    
+
     [Header, RawData, DiffAnalysis, "\n"].
 
 -spec analyze_field_differences([map()]) -> iolist().
@@ -546,17 +546,17 @@ analyze_field_differences(Results) ->
     % Extract live_indexes and num_keys for comparison
     LiveIndexes = [maps:get(live_indexes, R, undefined) || R <- Results, is_map(R)],
     NumKeys = [maps:get(num_keys, R, undefined) || R <- Results, is_map(R)],
-    
+
     LiveIndexDiff = case lists:usort(LiveIndexes) of
         [_] -> [];
         MultipleLI -> [io_lib:format("    live_indexes differ: ~p\n", [MultipleLI])]
     end,
-    
+
     NumKeysDiff = case lists:usort(NumKeys) of
         [_] -> [];
         MultipleNK -> [io_lib:format("    num_keys differ: ~p\n", [MultipleNK])]
     end,
-    
+
     [LiveIndexDiff, NumKeysDiff].
 
 -spec validate_member_consistency(ra:server_id(), map()) -> map() | error.
@@ -578,7 +578,7 @@ validate_final_consistency(State) ->
 
     log("~s Performing final consistency validation...~n", [timestamp()]),
     log("~s Reference map has ~p keys~n", [timestamp(), maps:size(RefMap)]),
-    
+
     % Wait for all nodes to converge before final validation
     MembersList = maps:keys(Members),
     log("~s Waiting for applied index convergence...~n", [timestamp()]),
