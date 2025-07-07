@@ -54,7 +54,9 @@
 -record(?STATE, {cfg :: #cfg{},
                  range :: ra_range:range(),
                  segment_refs :: ra_lol:state(),
-                 open_segments :: ra_flru:state()
+                 open_segments :: ra_flru:state(),
+                 compaction :: undefined | major | minor,
+                 next_compaction :: undefined | major | minor
                 }).
 
 -record(compaction_result,
@@ -153,27 +155,30 @@ update_segments(NewSegmentRefs, #?STATE{open_segments = Open0,
 
 -spec schedule_compaction(minor | major, ra:index(),
                           ra_seq:state(), state()) ->
-    [ra_server:effect()].
+    {state(), [ra_server:effect()]}.
 schedule_compaction(Type, SnapIdx, LiveIndexes,
                     #?MODULE{cfg = #cfg{log_id = LogId,
                                         compaction_conf = CompConf,
-                                        directory = Dir} = Cfg} = State) ->
+                                        directory = Dir} = Cfg,
+                             compaction = undefined} = State) ->
     case compactable_segrefs(SnapIdx, State) of
         [] ->
-            [];
+            {State, []};
         SegRefs when LiveIndexes == [] ->
             %% if LiveIndexes is [] we can just delete all compactable
             %% segment refs
             Unreferenced = [F || {F, _} <- SegRefs],
             Result = #compaction_result{unreferenced = Unreferenced},
-            [{next_event,
-              {ra_log_event, {compaction_result, Result}}}];
+            {State#?MODULE{compaction = minor},
+             [{next_event,
+               {ra_log_event, {compaction_result, Result}}}]};
         SegRefs when Type == minor ->
             %% TODO evaluate if minor compactions are fast enough to run
             %% in server process
             Result = minor_compaction(SegRefs, LiveIndexes),
-            [{next_event,
-              {ra_log_event, {compaction_result, Result}}}];
+            {State#?MODULE{compaction = minor},
+             [{next_event,
+               {ra_log_event, {compaction_result, Result}}}]};
         SegRefs ->
             Self = self(),
             Fun = fun () ->
@@ -191,16 +196,24 @@ schedule_compaction(Type, SnapIdx, LiveIndexes,
                           ok
                   end,
 
-            [{bg_work, Fun,
-              fun (Err) ->
-                      %% send an empty compaction result to ensure the
-                      %% a future compaction can be performed (TODO:)
-                      Self ! {ra_log_event,
-                              {compaction_result, #compaction_result{}}},
-                      ?WARN("~ts: Major compaction failed with ~p",
-                            [LogId, Err]), ok
-              end}]
-    end.
+            {State#?MODULE{compaction = major},
+             [{bg_work, Fun,
+               fun (Err) ->
+                       %% send an empty compaction result to ensure the
+                       %% a future compaction can be performed (TODO:)
+                       Self ! {ra_log_event,
+                               {compaction_result, #compaction_result{}}},
+                       ?WARN("~ts: Major compaction failed with ~p",
+                             [LogId, Err]), ok
+               end}]}
+    end;
+schedule_compaction(Type, SnapIdx, _LiveIndexes,
+                    #?MODULE{cfg = #cfg{log_id = LogId},
+                             compaction = Comp} = State) ->
+    ?DEBUG("~ts: ~s compaction requested at ~b but ~s compaction already in progress",
+           [LogId, Type, SnapIdx, Comp]),
+    {State, []}.
+
 
 -spec handle_compaction_result(#compaction_result{}, state()) ->
     {state(), [ra_server:effect()]}.
@@ -208,7 +221,7 @@ handle_compaction_result(#compaction_result{unreferenced = [],
                                             linked = [],
                                             compacted = []},
                          State) ->
-    {State, []};
+    {State#?MODULE{compaction = undefined}, []};
 handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
                                             linked = Linked,
                                             compacted = Compacted},
@@ -232,6 +245,7 @@ handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
                       length(Linked) + length(Compacted)),
     {State#?MODULE{segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
                                                    SegmentRefs),
+                   compaction = undefined,
                    open_segments = Open},
      [{bg_work, Fun, fun (_Err) -> ok end}]}.
 
