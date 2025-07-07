@@ -27,6 +27,7 @@ all_tests() ->
      recover2,
      recover3,
      recover4,
+     compactions_are_not_triggered_concurrently,
      basics,
      major,
      major_max_size,
@@ -322,6 +323,49 @@ recover4(Config) ->
                       ct:pal("SegRefs ~p, ~p", [SegRefs, seg_refs(Dir)]),
                       SegRefs == seg_refs(Dir)
               end}
+    ],
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, #{max_count => 128}} | Config], Segs0, Scen),
+    ok.
+
+compactions_are_not_triggered_concurrently(Config) ->
+    %% creates 3 segments then a snapshot at the first index of the last segment
+    %% with live indexes only in the first segment.
+    Dir = ?config(dir, Config),
+    LiveList = lists:seq(1, 128, 5),
+    Live = ra_seq:from_list(LiveList),
+    ct:pal("Live ~p", [Live]),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 128 * 3)},
+     {assert, 1, lists:seq(1, 128 * 3)},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 3
+              end},
+     {major, 128 * 2, Live},
+     %% this compaction should be dropped
+     {major, 128 * 3, Live},
+     {assert,
+      fun (_S) ->
+              receive
+                  {ra_log_event, {compaction_result, _}} = Evt ->
+                      receive
+                          {ra_log_event, {compaction_result, Res}} ->
+                              ct:pal("unexpected second compaction result ~p", [Res]),
+                              false
+                      after 100 ->
+                                self() ! Evt,
+                                true
+                      end
+              after 1000 ->
+                        flush(),
+                        false
+              end
+      end},
+     handle_compaction_result,
+     {major, 128 * 3, Live},
+     handle_compaction_result
     ],
     Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
     run_scenario([{seg_conf, #{max_count => 128}} | Config], Segs0, Scen),
@@ -677,7 +721,7 @@ run_scenario(Config, Segs0, [{entries, Term, IndexesOrEntries} | Rem]) ->
     ?FUNCTION_NAME(Config, Segs, Rem);
 run_scenario(Config, Segs0, [{Type, SnapIdx, Live} | Rem])
   when Type == major orelse Type == minor ->
-    Effs = ra_log_segments:schedule_compaction(Type, SnapIdx, Live, Segs0),
+    {Segs1, Effs} = ra_log_segments:schedule_compaction(Type, SnapIdx, Live, Segs0),
     Segs = lists:foldl(fun ({bg_work, Fun, _}, S0) ->
                                Fun(),
                                S0;
@@ -685,7 +729,7 @@ run_scenario(Config, Segs0, [{Type, SnapIdx, Live} | Rem])
                                           {compaction_result, _Res}} = E}, S0) ->
                                self() ! E,
                                S0
-                       end, Segs0, Effs),
+                       end, Segs1, Effs),
 
     ?FUNCTION_NAME(Config, Segs, Rem);
 run_scenario(Config, Segs0, [handle_compaction_result = Step | Rem]) ->
