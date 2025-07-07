@@ -859,9 +859,9 @@ handle_event(major_compaction, #?MODULE{reader = Reader0,
                                         snapshot_state = SS} = State) ->
     case ra_snapshot:current(SS) of
         {SnapIdx, _} ->
-            Effs = ra_log_segments:schedule_compaction(major, SnapIdx,
-                                                       LiveIndexes, Reader0),
-            {State, Effs};
+            {Reader, Effs} = ra_log_segments:schedule_compaction(major, SnapIdx,
+                                                                 LiveIndexes, Reader0),
+            {State#?MODULE{reader = Reader}, Effs};
         _ ->
             {State, []}
     end;
@@ -929,11 +929,11 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
                                    live_indexes = LiveIndexes,
                                    current_snapshot = Snap,
                                    snapshot_state = SnapState},
-            CompEffs = ra_log_segments:schedule_compaction(minor, SnapIdx,
-                                                           LiveIndexes,
-                                                           State#?MODULE.reader),
+            {Reader, CompEffs} = ra_log_segments:schedule_compaction(minor, SnapIdx,
+                                                                    LiveIndexes,
+                                                                    State#?MODULE.reader),
             Effects = CompEffs ++ Effects0,
-            {State, Effects};
+            {State#?MODULE{reader = Reader}, Effects};
         checkpoint ->
             put_counter(Cfg, ?C_RA_SVR_METRIC_CHECKPOINT_INDEX, SnapIdx),
             %% If we already have the maximum allowed number of checkpoints,
@@ -1048,10 +1048,10 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod, LiveIndexes,
                            live_indexes = LiveIndexes,
                            mem_table = Mt,
                            last_written_index_term = IdxTerm},
-    CompEffs = ra_log_segments:schedule_compaction(minor, SnapIdx,
-                                                   LiveIndexes,
-                                                   State#?MODULE.reader),
-    {ok, State, CompEffs ++ CPEffects}.
+    {Reader, CompEffs} = ra_log_segments:schedule_compaction(minor, SnapIdx,
+                                                             LiveIndexes,
+                                                             State#?MODULE.reader),
+    {ok, State#?MODULE{reader = Reader}, CompEffs ++ CPEffects}.
 
 
 -spec recover_snapshot(State :: state()) ->
