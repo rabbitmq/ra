@@ -16,6 +16,7 @@
 -define(MAX_KEY, 10000). % Limited key space for more conflicts
 -define(MIN_VALUE_SIZE, 1).
 -define(MAX_VALUE_SIZE, 10_000_000). % 10MB
+-define(MAX_NODES, 7). % Maximum number of nodes in the cluster
 
 -type state() :: #{options => map(),
                    members := #{ra:server_id() => peer:server_ref()},
@@ -70,14 +71,20 @@ new_state() ->
 run(NumOperations) ->
     run(NumOperations, #{}).
 
-% read_all_keys_loop(Members) when is_list(Members) ->
-%     Member = lists:nth(rand:uniform(length(Members)), Members),
-%     T1 = erlang:monotonic_time(),
-%     [{ok, _, _} = ra_kv:get(Member, <<"key_", (integer_to_binary(N))/binary>>, 1000) || N <- lists:seq(1, ?MAX_KEY)],
-%     T2 = erlang:monotonic_time(),
-%     Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
-%     log("~s Read all keys from member ~p in ~bms~n", [timestamp(), Member, Diff]),
-%     read_all_keys_loop(Members).
+read_all_keys_loop(Members) when is_list(Members) ->
+    receive
+        stop ->
+            log("~s Read all keys loop stopped~n", [timestamp()]),
+            ok
+    after 0 ->
+        Member = lists:nth(rand:uniform(length(Members)), Members),
+        T1 = erlang:monotonic_time(),
+        [_ = ra_kv:get(Member, <<"key_", (integer_to_binary(N))/binary>>, 1000) || N <- lists:seq(1, ?MAX_KEY)],
+        T2 = erlang:monotonic_time(),
+        Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
+        log("~s Read all keys from member ~p in ~bms~n", [timestamp(), Member, Diff]),
+        read_all_keys_loop(Members)
+    end.
 
 -spec run(NumOperations :: pos_integer(),
           Options :: map()) ->
@@ -99,11 +106,12 @@ run(NumOperations, Options) when NumOperations > 0 ->
                                           next_node_id => NumNodes + 1,
                                           remaining_ops => NumOperations,
                                           options => Options},
+            %% keep reading all keys while the other operations are running
+            ReaderPid = spawn(fun() -> read_all_keys_loop(maps:keys(MembersMap)) end),
             try
                 State = execute_operation(InitialState, {put, <<"never_updated">>, <<"never_updated">>}),
-                %% keep reading all keys while the other operations are running
-                %spawn(fun() -> read_all_keys_loop(maps:keys(MembersMap)) end),
                 FinalState = run_operations(State, ?CLUSTER_NAME),
+                ReaderPid ! stop,
                 case maps:get(consistency_failed, FinalState, false) of
                     true ->
                         log("~s EMERGENCY STOP: Leaving cluster running for investigation~n", [timestamp()]),
@@ -117,6 +125,7 @@ run(NumOperations, Options) when NumOperations > 0 ->
                 end
             catch
                 Class:Reason:Stack ->
+                    ReaderPid ! stop,
                     teardown_cluster(InitialState),
                     {error, {Class, Reason, Stack}}
             end;
@@ -383,7 +392,7 @@ execute_operation(#{options := Opts} = State, {add_member}) ->
     NextNodeId = maps:get(next_node_id, State),
 
     % Don't add members if we already have 7 (maximum 7 nodes)
-    case maps:size(Members) >= 7 of
+    case maps:size(Members) >= ?MAX_NODES of
         true ->
             State#{operations_count => OpCount + 1,
                    failed_ops => FailedOps + 1};
@@ -483,15 +492,22 @@ execute_operation(State, {kill_wal}) ->
 
     % Pick a node to kill WAL on
     MembersList = maps:keys(Members),
-    Member = lists:nth(rand:uniform(length(MembersList)), MembersList),
-    NodeName = element(2, Member),
+    Rnd = rand:uniform(?MAX_NODES),
+    case Rnd > length(MembersList) of
+        true ->
+            State#{operations_count => OpCount + 1,
+                   successful_ops => SuccessOps + 1};
+        false ->
+            Member = lists:nth(Rnd, MembersList),
+            NodeName = element(2, Member),
 
-    log("~s Killing WAL on member ~w...~n", [timestamp(), NodeName]),
+            log("~s Killing WAL on member ~w...~n", [timestamp(), NodeName]),
 
-    Pid = erpc:call(NodeName, erlang, whereis, [ra_log_wal]),
-    erpc:call(NodeName, erlang, exit, [Pid, kill]),
-    State#{operations_count => OpCount + 1,
-           successful_ops => SuccessOps + 1};
+            Pid = erpc:call(NodeName, erlang, whereis, [ra_log_wal]),
+            erpc:call(NodeName, erlang, exit, [Pid, kill]),
+            State#{operations_count => OpCount + 1,
+                   successful_ops => SuccessOps + 1}
+    end;
 
 execute_operation(State, {kill_member}) ->
     Members = maps:get(members, State),
@@ -500,15 +516,22 @@ execute_operation(State, {kill_member}) ->
 
     % Pick a random member to kill
     MembersList = maps:keys(Members),
-    Member = lists:nth(rand:uniform(length(MembersList)), MembersList),
-    NodeName = element(2, Member),
+    Rnd = rand:uniform(?MAX_NODES),
+    case Rnd > length(MembersList) of
+        true ->
+            State#{operations_count => OpCount + 1,
+                   successful_ops => SuccessOps + 1};
+        false ->
+            Member = lists:nth(rand:uniform(length(MembersList)), MembersList),
+            NodeName = element(2, Member),
 
-    log("~s Killing member ~w...~n", [timestamp(), Member]),
+            log("~s Killing member ~w...~n", [timestamp(), Member]),
 
-    Pid = erpc:call(NodeName, erlang, whereis, [?CLUSTER_NAME]),
-    erpc:call(NodeName, erlang, exit, [Pid, kill]),
-    State#{operations_count => OpCount + 1,
-           successful_ops => SuccessOps + 1}.
+            Pid = erpc:call(NodeName, erlang, whereis, [?CLUSTER_NAME]),
+            erpc:call(NodeName, erlang, exit, [Pid, kill]),
+            State#{operations_count => OpCount + 1,
+                   successful_ops => SuccessOps + 1}
+    end.
 
 -spec wait_for_applied_index_convergence([ra:server_id()], non_neg_integer()) -> ok.
 wait_for_applied_index_convergence(Members, MaxRetries) when MaxRetries > 0 ->
