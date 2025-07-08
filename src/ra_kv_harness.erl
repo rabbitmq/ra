@@ -57,6 +57,8 @@ new_state() ->
                      {snapshot} |
                      {major_compaction} |
                      {update_almost_all_keys} |
+                     {kill_wal} |
+                     {kill_member} |
                      {add_member} |
                      {remove_member}.
 
@@ -228,9 +230,13 @@ generate_operation() ->
             {add_member};
         3 -> % 1% remove member
             {remove_member};
-        N when N =< 7 -> % 4% snapshot
+        4 -> % 1% kill WAL
+            {kill_wal};
+        5 -> % 1% kill member
+            {kill_member};
+        N when N =< 9 -> % 4% snapshot
             {snapshot};
-        N when N =< 9 -> % 2% major compactions
+        N when N =< 11 -> % 2% major compactions
             {major_compaction};
         N when N =< 80 ->
             Key = generate_key(),
@@ -468,7 +474,41 @@ execute_operation(State, {remove_member}) ->
                     State#{operations_count => OpCount + 1,
                            failed_ops => FailedOps + 1}
             end
-    end.
+    end;
+
+execute_operation(State, {kill_wal}) ->
+    Members = maps:get(members, State),
+    OpCount = maps:get(operations_count, State),
+    SuccessOps = maps:get(successful_ops, State),
+
+    % Pick a node to kill WAL on
+    MembersList = maps:keys(Members),
+    Member = lists:nth(rand:uniform(length(MembersList)), MembersList),
+    NodeName = element(2, Member),
+
+    log("~s Killing WAL on member ~w...~n", [timestamp(), NodeName]),
+
+    Pid = erpc:call(NodeName, erlang, whereis, [ra_log_wal]),
+    erpc:call(NodeName, erlang, exit, [Pid, kill]),
+    State#{operations_count => OpCount + 1,
+           successful_ops => SuccessOps + 1};
+
+execute_operation(State, {kill_member}) ->
+    Members = maps:get(members, State),
+    OpCount = maps:get(operations_count, State),
+    SuccessOps = maps:get(successful_ops, State),
+
+    % Pick a random member to kill
+    MembersList = maps:keys(Members),
+    Member = lists:nth(rand:uniform(length(MembersList)), MembersList),
+    NodeName = element(2, Member),
+
+    log("~s Killing member ~w...~n", [timestamp(), Member]),
+
+    Pid = erpc:call(NodeName, erlang, whereis, [?CLUSTER_NAME]),
+    erpc:call(NodeName, erlang, exit, [Pid, kill]),
+    State#{operations_count => OpCount + 1,
+           successful_ops => SuccessOps + 1}.
 
 -spec wait_for_applied_index_convergence([ra:server_id()], non_neg_integer()) -> ok.
 wait_for_applied_index_convergence(Members, MaxRetries) when MaxRetries > 0 ->
