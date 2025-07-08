@@ -830,6 +830,11 @@ write_sparse_re_init(Config) ->
 
     ok.
 
+write_sparse_after_snapshot_install(Config) ->
+
+
+    ok.
+
 write_sparse_after_index_reset(Config) ->
     Log0 = ra_log_init(Config),
     Log1 = write_n(1, 6, 1, Log0),
