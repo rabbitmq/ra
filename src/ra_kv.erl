@@ -1,10 +1,8 @@
 -module(ra_kv).
-
 -feature(maybe_expr, enable).
-
 -behaviour(ra_machine).
--include("src/ra.hrl").
 
+-include("src/ra.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -export([

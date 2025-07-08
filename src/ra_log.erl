@@ -26,6 +26,7 @@
          partial_read/3,
          execute_read_plan/4,
          read_plan_info/1,
+         previous_wal_index/1,
          last_index_term/1,
          set_last_index/2,
          handle_event/2,
@@ -111,10 +112,10 @@
          snapshot_state :: ra_snapshot:state(),
          current_snapshot :: option(ra_idxterm()),
          last_resend_time :: option({integer(), WalPid :: pid() | undefined}),
-         last_wal_write :: {pid(), Ms :: integer()},
+         last_wal_write :: {pid(), Ms :: integer(), ra:index() | -1},
          reader :: ra_log_segments:state(),
          mem_table :: ra_mt:state(),
-         tx = false :: boolean(),
+         tx = false :: false | {true, ra:range()},
          pending = [] :: ra_seq:state(),
          live_indexes = [] :: ra_seq:state()
         }).
@@ -265,6 +266,17 @@ init(#{uid := UId,
                                {SnapIdx, Range}})
                  end
          end,
+    LastWalIdx = case ra_log_wal:last_writer_seq(Wal, UId) of
+                     {ok, undefined} ->
+                         -1;
+                     {ok, Idx} ->
+                         Idx;
+                     {error, wal_down} ->
+                         ?ERROR("~ts: ra_log:init/1 cannot complete as wal"
+                                " process is down.",
+                                [LogId]),
+                         exit(wal_down)
+                     end,
     Cfg = #cfg{directory = Dir,
                uid = UId,
                log_id = LogId,
@@ -282,7 +294,7 @@ init(#{uid := UId,
                       mem_table = Mt,
                       snapshot_state = SnapshotState,
                       current_snapshot = ra_snapshot:current(SnapshotState),
-                      last_wal_write = {whereis(Wal), now_ms()},
+                      last_wal_write = {whereis(Wal), now_ms(), LastWalIdx},
                       live_indexes = LiveIndexes
                      },
     put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
@@ -316,18 +328,7 @@ init(#{uid := UId,
                         {_, L} ->
                             L
                     end,
-    LastWrittenIdx = case ra_log_wal:last_writer_seq(Wal, UId) of
-                         {ok, undefined} ->
-                             %% take last segref index
-                             max(SnapIdx, LastSegRefIdx);
-                         {ok, Idx} ->
-                             max(Idx, LastSegRefIdx);
-                         {error, wal_down} ->
-                             ?ERROR("~ts: ra_log:init/1 cannot complete as wal"
-                                    " process is down.",
-                                    [State2#?MODULE.cfg#cfg.log_id]),
-                             exit(wal_down)
-                     end,
+    LastWrittenIdx = lists:max([LastWalIdx, SnapIdx, LastSegRefIdx]),
     {LastWrittenTerm, State3} = case LastWrittenIdx of
                                     SnapIdx ->
                                         {SnapTerm, State2};
@@ -360,28 +361,32 @@ close(#?MODULE{cfg = #cfg{uid = _UId},
 
 -spec begin_tx(state()) -> state().
 begin_tx(State) ->
-    State#?MODULE{tx = true}.
+    State#?MODULE{tx = {true, undefined}}.
 
 -spec commit_tx(state()) -> {ok, state()} | {error, wal_down, state()}.
 commit_tx(#?MODULE{cfg = #cfg{uid = UId,
                               wal = Wal} = Cfg,
-                   tx = true,
+                   tx = {true, TxRange},
+                   range = Range,
                    mem_table = Mt1} = State) ->
     {Entries, Mt} = ra_mt:commit(Mt1),
     Tid = ra_mt:tid(Mt),
     WriterId = {UId, self()},
-    {WalCommands, Num} =
-        lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N}) ->
+    PrevIdx = previous_wal_index(State),
+    {WalCommands, Num, _} =
+        lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N, Prev}) ->
                             Cmd = {ttb, term_to_iovec(Cmd0)},
-                            WalC = {append, WriterId, Tid, Idx-1, Idx, Term, Cmd},
-                            {[WalC | WC], N+1}
-                    end, {[], 0}, Entries),
+                            WalC = {append, WriterId, Tid, Prev, Idx, Term, Cmd},
+                            {[WalC | WC], N+1, Idx}
+                    end, {[], 0, PrevIdx}, Entries),
+    {_, LastIdx} = Range,
 
     case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
             {ok, State#?MODULE{tx = false,
-                               last_wal_write = {Pid, now_ms()},
+                               range = ra_range:add(TxRange, Range),
+                               last_wal_write = {Pid, now_ms(), LastIdx},
                                mem_table = Mt}};
         {error, wal_down} ->
             %% still need to return the state here
@@ -421,7 +426,7 @@ append({Idx, Term, Cmd0} = Entry,
                     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
                     State#?MODULE{range = ra_range:extend(Idx, Range),
                                   last_term = Term,
-                                  last_wal_write = {Pid, now_ms()},
+                                  last_wal_write = {Pid, now_ms(), Idx},
                                   pending = ra_seq:append(Idx, Pend),
                                   mem_table = Mt};
                 {error, wal_down} ->
@@ -438,15 +443,14 @@ append({Idx, Term, Cmd0} = Entry,
     end;
 append({Idx, Term, _Cmd} = Entry,
        #?MODULE{cfg = Cfg,
-                range = Range,
-                tx = true,
+                tx = {true, TxRange},
                 pending = Pend0,
                 mem_table = Mt0} = State)
-      when ?IS_NEXT_IDX(Idx, Range) ->
+      when ?IS_NEXT_IDX(Idx, TxRange) ->
     case ra_mt:stage(Entry, Mt0) of
         {ok, Mt} ->
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
-            State#?MODULE{range = ra_range:extend(Idx, Range),
+            State#?MODULE{tx = {true, ra_range:extend(Idx, TxRange)},
                           last_term = Term,
                           pending = ra_seq:append(Idx, Pend0),
                           mem_table = Mt};
@@ -459,9 +463,10 @@ append({Idx, Term, _Cmd} = Entry,
                                                        Cfg#cfg.uid, Mt0),
             append(Entry, State#?MODULE{mem_table = M0})
     end;
-append({Idx, _, _}, #?MODULE{range = Range}) ->
-    Msg = lists:flatten(io_lib:format("tried writing ~b - current range ~w",
-                                      [Idx, Range])),
+append({Idx, _, _}, #?MODULE{range = Range,
+                             tx = Tx}) ->
+    Msg = lists:flatten(io_lib:format("tried writing ~b - current range ~w tx ~p",
+                                      [Idx, Range, Tx])),
     exit({integrity_error, Msg}).
 
 -spec write(Entries :: [log_entry()], State :: state()) ->
@@ -505,13 +510,7 @@ write_sparse({Idx, Term, _} = Entry, PrevIdx0,
     {ok, Mt} = ra_mt:insert_sparse(Entry, PrevIdx0, Mt0),
     ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
     Tid = ra_mt:tid(Mt),
-    PrevIdx = case PrevIdx0 of
-                  undefined ->
-                      %% this is likely to always be accepted
-                      0;
-                  _ ->
-                      PrevIdx0
-              end,
+    PrevIdx = previous_wal_index(State0),
     case ra_log_wal:write(Wal, {UId, self()}, Tid, PrevIdx, Idx,
                           Term, Entry) of
         {ok, Pid} ->
@@ -526,7 +525,7 @@ write_sparse({Idx, Term, _} = Entry, PrevIdx0,
             {ok, State0#?MODULE{range = NewRange,
                                 last_term = Term,
                                 mem_table = Mt,
-                                last_wal_write = {Pid, now_ms()}}};
+                                last_wal_write = {Pid, now_ms(), Idx}}};
         {error, wal_down} = Err->
             Err
     end.
@@ -703,6 +702,15 @@ read_plan_info(#read_plan{read = Read,
       num_in_segments => NumInSegments,
       num_segments => NumSegments}.
 
+
+-spec previous_wal_index(state()) -> ra_idxterm() | -1.
+previous_wal_index(#?MODULE{range = Range}) ->
+    case Range of
+        undefined ->
+            -1;
+        {_, LastIdx} ->
+            LastIdx
+    end.
 
 -spec last_index_term(state()) -> option(ra_idxterm()).
 last_index_term(#?MODULE{range = {_, LastIdx},
@@ -972,6 +980,8 @@ handle_event({down, _Pid, _Info}, #?MODULE{} = State) ->
     {State, []}.
 
 -spec next_index(state()) -> ra_index().
+next_index(#?MODULE{tx = {true, {_, Last}}}) ->
+    Last + 1;
 next_index(#?MODULE{range = {_, LastIdx}}) ->
     LastIdx + 1;
 next_index(#?MODULE{current_snapshot = {SnapIdx, _}}) ->
@@ -1124,7 +1134,7 @@ promote_checkpoint(Idx, #?MODULE{cfg = Cfg,
 tick(Now, #?MODULE{cfg = #cfg{wal = Wal},
                    mem_table = Mt,
                    last_written_index_term = {LastWrittenIdx, _},
-                   last_wal_write = {WalPid, Ms}} = State) ->
+                   last_wal_write = {WalPid, Ms, _}} = State) ->
     CurWalPid = whereis(Wal),
     MtRange = ra_mt:range(Mt),
     case Now > Ms + ?WAL_RESEND_TIMEOUT andalso
@@ -1262,7 +1272,7 @@ overview(#?MODULE{range = Range,
                   snapshot_state = SnapshotState,
                   current_snapshot = CurrSnap,
                   reader = Reader,
-                  last_wal_write = {_LastPid, LastMs},
+                  last_wal_write = {_LastPid, LastMs, LastWalIdx},
                   mem_table = Mt,
                   pending = Pend
                  } = State) ->
@@ -1291,6 +1301,7 @@ overview(#?MODULE{range = Range,
       mem_table_range => ra_mt:range(Mt),
       mem_table_info => ra_mt:info(Mt),
       last_wal_write => LastMs,
+      last_wal_index => LastWalIdx,
       num_pending => ra_seq:length(Pend)
      }.
 
@@ -1351,7 +1362,7 @@ release_resources(MaxOpenSegments, AccessPattern,
 %% only used by resend to wal functionality and doesn't update the mem table
 wal_rewrite(#?MODULE{cfg = #cfg{uid = UId,
                                 wal = Wal} = Cfg,
-                    range = _Range} = State,
+                     last_wal_write = {_, _, _LastWalIdx}} = State,
             Tid, {Idx, Term, Cmd}) ->
     case ra_log_wal:write(Wal, {UId, self()}, Tid, Idx, Term, Cmd) of
         {ok, Pid} ->
@@ -1359,7 +1370,7 @@ wal_rewrite(#?MODULE{cfg = #cfg{uid = UId,
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
             State#?MODULE{%last_index = Idx,
                           last_term = Term,
-                          last_wal_write = {Pid, now_ms()}
+                          last_wal_write = {Pid, now_ms(), Idx}
                          };
         {error, wal_down} ->
             error(wal_down)
@@ -1372,14 +1383,15 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
                          mem_table = Mt0} = State,
                 [{FstIdx, _, _} | _] = Entries) ->
     WriterId = {UId, self()},
+    PrevIdx = previous_wal_index(State),
     %% all entries in a transaction are written to the same tid
     Tid = ra_mt:tid(Mt0),
-    {WalCommands, Num, Pend} =
-        lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N, P}) ->
+    {WalCommands, Num, LastIdx, Pend} =
+        lists:foldl(fun ({Idx, Term, Cmd0}, {WC, N, Prev, P}) ->
                             Cmd = {ttb, term_to_iovec(Cmd0)},
-                            WalC = {append, WriterId, Tid, Idx-1, Idx, Term, Cmd},
-                            {[WalC | WC], N+1, ra_seq:append(Idx, P)}
-                    end, {[], 0, Pend0}, Entries),
+                            WalC = {append, WriterId, Tid, Prev, Idx, Term, Cmd},
+                            {[WalC | WC], N+1, Idx, ra_seq:append(Idx, P)}
+                    end, {[], 0, PrevIdx, Pend0}, Entries),
 
     [{_, _, _, _PrevIdx, LastIdx, LastTerm, _} | _] = WalCommands,
     {_, Mt} = ra_mt:commit(Mt0),
@@ -1395,7 +1407,7 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
         {ok, Pid} ->
             {ok, State#?MODULE{range = NewRange,
                                last_term = LastTerm,
-                               last_wal_write = {Pid, now_ms()},
+                               last_wal_write = {Pid, now_ms(), LastIdx},
                                mem_table = Mt,
                                pending = Pend}};
         {error, wal_down} = Err ->
