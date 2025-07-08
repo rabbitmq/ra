@@ -1,4 +1,7 @@
 -module(ra_kv).
+
+-feature(maybe_expr, enable).
+
 -behaviour(ra_machine).
 -include("src/ra.hrl").
 
