@@ -12,6 +12,7 @@
 -include_lib("kernel/include/file.hrl").
 -export([
          init/8,
+         update_conf/3,
          close/1,
          update_segments/2,
          schedule_compaction/4,
@@ -119,6 +120,21 @@ init(UId, Dir, MaxOpen, AccessPattern, SegRefs0, Counter, CompConf, LogId)
 close(#?STATE{open_segments = Open}) ->
     _ = ra_flru:evict_all(Open),
     ok.
+
+
+-spec update_conf(non_neg_integer(), sequential | random, state()) ->
+    state().
+update_conf(MaxOpen, AccessPattern,
+            #?STATE{cfg = Cfg,
+                    open_segments = Open} = State) ->
+    FlruHandler = fun ({_, Seg}) ->
+                          _ = ra_log_segment:close(Seg),
+                          decr_counter(Cfg, ?C_RA_LOG_OPEN_SEGMENTS, 1)
+                  end,
+    _ = ra_flru:evict_all(Open),
+    State#?STATE{cfg = Cfg#cfg{access_pattern = AccessPattern},
+                 open_segments = ra_flru:new(MaxOpen, FlruHandler)}.
+
 
 -spec update_segments([segment_ref()], state()) ->
     {state(), OverwrittenSegments :: [segment_ref()]}.
@@ -644,10 +660,11 @@ major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
                                          CompConf),
     Compacted0 =
     [begin
+         AllFns = [F || {_, _, {F, _}} <- All],
          %% create a compaction marker with the compaction group i
          CompactionMarker = filename:join(Dir, with_ext(CompGroupLeaderFn,
                                                         ".compaction_group")),
-         ok = ra_lib:write_file(CompactionMarker, term_to_binary(All)),
+         ok = ra_lib:write_file(CompactionMarker, term_to_binary(AllFns)),
          %% create a new segment with .compacting extension
          CompactingFn = filename:join(Dir, with_ext(CompGroupLeaderFn,
                                                     ".compacting")),
