@@ -75,7 +75,8 @@ all_tests() ->
      write_config,
      sparse_write,
      overwritten_segment_is_cleared,
-     overwritten_segment_is_cleared_on_init
+     overwritten_segment_is_cleared_on_init,
+     snapshot_installation_with_live_indexes
     ].
 
 groups() ->
@@ -830,11 +831,6 @@ write_sparse_re_init(Config) ->
 
     ok.
 
-write_sparse_after_snapshot_install(Config) ->
-
-
-    ok.
-
 write_sparse_after_index_reset(Config) ->
     Log0 = ra_log_init(Config),
     Log1 = write_n(1, 6, 1, Log0),
@@ -1371,19 +1367,33 @@ snapshot_installation_with_live_indexes(Config) ->
 
     %% create snapshot chunk
     Meta = meta(15, 2, [?N1]),
-    Chunk = create_snapshot_chunk(Config, Meta, #{}),
+    Chunk = create_snapshot_chunk(Config, Meta, [2, 9, 14], #{}),
     SnapState0 = ra_log:snapshot_state(Log2),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     Machine = {machine, ?MODULE, #{}},
+
+    %% write  a sparse one
     {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
                                                                      SnapState1),
     run_effs(AEffs),
+    {ok, Log2b} = ra_log:write_sparse({14, 2, <<>>}, 9, Log2),
     {ok, Log3, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
-                                                ra_log:set_snapshot_state(SnapState, Log2)),
+                                                ra_log:set_snapshot_state(SnapState, Log2b)),
+
 
     run_effs(Effs4),
+    ct:pal("o ~p", [ra_log:overview(Log3)]),
     {15, _} = ra_log:last_index_term(Log3),
     {15, _} = ra_log:last_written(Log3),
+    %% write the next index, bearning in mind the last index the WAL saw
+    %% was 14
+    {ok, Log4} = ra_log:write([{16, 2, <<>>}], Log3),
+    Log = assert_log_events(Log4,
+                             fun (L) ->
+                                     LW = ra_log:last_written(L),
+                                     {16, 2} == LW
+                             end),
+    ct:pal("o ~p", [ra_log:overview(Log)]),
     ok.
 
 snapshot_installation(Config) ->
@@ -2148,8 +2158,8 @@ meta(Idx, Term, Cluster) ->
       cluster => Cluster,
       machine_version => 1}.
 
-create_snapshot_chunk(Config, #{index := Idx} = Meta, Context) ->
-    create_snapshot_chunk(Config, #{index := Idx} = Meta, <<"9">>, Context).
+create_snapshot_chunk(Config, Meta, Context) ->
+    create_snapshot_chunk(Config, Meta, <<"9">>, Context).
 
 create_snapshot_chunk(Config, #{index := Idx} = Meta, MacState, Context) ->
     OthDir = filename:join(?config(work_dir, Config), "snapshot_installation"),
