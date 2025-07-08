@@ -697,6 +697,7 @@ wait_for_applied(Msg) ->
             false -> wait_for_applied(Msg)
         end
     after 10000 ->
+              flush(),
         error({timeout_waiting_for_applied, Msg})
     end.
 
