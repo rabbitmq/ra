@@ -1340,21 +1340,10 @@ delete_everything(#?MODULE{cfg = #cfg{uid = UId,
 -spec release_resources(non_neg_integer(),
                         sequential | random, state()) -> state().
 release_resources(MaxOpenSegments, AccessPattern,
-                  #?MODULE{cfg = #cfg{uid = UId,
-                                      log_id = LogId,
-                                      directory = Dir,
-                                      counter = Counter},
+                  #?MODULE{cfg = #cfg{},
                            reader = Reader} = State) ->
-    ActiveSegs = ra_log_segments:segment_refs(Reader),
-    CompConf = ra_log_segments:compaction_conf(Reader),
-    % close all open segments
-    % deliberately ignoring return value
-    _ = ra_log_segments:close(Reader),
-    %% open a new segment with the new max open segment value
-    State#?MODULE{reader = ra_log_segments:init(UId, Dir, MaxOpenSegments,
-                                                AccessPattern, ActiveSegs,
-                                                Counter, CompConf, LogId)}.
-
+    State#?MODULE{reader = ra_log_segments:update_conf(MaxOpenSegments,
+                                                       AccessPattern, Reader)}.
 
 %%% Local functions
 
