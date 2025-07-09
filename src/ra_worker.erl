@@ -8,6 +8,7 @@
 -module(ra_worker).
 -behaviour(gen_server).
 
+-include("ra.hrl").
 -export([start_link/1,
          queue_work/3]).
 
@@ -18,7 +19,8 @@
          terminate/2,
          code_change/3]).
 
--record(state, {}).
+-record(state, {log_id = "" :: unicode:chardata()
+               }).
 
 %%% ra worker responsible for doing background work for a ra server.
 %%%
@@ -39,9 +41,11 @@ queue_work(Pid, FunOrMfa, ErrFun) when is_pid(Pid) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init(Config) when is_map(Config) ->
+init(#{id := Id} = Config) when is_map(Config) ->
     process_flag(trap_exit, true),
-    {ok, #state{}}.
+    LogId = maps:get(friendly_name, Config,
+                     lists:flatten(io_lib:format("~w", [Id]))),
+    {ok, #state{log_id = LogId}}.
 
 handle_call(_, _From, State) ->
     {reply, ok, State}.
@@ -52,8 +56,9 @@ handle_cast({work, FunOrMfa, ErrFun}, State) ->
             try erlang:apply(M, F, Args) of
                 _ ->
                     ok
-            catch Type:Err:_Stack ->
-                      %% TODO: log
+            catch Type:Err:Stack ->
+                      ?WARN("~ts: worker encounted error ~0p of type ~s, Stack:~n~p",
+                            [State#state.log_id, Err, Type, Stack]),
                       ErrFun({Type, Err}),
                       ok
             end;
@@ -61,8 +66,9 @@ handle_cast({work, FunOrMfa, ErrFun}, State) ->
             try FunOrMfa() of
                 _ ->
                     ok
-            catch Type:Err:_Stack ->
-                      %% TODO: log
+            catch Type:Err:Stack ->
+                      ?WARN("~ts: worker encounted error ~0p of type ~s, Stack:~n~p",
+                            [State#state.log_id, Err, Type, Stack]),
                       ErrFun({Type, Err})
             end,
             ok
