@@ -407,6 +407,7 @@ init(#{id := Id,
                              maps:get(membership, Config, voter)),
 
     #{cfg => Cfg,
+      leader_id => undefined,
       current_term => CurrentTerm,
       cluster => Cluster0,
       % There may be scenarios when a single server
@@ -1342,8 +1343,8 @@ handle_follower(#heartbeat_rpc{leader_id = LeaderId,
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, Evt}, #{log := Log0,
                                        cfg := #cfg{id = Id},
-                                       leader_id := LeaderId,
                                        current_term := Term} = State0) ->
+    LeaderId = maps:get(leader_id, State0, undefined),
     % forward events to ra_log
     % if the last written changes then send an append entries reply
     LW = ra_log:last_written(Log0),
