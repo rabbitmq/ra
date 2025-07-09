@@ -71,14 +71,14 @@ floor(FloorIdxIncl, Seq) when is_list(Seq) ->
 
 
 -spec limit(ra:index(), state()) -> state().
-limit(CeilIdx, [Last | Rem])
+limit(CeilIdxIncl, [Last | Rem])
   when is_integer(Last) andalso
-       Last > CeilIdx ->
-    limit(CeilIdx, Rem);
-limit(CeilIdx, [{_, _} = T | Rem]) ->
-    case ra_range:limit(CeilIdx + 1, T) of
+       Last > CeilIdxIncl ->
+    limit(CeilIdxIncl, Rem);
+limit(CeilIdxIncl, [{_, _} = T | Rem]) ->
+    case ra_range:limit(CeilIdxIncl + 1, T) of
         undefined ->
-            limit(CeilIdx, Rem);
+            limit(CeilIdxIncl, Rem);
         {I, I} ->
             [I | Rem];
         {I, I2} when I == I2 - 1 ->
@@ -86,7 +86,7 @@ limit(CeilIdx, [{_, _} = T | Rem]) ->
         NewRange ->
             [NewRange | Rem]
     end;
-limit(_CeilIdx, Seq) ->
+limit(_CeilIdxIncl, Seq) ->
     Seq.
 
 %% @doc adds two sequences together where To is
