@@ -549,7 +549,9 @@ complete_accept(Chunk, Num, Machine,
                            current = IdxTerm},
     {ok, #{machine_version := SnapMacVer}, MacState} = recover(State),
     SnapMacMod  = ra_machine:which_module(Machine, SnapMacVer),
-    LiveIndexes = ra_machine:live_indexes(SnapMacMod, MacState),
+    %% TODO: allow the ra machine to return a re_seq instead of a plain list
+    LiveIndexes = ra_seq:from_list(
+                    ra_machine:live_indexes(SnapMacMod, MacState)),
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     ok = write_indexes(SnapDir, LiveIndexes),
     %% delete accepting marker file
