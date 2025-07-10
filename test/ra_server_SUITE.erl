@@ -1925,10 +1925,10 @@ leader_applies_new_cluster(_Config) ->
      _} = ra_server:handle_leader({N2, AEReply}, State2#ra_server_state{votes = 1}),
 
     % leader has consensus
-    {leader, _State4 = #{commit_index := 4,
-                         cluster_change_permitted := true,
-                         cluster := #{N3 := #{next_index := 5,
-                                              match_index := 4}}},
+    {leader, _State4 = #ra_server_state{commit_index = 4,
+                                        cluster_change_permitted = true,
+                                        cluster = #{N3 := #{next_index := 5,
+                                                            match_index := 4}}},
      _Effects} = ra_server:handle_leader({N3, AEReply}, State3),
      ok.
 
@@ -1957,10 +1957,10 @@ leader_applies_new_cluster_nonvoter(_Config) ->
                                     next_index = 5,
                                     last_index = 4, last_term = 5},
    % new peer doesn't count until it reaches its matching target, leader needs only 2 votes
-   {leader, _State3 = #{commit_index := 4,
-                        cluster_change_permitted := true,
-                        cluster := #{N2 := #{next_index := 5,
-                                             match_index := 4}}},
+   {leader, _State3 = #ra_server_state{commit_index = 4,
+                                       cluster_change_permitted = true,
+                                       cluster = #{N2 := #{next_index := 5,
+                                                           match_index := 4}}},
      _} = ra_server:handle_leader({N2, AEReply}, State2#ra_server_state{votes = 1}),
     ok.
 
@@ -2204,12 +2204,12 @@ candidate_receives_pre_vote(_Config) ->
                                machine_version = 0,
                                last_log_index = 3, last_log_term = 5},
     % candidate replies `#pre_vote_result{vote_granted=true}` for not lower index
-    {candidate, #{},
+    {candidate, #ra_server_state{},
      [{reply, #pre_vote_result{token = Token, vote_granted = true}}]}
         = ra_server:handle_candidate(PreVoteRpc, State),
 
     % candidate replies `#pre_vote_result{vote_granted=false}` for lower index
-    {candidate, #{},
+    {candidate, #ra_server_state{},
      [{reply, #pre_vote_result{token = Token, vote_granted = false}}]}
         = ra_server:handle_candidate(PreVoteRpc#pre_vote_rpc{last_log_index = 2}, State),
 
@@ -2228,7 +2228,7 @@ leader_receives_pre_vote(_Config) ->
                                token = Token,
                                machine_version = 0,
                                last_log_index = 3, last_log_term = 5},
-    {leader, #{}, [
+    {leader, #ra_server_state{}, [
                    {send_rpc, _, _},
                    {send_rpc, _, _},
                    {send_rpc, _, _},
@@ -2349,8 +2349,8 @@ follower_receives_snapshot_lower_than_last_applied(_Config) ->
 
 receive_snapshot_timeout(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
-    #{N3 := {_, FState0 = #{cluster := Config,
-                            current_term := CurTerm}, _}}
+    #{N3 := {_, FState0 = #ra_server_state{cluster = Config,
+                                           current_term = CurTerm}, _}}
     = init_servers([N1, N2, N3], {module, ra_queue, #{}}),
     FState = FState0#ra_server_state{last_applied = 3},
     LastTerm = 1, % snapshot term
@@ -2373,9 +2373,9 @@ receive_snapshot_timeout(_Config) ->
 
 receive_snapshot_new_leader_aer(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
-    #{N3 := {_, FState0 = #{cluster := Config,
-                            current_term := CurTerm,
-                            commit_index := CommitIdx}, _}}
+    #{N3 := {_, FState0 = #ra_server_state{cluster = Config,
+                                           current_term = CurTerm,
+                                           commit_index = CommitIdx}, _}}
     = init_servers([N1, N2, N3], {module, ra_queue, #{}}),
     FState = FState0#ra_server_state{last_applied = 3},
     LastTerm = 1, % snapshot term
@@ -2471,24 +2471,24 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                effective_machine_module = ra_machine_simple,
                system_config = ra_system:default_config()
               },
-    Leader0 = #{cfg => Cfg,
-                cluster =>
-                #{N1 => new_peer_with(#{match_index => 0}), % current leader in term 2
-                  N2 => new_peer_with(#{match_index => 0,
-                                        next_index => N2NextIndex}), % stale peer - previous leader
-                  N3 => new_peer_with(#{match_index => 3,
-                                        next_index => 4,
-                                        commit_index_sent => 3})}, % up-to-date peer
-                cluster_change_permitted => true,
-                cluster_index_term => {0,0},
-                commit_index => 3,
-                current_term => Term,
-                last_applied => 4,
-                log => Log,
-                machine_state => [{4,apple}],
-                query_index => 0,
-                queries_waiting_heartbeats => queue:new(),
-                pending_consistent_queries => []},
+    Leader0 = #ra_server_state{cfg = Cfg,
+                               cluster =
+                               #{N1 => new_peer_with(#{match_index => 0}), % current leader in term 2
+                                 N2 => new_peer_with(#{match_index => 0,
+                                                       next_index => N2NextIndex}), % stale peer - previous leader
+                                 N3 => new_peer_with(#{match_index => 3,
+                                                       next_index => 4,
+                                                       commit_index_sent => 3})}, % up-to-date peer
+                               cluster_change_permitted = true,
+                               cluster_index_term = {0,0},
+                               commit_index = 3,
+                               current_term = Term,
+                               last_applied = 4,
+                               log = Log,
+                               machine_state = [{4,apple}],
+                               query_index = 0,
+                               queries_waiting_heartbeats = queue:new(),
+                               pending_consistent_queries = []},
     AER = #append_entries_reply{success = false,
                                 term = Term,
                                 next_index = 3,
@@ -2527,22 +2527,22 @@ leader_receives_install_snapshot_result(_Config) ->
                effective_machine_module = ra_machine_simple,
                system_config = ra_system:default_config()
               },
-    Leader = #{cfg => Cfg,
-               cluster =>
-               #{N1 => new_peer_with(#{match_index => 0}),
-                 N2 => new_peer_with(#{match_index => 4, next_index => 5,
-                                       commit_index_sent => 4}),
-                 N3 => new_peer_with(#{match_index => 0, next_index => 1})},
-               cluster_change_permitted => true,
-               cluster_index_term => {0,0},
-               commit_index => 4,
-               current_term => Term,
-               last_applied => 4,
-               log => Log0,
-               machine_state => [{4,apple}],
-               query_index => 0,
-               queries_waiting_heartbeats => queue:new(),
-               pending_consistent_queries => []},
+    Leader = #ra_server_state{cfg = Cfg,
+                              cluster =
+                              #{N1 => new_peer_with(#{match_index => 0}),
+                                N2 => new_peer_with(#{match_index => 4, next_index => 5,
+                                                      commit_index_sent => 4}),
+                                N3 => new_peer_with(#{match_index => 0, next_index => 1})},
+                              cluster_change_permitted = true,
+                              cluster_index_term = {0,0},
+                              commit_index = 4,
+                              current_term = Term,
+                              last_applied = 4,
+                              log = Log0,
+                              machine_state = [{4,apple}],
+                              query_index = 0,
+                              queries_waiting_heartbeats = queue:new(),
+                              pending_consistent_queries = []},
     ISR = #install_snapshot_result{term = Term,
                                    last_index = 2,
                                    last_term = 1},
@@ -2696,11 +2696,11 @@ candidate_heartbeat_reply(_Config) ->
         = ra_server:handle_candidate({{no_peer, node()}, HeartbeatReply#heartbeat_reply{term = NewTerm}}, State).
 
 pre_vote_heartbeat(_Config) ->
-    State = (base_state(3, ?FUNCTION_NAME))#{votes => 1},
-    #{current_term := Term,
-      query_index := QueryIndex,
-      leader_id := LeaderId,
-      cfg := #cfg{id = Id}} = State,
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{votes = 1},
+    #ra_server_state{current_term = Term,
+                     query_index = QueryIndex,
+                     leader_id = LeaderId,
+                     cfg = #cfg{id = Id}} = State,
     NewQueryIndex = QueryIndex + 1,
     Heartbeat = #heartbeat_rpc{query_index = NewQueryIndex,
                                term = Term,
@@ -2757,10 +2757,10 @@ pre_vote_heartbeat_reply(_Config) ->
 
 leader_heartbeat(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term,
-      leader_id := LeaderId,
-      cfg := #cfg{id = Id},
-      query_index := QueryIndex} = State,
+    #ra_server_state{current_term = Term,
+                     leader_id = LeaderId,
+                     cfg = #cfg{id = Id},
+                     query_index = QueryIndex} = State,
     NewQueryIndex = QueryIndex + 1,
     Heartbeat = #heartbeat_rpc{query_index = NewQueryIndex,
                                term = Term,
@@ -2798,9 +2798,9 @@ leader_heartbeat(_Config) ->
 leader_heartbeat_reply_node_size_5(_Config) ->
     N3 = ?N3,
     BaseState = base_state(5, ?FUNCTION_NAME),
-    #{current_term := Term,
-      cfg := #cfg{id = Id},
-      commit_index := CommitIndex} = BaseState,
+    #ra_server_state{current_term = Term,
+                     cfg = #cfg{id = Id},
+                     commit_index = CommitIndex} = BaseState,
     QueryIndex = 2,
     QueryRef1 = {from1, fun(_) -> query_result1 end, CommitIndex},
     %% Increase self query index to cover more cases
@@ -2821,9 +2821,9 @@ leader_heartbeat_reply_node_size_5(_Config) ->
 
 leader_heartbeat_reply_same_term(_Config) ->
     BaseState = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term,
-      cfg := #cfg{id = Id},
-      commit_index := CommitIndex} = BaseState,
+    #ra_server_state{current_term = Term,
+                     cfg = #cfg{id = Id},
+                     commit_index = CommitIndex} = BaseState,
     QueryIndex = 2,
     QueryRef1 = {from1, fun(_) -> query_result1 end, CommitIndex},
     QueryRef2 = {from2, fun(_) -> query_result2 end, CommitIndex - 1},
@@ -2906,10 +2906,10 @@ leader_consistent_query_delay(_Config) ->
 
     N2 = ?N2, N3 = ?N3,
     State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{cluster_change_permitted = false},
-    #{commit_index := CommitIndex,
-      query_index := QueryIndex,
-      current_term := Term,
-      cfg := #cfg{id = Id}} = State,
+    #ra_server_state{commit_index = CommitIndex,
+                     query_index = QueryIndex,
+                     current_term = Term,
+                     cfg = #cfg{id = Id}} = State,
 
     %% If cluster changes are not permitted - delay the heartbeats
     Fun = fun(_) -> query_result end,
@@ -2955,10 +2955,10 @@ leader_consistent_query_delay(_Config) ->
 leader_consistent_query(_Config) ->
     N2 = ?N2, N3 = ?N3,
     State = base_state(3, ?FUNCTION_NAME),
-    #{commit_index := CommitIndex,
-      query_index := QueryIndex,
-      current_term := Term,
-      cfg := #cfg{id = Id}} = State,
+    #ra_server_state{commit_index = CommitIndex,
+                     query_index = QueryIndex,
+                     current_term = Term,
+                     cfg = #cfg{id = Id}} = State,
 
     Fun = fun(_) -> query_result end,
     Query1 = {from1, Fun, CommitIndex},
@@ -3002,9 +3002,9 @@ enable_cluster_change(State0) ->
 await_condition_heartbeat_dropped(_Config) ->
     State0 = (base_state(3, ?FUNCTION_NAME)),
     State = State0#ra_server_state{condition = #{predicate_fun => fun(_,S) -> {false, S} end}},
-    #{current_term := Term,
-      query_index := QueryIndex,
-      cfg := #cfg{id = Id}} = State,
+    #ra_server_state{current_term = Term,
+                     query_index = QueryIndex,
+                     cfg = #cfg{id = Id}} = State,
 
     Heartbeat = #heartbeat_rpc{term = Term,
                                query_index = QueryIndex,
@@ -3022,8 +3022,8 @@ await_condition_heartbeat_dropped(_Config) ->
 await_condition_heartbeat_reply_dropped(_Config) ->
     State0 = (base_state(3, ?FUNCTION_NAME)),
     State = State0#ra_server_state{condition = #{predicate_fun => fun(_,S) -> {false, S} end}},
-    #{current_term := Term,
-      query_index := QueryIndex} = State,
+    #ra_server_state{current_term = Term,
+                     query_index = QueryIndex} = State,
 
     HeartbeatReply = #heartbeat_reply{term = Term,
                                  query_index = QueryIndex},
@@ -3039,9 +3039,9 @@ await_condition_heartbeat_reply_dropped(_Config) ->
 
 receive_snapshot_heartbeat_dropped(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term,
-      query_index := QueryIndex,
-      cfg := #cfg{id = Id}} = State,
+    #ra_server_state{current_term = Term,
+                     query_index = QueryIndex,
+                     cfg = #cfg{id = Id}} = State,
 
     Heartbeat = #heartbeat_rpc{term = Term,
                                query_index = QueryIndex,
@@ -3058,8 +3058,8 @@ receive_snapshot_heartbeat_dropped(_Config) ->
 
 receive_snapshot_heartbeat_reply_dropped(_config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term,
-      query_index := QueryIndex} = State,
+    #ra_server_state{current_term = Term,
+                     query_index = QueryIndex} = State,
 
     HeartbeatReply = #heartbeat_reply{term = Term,
                                       query_index = QueryIndex},

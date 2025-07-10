@@ -2934,7 +2934,7 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
                    " cannot apply any further entries",
                    [LogId, NextMacVer, MacVer]),
             Cfg = Cfg0#cfg{effective_machine_version = NextMacVer},
-            State = State0#{cfg => Cfg},
+            State = State0#ra_server_state{cfg = Cfg},
             {CurModule, LastAppliedIdx, State,
              MacSt, Effects, Notifys, LastTs};
         false ->
@@ -3007,17 +3007,17 @@ add_reply(_, _, _, % From, Reply, Mode
     {Effects, Notifys}.
 
 append_log_leader({CmdTag, _, _, _},
-                  #{cluster_change_permitted := false} = State,
+                  #ra_server_state{cluster_change_permitted = false} = State,
                   Effects)
   when CmdTag == '$ra_join' orelse
        CmdTag == '$ra_leave' ->
     {not_appended, cluster_change_not_permitted, State, Effects};
 append_log_leader({'$ra_join', From, #{id := JoiningNode,
                                        voter_status := Voter0}, ReplyMode},
-                  #{cluster := OldCluster} = State, Effects) ->
+                  #ra_server_state{cluster = OldCluster} = State, Effects) ->
     case ensure_promotion_target(Voter0, State) of
         {error, Reason} ->
-            {not_appended, Reason, State};
+            {not_appended, Reason, State, Effects};
         {ok, Voter} ->
             case OldCluster of
                 #{JoiningNode := #{voter_status := Voter}} ->
@@ -3040,7 +3040,7 @@ append_log_leader({'$ra_join', From, #{id := JoiningNode} = Config, ReplyMode},
                                                    Config)},
                        ReplyMode}, State, Effects);
 append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
-                  #{cluster := OldCluster} = State,
+                  #ra_server_state{cluster = OldCluster} = State,
                   Effects) ->
     % Legacy $ra_join, join as voter if no such member in the cluster.
     case OldCluster of
@@ -3074,7 +3074,7 @@ append_log_leader(Cmd, #ra_server_state{log = Log0, current_term = Term} = State
     end.
 
 pre_append_log_follower({Idx, Term, Cmd} = Entry,
-                        State = #{cluster_index_term := {Idx, CITTerm}})
+                        #ra_server_state{cluster_index_term = {Idx, CITTerm}} = State)
   when Term /= CITTerm ->
     % the index for the cluster config entry has a different term, i.e.
     % it has been overwritten by a new leader. Unless it is another cluster
@@ -3402,7 +3402,7 @@ process_pending_consistent_queries(#ra_server_state{cluster_change_permitted = t
             {NewState, NewEffects} = make_heartbeat_rpc_effects(QueryRef, State),
             {NewState, NewEffects ++ Effects}
         end,
-        {State0#{pending_consistent_queries => []}, Effects0},
+        {State0#ra_server_state{pending_consistent_queries = []}, Effects0},
         Pending).
 
 incr_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
@@ -3435,7 +3435,7 @@ ensure_promotion_target(#{membership := promotable, target := _, uid := _} = Sta
                         _) ->
     {ok, Status};
 ensure_promotion_target(#{membership := promotable, uid := _} = Status,
-                        #{log := Log}) ->
+                        #ra_server_state{log = Log}) ->
     %% The next index in the log is used by for a cluster change command:
     %% the caller of `ensure_promotion_target/2' also calls
     %% `append_cluster_change/5'. So even if a peer joins a cluster which isn't
@@ -3464,7 +3464,7 @@ get_membership(Cluster, PeerId, UId, Default) ->
 
 -spec get_condition_timeout(ra_server_state(), Default :: term()) ->
     term() | integer().
-get_condition_timeout(#{condition := #{timeout := #{duration := D}}}, _Def) ->
+get_condition_timeout(#ra_server_state{condition = #{timeout := #{duration := D}}}, _Def) ->
     D;
 get_condition_timeout(_, Def) ->
     Def.
