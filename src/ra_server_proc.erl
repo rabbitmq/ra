@@ -343,7 +343,7 @@ do_init(#{id := Id,
     ok = ra_directory:register_name(Names, UId, self(),
                                     maps:get(parent, Config, undefined), Key,
                                     ClusterName),
-    #{cluster := Cluster} = ServerState = ra_server:init(Config),
+    #ra_server_state{cluster = Cluster} = ServerState = ra_server:init(Config),
 
     % ensure each relevant erlang node is connected
     PeerNodes = [PeerNode ||
@@ -1103,7 +1103,7 @@ handle_event(_EventType, EventContent, StateName, State) ->
 
 terminate(Reason, StateName,
           #state{conf = #conf{name = Key, cluster_name = ClusterName},
-                 server_state = ServerState = #{cfg := #cfg{metrics_key = MetricsKey}}} = State) ->
+                 server_state = ServerState = #ra_server_state{cfg = #cfg{metrics_key = MetricsKey}}} = State) ->
     ?DEBUG("~ts: terminating with ~w in state ~w",
            [log_id(State), Reason, StateName]),
     #{names := #{server_sup := SrvSup,
@@ -1276,7 +1276,7 @@ perform_or_delay_local_query(
 do_perform_or_delay_local_query(
   RaftState, From, QueryFun, Options,
   #state{conf = Conf,
-         server_state = #{cfg := #cfg{id = ThisMember}} = ServerState,
+         server_state = #ra_server_state{cfg = #cfg{id = ThisMember}} = ServerState,
          pending_queries = PendingQueries} = State) ->
     %% The caller might decide it wants the query to be executed only after a
     %% specific index has been applied on the local node. It can specify that
@@ -1332,7 +1332,7 @@ perform_pending_queries(RaftState, LastApplied,
 
 perform_pending_queries1(
   {{applied, {TargetIndex, TargetTerm}}, From, QueryFun} = PendingQuery,
-  {PendingQueries0, Actions0, #{cfg := #cfg{id = ThisMember}} = ServerState0},
+  {PendingQueries0, Actions0, #ra_server_state{cfg = #cfg{id = ThisMember}} = ServerState0},
   #{last_applied := LastApplied, leader := Leader, conf := Conf})
   when TargetIndex =< LastApplied ->
     {Term, ServerState} = ra_server:fetch_term(TargetIndex, ServerState0),
@@ -1914,7 +1914,7 @@ send(To, Msg, Conf) ->
             Res
     end.
 
-read_entries0(From, Idxs, #state{server_state = #{log := Log}} = State) ->
+read_entries0(From, Idxs, #state{server_state = #ra_server_state{log = Log}} = State) ->
     ReadState = ra_log:partial_read(Idxs, Log, fun (Idx, Term, Cmd) ->
                                                        {Idx, Term, Cmd}
                                                end),
@@ -2120,7 +2120,7 @@ can_execute_locally(RaftState, TargetNode,
     end.
 
 can_execute_on_member(_RaftState, Member,
-                      #state{server_state = #{cfg := #cfg{id = Member}}}) ->
+                      #state{server_state = #ra_server_state{cfg = #cfg{id = Member}}}) ->
     true;
 can_execute_on_member(leader, Member, State) ->
     Members = do_state_query(members, State),
@@ -2177,8 +2177,8 @@ maybe_record_cluster_change(#state{conf = #conf{cluster_name = ClusterName},
                             #state{server_state = ServerStateB}) ->
     LeaderA = ra_server:leader_id(ServerStateA),
     LeaderB = ra_server:leader_id(ServerStateB),
-    if (map_get(cluster_index_term, ServerStateA) =/=
-        map_get(cluster_index_term, ServerStateB) orelse
+    if (ServerStateA#ra_server_state.cluster_index_term =/=
+        ServerStateB#ra_server_state.cluster_index_term orelse
         LeaderA =/= LeaderB) ->
             MembersB = ra_server:state_query(members, ServerStateB),
             ok = ra_leaderboard:record(ClusterName, LeaderB, MembersB);

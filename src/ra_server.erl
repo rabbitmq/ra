@@ -1759,17 +1759,17 @@ overview(#ra_server_state{cfg = #cfg{effective_machine_module = MacMod} = Cfg,
            pending_consistent_queries = PendingQueries
           } = State) ->
     NumQueries = queue:len(Queries),
-    O0 = maps:with([current_term,
-                    commit_index,
-                    last_applied,
-                    cluster,
-                    leader_id,
-                    voted_for,
-                    membership,
-                    cluster_change_permitted,
-                    cluster_index_term,
-                    query_index
-                   ], State),
+    O0 = #{current_term => State#ra_server_state.current_term,
+           commit_index => State#ra_server_state.commit_index,
+           last_applied => State#ra_server_state.last_applied,
+           cluster => State#ra_server_state.cluster,
+           leader_id => State#ra_server_state.leader_id,
+           voted_for => State#ra_server_state.voted_for,
+           membership => State#ra_server_state.membership,
+           cluster_change_permitted => State#ra_server_state.cluster_change_permitted,
+           cluster_index_term => State#ra_server_state.cluster_index_term,
+           query_index => State#ra_server_state.query_index
+          },
     O = maps:merge(O0, cfg_to_map(Cfg)),
     LogOverview = ra_log:overview(Log),
     MacOverview = ra_machine:overview(MacMod, MacState),
@@ -3051,8 +3051,8 @@ append_log_leader({'$ra_join', From, JoiningNode, ReplyMode},
                               State, Effects)
     end;
 append_log_leader({'$ra_leave', From, LeavingServer, ReplyMode},
-                  #{cfg := #cfg{log_id = LogId},
-                    cluster := OldCluster} = State, Effects) ->
+                  #ra_server_state{cfg = #cfg{log_id = LogId},
+                                   cluster = OldCluster} = State, Effects) ->
     case OldCluster of
         #{LeavingServer := _} ->
             Cluster = maps:remove(LeavingServer, OldCluster),
@@ -3675,8 +3675,8 @@ handle_info_reply(State, #info_reply{} = _InfoReply) ->
     {State, []}.
 
 determine_if_machine_upgrade_allowed(
-  #{cfg := #cfg{effective_machine_version = EffectiveMacVer,
-                log_id = LogId}} = State) ->
+  #ra_server_state{cfg = #cfg{effective_machine_version = EffectiveMacVer,
+                              log_id = LogId}} = State) ->
     Effects = case get_max_supported_machine_version(State) of
                   MaxSupMacVer
                     when MaxSupMacVer > EffectiveMacVer ->
@@ -3694,8 +3694,8 @@ determine_if_machine_upgrade_allowed(
     {State, Effects}.
 
 get_max_supported_machine_version(
-  #{cfg := #cfg{effective_machine_version = EffectiveMacVer,
-                id = Id}, cluster := Cluster} = State) ->
+  #ra_server_state{cfg = #cfg{effective_machine_version = EffectiveMacVer,
+                              id = Id}, cluster = Cluster} = State) ->
     MacVer = machine_version(State),
     MaxSupMacVer = maps:fold(
                      fun

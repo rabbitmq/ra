@@ -20,7 +20,7 @@
 all() ->
     [
      init_test,
-     %recover_restores_cluster_changes,
+     recover_restores_cluster_changes,
      election_timeout,
      follower_aer_diverged,
      follower_aer_term_mismatch,
