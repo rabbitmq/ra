@@ -69,39 +69,7 @@
          transform_for_partial_read/3
         ]).
 
--type ra_await_condition_fun() ::
-    fun((ra_msg(), ra_server_state()) -> {boolean(), ra_server_state()}).
-
--type ra_server_state() ::
-    #{cfg := #cfg{},
-      leader_id => option(ra_server_id()),
-      cluster := ra_cluster(),
-      cluster_change_permitted := boolean(),
-      cluster_index_term := ra_idxterm(),
-      previous_cluster => {ra_index(), ra_term(), ra_cluster()},
-      current_term := ra_term(),
-      log := term(),
-      voted_for => option(ra_server_id()), % persistent
-      votes => non_neg_integer(),
-      membership => ra_membership(),
-      commit_index := ra_index(),
-      last_applied := ra_index(),
-      persisted_last_applied => ra_index(),
-      stop_after => ra_index(),
-      machine_state := term(),
-      aux_state => term(),
-      condition => #{predicate_fun := ra_await_condition_fun(),
-                     transition_to => ra_state(),
-                     timeout => #{duration => integer(),
-                                  transition_to => ra_state(),
-                                  effects => [effect()]}},
-      pre_vote_token => reference(),
-      query_index := non_neg_integer(),
-      queries_waiting_heartbeats := queue:queue({non_neg_integer(),
-                                                 consistent_query_ref()}),
-      pending_consistent_queries := [consistent_query_ref()],
-      commit_latency => option(non_neg_integer())
-     }.
+-type ra_server_state() :: #ra_server_state{}.
 
 -type state() :: ra_server_state().
 
@@ -404,42 +372,42 @@ init(#{id := Id,
     NonVoter = get_membership(Cluster0, Id, UId,
                              maps:get(membership, Config, voter)),
 
-    #{cfg => Cfg,
-      leader_id => undefined,
-      current_term => CurrentTerm,
-      cluster => Cluster0,
-      % There may be scenarios when a single server
-      % starts up but hasn't
-      % yet re-applied its noop command that we may receive other join
-      % commands that can't be applied.
-      cluster_change_permitted => false,
-      cluster_index_term => SnapshotIndexTerm,
-      voted_for => VotedFor,
-      membership => NonVoter,
-      commit_index => CommitIndex,
-      %% set this to the first index so that we can apply all entries
-      %% up to the commit index during recovery
-      last_applied => SnapshotIdx,
-      persisted_last_applied => LastApplied,
-      log => Log0,
-      machine_state => MacState,
-      %% aux state is transient and needs to be initialized every time
-      aux_state => ra_machine:init_aux(MacMod, Name),
-      query_index => 0,
-      queries_waiting_heartbeats => queue:new(),
-      pending_consistent_queries => []}.
+    #ra_server_state{cfg = Cfg,
+                     leader_id = undefined,
+                     current_term = CurrentTerm,
+                     cluster = Cluster0,
+                     % There may be scenarios when a single server
+                     % starts up but hasn't
+                     % yet re-applied its noop command that we may receive other join
+                     % commands that can't be applied.
+                     cluster_change_permitted = false,
+                     cluster_index_term = SnapshotIndexTerm,
+                     voted_for = VotedFor,
+                     membership = NonVoter,
+                     commit_index = CommitIndex,
+                     %% set this to the first index so that we can apply all entries
+                     %% up to the commit index during recovery
+                     last_applied = SnapshotIdx,
+                     persisted_last_applied = LastApplied,
+                     log = Log0,
+                     machine_state = MacState,
+                     %% aux state is transient and needs to be initialized every time
+                     aux_state = ra_machine:init_aux(MacMod, Name),
+                     query_index = 0,
+                     queries_waiting_heartbeats = queue:new(),
+                     pending_consistent_queries = []}.
 
-recover(#{cfg := #cfg{log_id = LogId,
-                      machine_version = MacVer,
-                      effective_machine_version = EffMacVer} = Cfg,
-          commit_index := CommitIndex,
-          last_applied := LastApplied} = State0) ->
+recover(#ra_server_state{cfg = #cfg{log_id = LogId,
+                                        machine_version = MacVer,
+                                        effective_machine_version = EffMacVer} = Cfg,
+                         commit_index = CommitIndex,
+                         last_applied = LastApplied} = State0) ->
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, LastApplied),
     ?DEBUG("~ts: recovering state machine version ~b:~b from index ~b to ~b",
            [LogId, EffMacVer, MacVer, LastApplied, CommitIndex]),
     Before = erlang:system_time(millisecond),
-    {#{log := Log0,
-       cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State1, _} =
+    {#ra_server_state{log = Log0,
+                      cfg = #cfg{effective_machine_version = EffMacVerAfter}} = State1, _} =
         apply_to(CommitIndex,
                  fun({Idx, _, _} = E, S0) ->
                          %% Clear out the effects and notifies map
@@ -465,18 +433,18 @@ recover(#{cfg := #cfg{log_id = LogId,
                                State1, Log0, return),
 
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
-    State#{log => Log,
-           %% reset commit latency as recovery may calculate a very old value
-           commit_latency => 0}.
+    State#ra_server_state{log = Log,
+                          %% reset commit latency as recovery may calculate a very old value
+                          commit_latency = 0}.
 
 -spec handle_leader(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                                              next_index = NextIdx,
                                              last_index = LastIdx}},
-              #{current_term := Term,
-                cfg := #cfg{id = Id,
-                            log_id = LogId} = Cfg} = State0) ->
+              #ra_server_state{current_term = Term,
+                               cfg = #cfg{id = Id,
+                                          log_id = LogId} = Cfg} = State0) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_AER_REPLIES_SUCCESS, 1),
     case peer(PeerId, State0) of
         undefined ->
@@ -493,11 +461,11 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                                                                    Effects0),
             Effects2 = [{next_event, info, pipeline_rpcs} | Effects1],
             case State3 of
-                #{cluster := #{Id := _}} ->
+                #ra_server_state{cluster = #{Id := _}} ->
                     % leader is in the cluster
                     {leader, State3, Effects2};
-                #{commit_index := CI,
-                  cluster_index_term := {CITIndex, _}}
+                #ra_server_state{commit_index = CI,
+                                  cluster_index_term = {CITIndex, _}}
                   when CI >= CITIndex ->
                     % leader is not in the cluster and the new cluster
                     % config has been committed
@@ -512,8 +480,8 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             end
     end;
 handle_leader({PeerId, #append_entries_reply{term = Term}},
-              #{current_term := CurTerm,
-                cfg := #cfg{log_id = LogId}} = State0)
+              #ra_server_state{current_term = CurTerm,
+                               cfg = #cfg{log_id = LogId}} = State0)
   when Term > CurTerm ->
     case peer(PeerId, State0) of
         undefined ->
@@ -524,11 +492,11 @@ handle_leader({PeerId, #append_entries_reply{term = Term}},
             ?NOTICE("~ts: leader saw append_entries_reply from ~w for term ~b "
                     "abdicates term: ~b!",
                     [LogId, PeerId, Term, CurTerm]),
-            {follower, update_term(Term, State0#{leader_id => undefined}), []}
+            {follower, update_term(Term, State0#ra_server_state{leader_id = undefined}), []}
     end;
 handle_leader({PeerId, #append_entries_reply{success = false}},
-              State0 = #{cfg := #cfg{log_id = LogId},
-                         cluster := Nodes})
+              #ra_server_state{cfg = #cfg{log_id = LogId},
+                               cluster = Nodes} = State0)
   when not is_map_key(PeerId, Nodes) ->
     ?WARN("~ts: saw append_entries_reply from unknown peer ~w",
           [LogId, PeerId]),
@@ -537,8 +505,8 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                              next_index = PeerNextIdx,
                                              last_index = PeerLastIdx,
                                              last_term = PEER_LAST_TERM}},
-              #{cfg := #cfg{log_id = LogId} = Cfg,
-                cluster := Nodes, log := Log0} = State0) ->
+              #ra_server_state{cfg = #cfg{log_id = LogId} = Cfg,
+                               cluster = Nodes, log = Log0} = State0) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_AER_REPLIES_FAILED, 1),
     #{PeerId := #{match_index := MI,
                   next_index := NI} = Peer0} = Nodes,
@@ -590,12 +558,12 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                   NextIndex]),
                           {Peer0#{next_index => NextIndex}, Log1}
                   end,
-    State1 = State0#{cluster => Nodes#{PeerId => Peer}, log => Log},
+    State1 = State0#ra_server_state{cluster = Nodes#{PeerId => Peer}, log = Log},
     {State, _, Effects} = make_pipelined_rpc_effects(State1, []),
     {leader, State, Effects};
-handle_leader({command, Cmd}, #{cfg := #cfg{id = Self,
-                                            log_id = LogId} = Cfg,
-                                cluster := Cluster} = State00) ->
+handle_leader({command, Cmd}, #ra_server_state{cfg = #cfg{id = Self,
+                                                         log_id = LogId} = Cfg,
+                                                 cluster = Cluster} = State00) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, 1),
     case append_log_leader(Cmd, State00, []) of
         {not_appended, wal_down, State0, Effects0} ->
@@ -606,7 +574,7 @@ handle_leader({command, Cmd}, #{cfg := #cfg{id = Self,
                            [{PeerId, _} | _] ->
                                [{next_event, cast, {transfer_leadership, PeerId}}]
                        end,
-            State = State0#{condition =>
+            State = State0#ra_server_state{condition =
                             #{predicate_fun => fun wal_down_condition/2,
                               transition_to => leader,
                               %% TODO: make duration configurable?
@@ -635,12 +603,12 @@ handle_leader({command, Cmd}, #{cfg := #cfg{id = Self,
             Effects = after_log_append_reply(Cmd, Idx, Term, Effects0),
             {leader, State, Effects}
     end;
-handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
-                                              log_id = LogId} = Cfg,
-                                  cluster := Cluster,
-                                  log := Log0} = State000) ->
+handle_leader({commands, Cmds}, #ra_server_state{cfg = #cfg{id = Self,
+                                                           log_id = LogId} = Cfg,
+                                                   cluster = Cluster,
+                                                   log = Log0} = State000) ->
     Num = length(Cmds),
-    State00 = State000#{log => ra_log:begin_tx(Log0)},
+    State00 = State000#ra_server_state{log = ra_log:begin_tx(Log0)},
     %% only user commands are appended in a {commands, Cmds} batch
     {State0, Effects0} = lists:foldl(
                            fun(C, {S0, E0}) ->
@@ -649,10 +617,10 @@ handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
                            end, {State00, []}, Cmds),
     ok = incr_counter(Cfg, ?C_RA_SRV_COMMAND_FLUSHES, 1),
     ok = incr_counter(Cfg, ?C_RA_SRV_COMMANDS, Num),
-    #{log := Log1} = State0,
+    #ra_server_state{log = Log1} = State0,
     case ra_log:commit_tx(Log1) of
         {ok, Log} ->
-            {State, _, Effects} = make_pipelined_rpc_effects(State0#{log => Log},
+            {State, _, Effects} = make_pipelined_rpc_effects(State0#ra_server_state{log = Log},
                                                              Effects0),
             {leader, State, Effects};
         {error, wal_down, Log} ->
@@ -668,31 +636,31 @@ handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
                                [{next_event, cast, {transfer_leadership, PeerId}}]
                        end,
 
-            State = State0#{condition =>
+            State = State0#ra_server_state{condition =
                             #{predicate_fun => fun wal_down_condition/2,
                               transition_to => leader,
                               %% TODO: make duration configurable?
                               timeout => #{duration => 5000,
                                            effects => CondEffs,
                                            transition_to => leader}},
-                           log => Log},
+                           log = Log},
 
             {await_condition, State, Effects0}
     end;
 handle_leader({ra_log_event, {written, _, _} = Evt},
-              #{log := Log0} = State0) ->
+              #ra_server_state{log = Log0} = State0) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
-    {State1, Effects1} = evaluate_quorum(State0#{log => Log}, Effects0),
+    {State1, Effects1} = evaluate_quorum(State0#ra_server_state{log = Log}, Effects0),
     {State, Effects} = process_pending_consistent_queries(State1, Effects1),
     {leader, State, [{next_event, info, pipeline_rpcs} | Effects]};
-handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
+handle_leader({ra_log_event, Evt}, #ra_server_state{log = Log0} = State) ->
     {Log1, Effects} = ra_log:handle_event(Evt, Log0),
-    {leader, State#{log => Log1}, Effects};
+    {leader, State#ra_server_state{log = Log1}, Effects};
 handle_leader({aux_command, Type, Cmd}, State0) ->
     handle_aux(leader, Type, Cmd, State0);
 handle_leader({PeerId, #install_snapshot_result{term = Term}},
-              #{cfg := #cfg{log_id = LogId},
-                current_term := CurTerm} = State0)
+              #ra_server_state{cfg = #cfg{log_id = LogId},
+                               current_term = CurTerm} = State0)
   when Term > CurTerm ->
     case peer(PeerId, State0) of
         undefined ->
@@ -702,10 +670,10 @@ handle_leader({PeerId, #install_snapshot_result{term = Term}},
         _ ->
             ?DEBUG("~ts: leader saw install_snapshot_result from ~w for term ~b"
                   " abdicates term: ~b!", [LogId, PeerId, Term, CurTerm]),
-            {follower, update_term(Term, State0#{leader_id => undefined}), []}
+            {follower, update_term(Term, State0#ra_server_state{leader_id = undefined}), []}
     end;
 handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
-              #{cfg := #cfg{log_id = LogId}} = State0) ->
+              #ra_server_state{cfg = #cfg{log_id = LogId}} = State0) ->
     case peer(PeerId, State0) of
         undefined ->
             ?WARN("~ts: saw install_snapshot_result from unknown peer ~w",
@@ -740,8 +708,8 @@ handle_leader(pipeline_rpcs, State0) ->
     {leader, State, Effects};
 handle_leader(#install_snapshot_rpc{term = Term,
                                     leader_id = Leader} = Evt,
-              #{current_term := CurTerm,
-                cfg := #cfg{log_id = LogId}} = State0)
+              #ra_server_state{current_term = CurTerm,
+                               cfg = #cfg{log_id = LogId}} = State0)
   when Term > CurTerm ->
     case peer(Leader, State0) of
         undefined ->
@@ -752,70 +720,70 @@ handle_leader(#install_snapshot_rpc{term = Term,
             ?INFO("~ts: leader saw install_snapshot_rpc from ~w for term ~b "
                   "abdicates term: ~b!",
                   [LogId, Evt#install_snapshot_rpc.leader_id, Term, CurTerm]),
-            {follower, update_term(Term, State0#{leader_id => undefined}),
+            {follower, update_term(Term, State0#ra_server_state{leader_id = undefined}),
              [{next_event, Evt}]}
     end;
 handle_leader(#append_entries_rpc{term = Term} = Msg,
-              #{current_term := CurTerm,
-                cfg := #cfg{log_id = LogId}} = State0)
+              #ra_server_state{current_term = CurTerm,
+                               cfg = #cfg{log_id = LogId}} = State0)
   when Term > CurTerm ->
     ?INFO("~ts: leader saw append_entries_rpc from ~w for term ~b "
           "abdicates term: ~b!",
           [LogId, Msg#append_entries_rpc.leader_id,
            Term, CurTerm]),
-    {follower, update_term(Term, State0#{leader_id => undefined}),
+    {follower, update_term(Term, State0#ra_server_state{leader_id = undefined}),
      [{next_event, Msg}]};
-handle_leader(#append_entries_rpc{term = Term}, #{current_term := Term,
-                                                  cfg := #cfg{log_id = LogId}}) ->
+handle_leader(#append_entries_rpc{term = Term}, #ra_server_state{current_term = Term,
+                                                                      cfg = #cfg{log_id = LogId}}) ->
     ?ERR("~ts: leader saw append_entries_rpc for same term ~b"
          " this should not happen!", [LogId, Term]),
     exit(leader_saw_append_entries_rpc_in_same_term);
 handle_leader(#append_entries_rpc{leader_id = LeaderId},
-              #{current_term := CurTerm,
-                cfg := #cfg{id = Id}} = State0) ->
+              #ra_server_state{current_term = CurTerm,
+                               cfg = #cfg{id = Id}} = State0) ->
     Reply = append_entries_reply(CurTerm, false, State0),
     {leader, State0, [cast_reply(Id, LeaderId, Reply)]};
 handle_leader({consistent_query, From, QueryFun},
-              #{commit_index := CommitIndex,
-                cluster_change_permitted := true} = State0) ->
+              #ra_server_state{commit_index = CommitIndex,
+                               cluster_change_permitted = true} = State0) ->
     QueryRef = {From, QueryFun, CommitIndex},
     {State1, Effects} = make_heartbeat_rpc_effects(QueryRef, State0),
     {leader, State1, Effects};
 handle_leader({consistent_query, From, QueryFun},
-              #{commit_index := CommitIndex,
-                cluster_change_permitted := false,
-                pending_consistent_queries := PQ} = State0) ->
+              #ra_server_state{commit_index = CommitIndex,
+                               cluster_change_permitted = false,
+                               pending_consistent_queries = PQ} = State0) ->
     QueryRef = {From, QueryFun, CommitIndex},
-    {leader, State0#{pending_consistent_queries => [QueryRef | PQ]}, []};
+    {leader, State0#ra_server_state{pending_consistent_queries = [QueryRef | PQ]}, []};
 %% Lihtweight version of append_entries_rpc
 handle_leader(#heartbeat_rpc{term = Term} = Msg,
-              #{current_term := CurTerm,
-                cfg := #cfg{log_id = LogId}} = State0)
+              #ra_server_state{current_term = CurTerm,
+                               cfg = #cfg{log_id = LogId}} = State0)
         when CurTerm < Term ->
     ?INFO("~ts: leader saw heartbeat_rpc from ~w for term ~b "
           "abdicates term: ~b!",
           [LogId, Msg#heartbeat_rpc.leader_id,
            Term, CurTerm]),
-    {follower, update_term(Term, State0#{leader_id => undefined}),
+    {follower, update_term(Term, State0#ra_server_state{leader_id = undefined}),
      [{next_event, Msg}]};
 handle_leader(#heartbeat_rpc{term = Term,
                              query_index = QueryIndex,
                              leader_id = LeaderId},
-              #{current_term := CurTerm,
-                cfg := #cfg{id = Id}} = State)
+              #ra_server_state{current_term = CurTerm,
+                               cfg = #cfg{id = Id}} = State)
         when CurTerm > Term ->
     Reply = heartbeat_reply(CurTerm, QueryIndex),
     {leader, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_leader(#heartbeat_rpc{term = Term},
-              #{current_term := CurTerm, cfg := #cfg{log_id = LogId}})
+              #ra_server_state{current_term = CurTerm, cfg = #cfg{log_id = LogId}})
   when CurTerm == Term ->
     ?ERR("~ts: leader saw heartbeat_rpc for same term ~b"
          " this should not happen!", [LogId, Term]),
     exit(leader_saw_heartbeat_rpc_in_same_term);
 handle_leader({PeerId, #heartbeat_reply{query_index = ReplyQueryIndex,
                                         term = Term}},
-              #{current_term := CurTerm,
-                cfg := #cfg{log_id = LogId}} = State0) ->
+              #ra_server_state{current_term = CurTerm,
+                               cfg = #cfg{log_id = LogId}} = State0) ->
     case {CurTerm, Term} of
         {Same, Same} ->
             %% Heartbeat confirmed
@@ -834,11 +802,11 @@ handle_leader({PeerId, #heartbeat_reply{query_index = ReplyQueryIndex,
             ?NOTICE("~ts leader saw heartbeat_reply from ~w for term ~b "
                     "abdicates term: ~b!",
                     [LogId, PeerId, Term, CurTerm]),
-            {follower, update_term(Term, State0#{leader_id => undefined}), []}
+            {follower, update_term(Term, State0#ra_server_state{leader_id = undefined}), []}
     end;
 handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
-              #{current_term := CurTerm,
-                cfg := #cfg{log_id = LogId}} = State0) when Term > CurTerm ->
+              #ra_server_state{current_term = CurTerm,
+                               cfg = #cfg{log_id = LogId}} = State0) when Term > CurTerm ->
     case peer(Cand, State0) of
         undefined ->
             ?WARN("~ts: leader saw request_vote_rpc for unknown peer ~w",
@@ -848,15 +816,15 @@ handle_leader(#request_vote_rpc{term = Term, candidate_id = Cand} = Msg,
             ?INFO("~ts: leader saw request_vote_rpc from ~w for term ~b "
                   "abdicates term: ~b!",
                   [LogId, Msg#request_vote_rpc.candidate_id, Term, CurTerm]),
-            {follower, update_term(Term, State0#{leader_id => undefined}),
+            {follower, update_term(Term, State0#ra_server_state{leader_id = undefined}),
              [{next_event, Msg}]}
     end;
-handle_leader(#request_vote_rpc{}, State = #{current_term := Term}) ->
+handle_leader(#request_vote_rpc{}, #ra_server_state{current_term = Term} = State) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {leader, State, [{reply, Reply}]};
 handle_leader(#pre_vote_rpc{term = Term, candidate_id = Cand} = Msg,
-              #{current_term := CurTerm,
-                cfg := #cfg{log_id = LogId}} = State0) when Term > CurTerm ->
+              #ra_server_state{current_term = CurTerm,
+                               cfg = #cfg{log_id = LogId}} = State0) when Term > CurTerm ->
     case peer(Cand, State0) of
         undefined ->
             ?WARN("~ts: leader saw pre_vote_rpc for unknown peer ~w",
@@ -866,11 +834,11 @@ handle_leader(#pre_vote_rpc{term = Term, candidate_id = Cand} = Msg,
             ?INFO("~ts: leader saw pre_vote_rpc from ~w for term ~b"
                   " abdicates term: ~b!",
                   [LogId, Msg#pre_vote_rpc.candidate_id, Term, CurTerm]),
-            {follower, update_term(Term, State0#{leader_id => undefined}),
+            {follower, update_term(Term, State0#ra_server_state{leader_id = undefined}),
              [{next_event, Msg}]}
     end;
 handle_leader(#pre_vote_rpc{term = Term},
-              #{current_term := CurTerm} = State0)
+              #ra_server_state{current_term = CurTerm} = State0)
   when Term =< CurTerm ->
     % enforce leadership
     {State, Effects} = make_all_rpcs(State0),
@@ -882,43 +850,43 @@ handle_leader(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {leader, State, []};
 handle_leader(#info_rpc{term = Term} = Msg,
-              #{current_term := CurTerm,
-                cfg := #cfg{log_id = LogId}} = State0)
+              #ra_server_state{current_term = CurTerm,
+                               cfg = #cfg{log_id = LogId}} = State0)
         when CurTerm < Term ->
     ?INFO("~ts: leader saw info_rpc from ~w for term ~b, abdicates term: ~b!",
           [LogId, Msg#info_rpc.from, Term, CurTerm]),
-    {follower, update_term(Term, State0#{leader_id => undefined}),
+    {follower, update_term(Term, State0#ra_server_state{leader_id = undefined}),
      [{next_event, Msg}]};
 handle_leader(#info_rpc{} = InfoRpc, State) ->
     InfoReplyEffect = info_reply_effect(State, InfoRpc),
     {leader, State, [InfoReplyEffect]};
 handle_leader(#info_reply{term = Term} = Msg,
-              #{current_term := CurTerm,
-                cfg := #cfg{log_id = LogId}} = State0)
+              #ra_server_state{current_term = CurTerm,
+                               cfg = #cfg{log_id = LogId}} = State0)
         when CurTerm < Term ->
     ?INFO("~ts: leader saw info_reply from ~w for term ~b, abdicates "
           "term: ~b!",
           [LogId, Msg#info_reply.from, Term, CurTerm]),
-    {follower, update_term(Term, State0#{leader_id => undefined}),
+    {follower, update_term(Term, State0#ra_server_state{leader_id = undefined}),
      [{next_event, Msg}]};
 handle_leader(#info_reply{} = InfoReply, State) ->
     {State1, Effects} = handle_info_reply(State, InfoReply),
     {leader, State1, Effects};
 handle_leader({transfer_leadership, Leader},
-              #{cfg := #cfg{id = Leader, log_id = LogId}} = State) ->
+              #ra_server_state{cfg = #cfg{id = Leader, log_id = LogId}} = State) ->
     ?DEBUG("~ts: transfer leadership requested but already leader",
            [LogId]),
     {leader, State, [{reply, already_leader}]};
 handle_leader({transfer_leadership, Member},
-              #{cfg := #cfg{log_id = LogId},
-                cluster := Members} = State)
+              #ra_server_state{cfg = #cfg{log_id = LogId},
+                               cluster = Members} = State)
   when not is_map_key(Member, Members) ->
     ?DEBUG("~ts: transfer leadership requested but unknown member ~w",
            [LogId, Member]),
     {leader, State, [{reply, {error, unknown_member}}]};
 handle_leader({transfer_leadership, ServerId},
-              #{cfg := #cfg{log_id = LogId},
-                cluster := Cluster} = State) ->
+              #ra_server_state{cfg = #cfg{log_id = LogId},
+                               cluster = Cluster} = State) ->
     case Cluster of
         #{ServerId := #{voter_status := #{membership := Membership}}}
           when Membership =/= voter ->
@@ -930,14 +898,14 @@ handle_leader({transfer_leadership, ServerId},
                    [LogId, ServerId]),
             %% TODO find a timeout
             {await_condition,
-             State#{condition =>
+             State#ra_server_state{condition =
                         #{predicate_fun => fun transfer_leadership_condition/2,
                           timeout => #{effects => [],
                                        transition_to => leader}}},
              [{reply, ok}, {send_msg, ServerId, election_timeout, cast}]}
     end;
 handle_leader(force_member_change, State0) ->
-    {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
+    {follower, State0#ra_server_state{votes = 0}, [{next_event, force_member_change}]};
 handle_leader(Msg, State) ->
     log_unhandled_msg(leader, Msg, State),
     {leader, State, [{reply, {error, {unsupported_call, Msg}}}]}.
@@ -946,25 +914,25 @@ handle_leader(Msg, State) ->
 -spec handle_candidate(ra_msg() | election_timeout, ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
-                 #{cfg := #cfg{id = Id,
-                               log_id = LogId},
-                   current_term := Term,
-                   votes := Votes,
-                   cluster := Nodes} = State0) ->
+                 #ra_server_state{cfg = #cfg{id = Id,
+                                               log_id = LogId},
+                                   current_term = Term,
+                                   votes = Votes,
+                                   cluster = Nodes} = State0) ->
     NewVotes = Votes + 1,
     ?DEBUG("~ts: vote granted for term ~b votes ~b",
           [LogId, Term, NewVotes]),
     case required_quorum(Nodes) of
         NewVotes ->
-            State = initialise_peers(State0#{leader_id => Id}),
+            State = initialise_peers(State0#ra_server_state{leader_id = Id}),
             Effects = post_election_effects(State),
-            {leader, maps:without([votes], State), Effects};
+            {leader, State#ra_server_state{votes = 0}, Effects};
         _ ->
-            {candidate, State0#{votes => NewVotes}, []}
+            {candidate, State0#ra_server_state{votes = NewVotes}, []}
     end;
 handle_candidate(#request_vote_result{term = Term},
-                 #{current_term := CurTerm,
-                   cfg := #cfg{log_id = LogId}} = State0)
+                 #ra_server_state{current_term = CurTerm,
+                                   cfg = #cfg{log_id = LogId}} = State0)
   when Term > CurTerm ->
     ?INFO("~ts: candidate request_vote_result with higher term"
            " received ~b -> ~b", [LogId, CurTerm, Term]),
@@ -973,35 +941,35 @@ handle_candidate(#request_vote_result{term = Term},
 handle_candidate(#request_vote_result{vote_granted = false}, State) ->
     {candidate, State, []};
 handle_candidate(#append_entries_rpc{term = Term} = Msg,
-                 #{current_term := CurTerm} = State0) when Term >= CurTerm ->
+                 #ra_server_state{current_term = CurTerm} = State0) when Term >= CurTerm ->
     State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#append_entries_rpc{leader_id = LeaderId},
-                 #{current_term := CurTerm} = State) ->
+                 #ra_server_state{current_term = CurTerm} = State) ->
     % term must be older return success=false
     Reply = append_entries_reply(CurTerm, false, State),
     {candidate, State, [{cast, LeaderId, {id(State), Reply}}]};
 handle_candidate(#heartbeat_rpc{term = Term} = Msg,
-                 #{current_term := CurTerm} = State0) when Term >= CurTerm ->
+                 #ra_server_state{current_term = CurTerm} = State0) when Term >= CurTerm ->
     State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#heartbeat_rpc{leader_id = LeaderId,
                                 query_index = QueryIndex},
-                 #{current_term := CurTerm} = State) ->
+                 #ra_server_state{current_term = CurTerm} = State) ->
     % term must be older return success=false
     Reply = heartbeat_reply(CurTerm, QueryIndex),
     {candidate, State, [cast_reply(id(State), LeaderId, Reply)]};
 handle_candidate({_PeerId, #heartbeat_reply{term = Term}},
-                 #{cfg := #cfg{log_id = LogId},
-                   current_term := CurTerm} = State0) when Term > CurTerm ->
+                 #ra_server_state{cfg = #cfg{log_id = LogId},
+                                   current_term = CurTerm} = State0) when Term > CurTerm ->
     ?INFO("~ts: candidate heartbeat_reply with higher"
           " term received ~b -> ~b",
           [LogId, CurTerm, Term]),
     State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, []};
 handle_candidate({_PeerId, #append_entries_reply{term = Term}},
-                 #{current_term := CurTerm,
-                   cfg := #cfg{log_id = LogId}} = State0)
+                 #ra_server_state{current_term = CurTerm,
+                                   cfg = #cfg{log_id = LogId}} = State0)
   when Term > CurTerm ->
     ?INFO("~ts: candidate append_entries_reply with higher"
           " term received ~b -> ~b",
@@ -1009,22 +977,22 @@ handle_candidate({_PeerId, #append_entries_reply{term = Term}},
     State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, []};
 handle_candidate(#request_vote_rpc{term = Term} = Msg,
-                 #{current_term := CurTerm,
-                   cfg := #cfg{log_id = LogId}} = State0)
+                 #ra_server_state{current_term = CurTerm,
+                                   cfg = #cfg{log_id = LogId}} = State0)
   when Term > CurTerm ->
     ?INFO("~ts: candidate request_vote_rpc with higher term received ~b -> ~b",
           [LogId, CurTerm, Term]),
     State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
 handle_candidate(#pre_vote_rpc{term = Term} = Msg,
-                 #{current_term := CurTerm,
-                   cfg := #cfg{log_id = LogId}} = State0)
+                 #ra_server_state{current_term = CurTerm,
+                                   cfg = #cfg{log_id = LogId}} = State0)
   when Term > CurTerm ->
     ?INFO("~ts: candidate pre_vote_rpc with higher term received ~b -> ~b",
           [LogId, CurTerm, Term]),
     State = update_term_and_voted_for(Term, undefined, State0),
     {follower, State, [{next_event, Msg}]};
-handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
+handle_candidate(#request_vote_rpc{}, #ra_server_state{current_term = Term} = State) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {candidate, State, [{reply, Reply}]};
 handle_candidate(#pre_vote_rpc{} = PreVote, State) ->
@@ -1038,17 +1006,17 @@ handle_candidate(#request_vote_result{}, State) ->
 handle_candidate(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {candidate, State, []};
-handle_candidate({ra_log_event, Evt}, State = #{log := Log0}) ->
+handle_candidate({ra_log_event, Evt}, #ra_server_state{log = Log0} = State) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
-    {candidate, State#{log => Log}, Effects};
+    {candidate, State#ra_server_state{log = Log}, Effects};
 handle_candidate(election_timeout, State) ->
     call_for_election(candidate, State);
 handle_candidate(force_member_change, State0) ->
-    {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
+    {follower, State0#ra_server_state{votes = 0}, [{next_event, force_member_change}]};
 handle_candidate(#info_rpc{term = Term} = Msg,
-                 #{current_term := CurTerm,
-                   cfg := #cfg{log_id = LogId}} = State0)
+                 #ra_server_state{current_term = CurTerm,
+                                   cfg = #cfg{log_id = LogId}} = State0)
   when CurTerm < Term ->
     ?INFO("~ts: candidate info_rpc with higher term received ~b -> ~b",
           [LogId, CurTerm, Term]),
@@ -1058,8 +1026,8 @@ handle_candidate(#info_rpc{} = InfoRpc, State) ->
     InfoReplyEffect = empty_info_reply_effect(State, InfoRpc),
     {candidate, State, [InfoReplyEffect]};
 handle_candidate(#info_reply{term = Term} = Msg,
-                 #{current_term := CurTerm,
-                   cfg := #cfg{log_id = LogId}} = State0)
+                 #ra_server_state{current_term = CurTerm,
+                                   cfg = #cfg{log_id = LogId}} = State0)
   when CurTerm < Term ->
     ?INFO("~ts: candidate info_reply with higher term received ~b -> ~b",
           [LogId, CurTerm, Term]),
@@ -1074,50 +1042,50 @@ handle_candidate(Msg, State) ->
 -spec handle_pre_vote(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_pre_vote(#append_entries_rpc{term = Term} = Msg,
-                #{current_term := CurTerm} = State0)
+                #ra_server_state{current_term = CurTerm} = State0)
   when Term >= CurTerm ->
     State = update_term(Term, State0),
     % revert to follower state
-    {follower, State#{votes => 0}, [{next_event, Msg}]};
+    {follower, State#ra_server_state{votes = 0}, [{next_event, Msg}]};
 handle_pre_vote(#heartbeat_rpc{term = Term} = Msg,
-                #{current_term := CurTerm} = State0)
+                #ra_server_state{current_term = CurTerm} = State0)
   when Term >= CurTerm ->
     State = update_term(Term, State0),
     % revert to follower state
-    {follower, State#{votes => 0}, [{next_event, Msg}]};
+    {follower, State#ra_server_state{votes = 0}, [{next_event, Msg}]};
 handle_pre_vote(#heartbeat_rpc{leader_id = LeaderId,
                                 query_index = QueryIndex},
-                 #{current_term := CurTerm} = State) ->
+                 #ra_server_state{current_term = CurTerm} = State) ->
     Reply = heartbeat_reply(CurTerm, QueryIndex),
     {pre_vote, State, [cast_reply(id(State), LeaderId, Reply)]};
 handle_pre_vote({_PeerId, #heartbeat_reply{term = Term}},
-                #{current_term := CurTerm} = State)
+                #ra_server_state{current_term = CurTerm} = State)
   when Term > CurTerm ->
-    {follower, update_term(Term, State#{votes => 0}), []};
+    {follower, update_term(Term, State#ra_server_state{votes = 0}), []};
 handle_pre_vote(#request_vote_rpc{term = Term} = Msg,
-                #{current_term := CurTerm} = State0)
+                #ra_server_state{current_term = CurTerm} = State0)
   when Term > CurTerm ->
     State = update_term(Term, State0),
     % revert to follower state
-    {follower, State#{votes => 0}, [{next_event, Msg}]};
+    {follower, State#ra_server_state{votes = 0}, [{next_event, Msg}]};
 handle_pre_vote(#pre_vote_result{term = Term},
-                #{current_term := CurTerm} = State0)
+                #ra_server_state{current_term = CurTerm} = State0)
   when Term > CurTerm ->
     % higher term always reverts?
     State = update_term(Term, State0),
-    {follower, State#{votes => 0}, []};
+    {follower, State#ra_server_state{votes = 0}, []};
 handle_pre_vote(#install_snapshot_rpc{term = Term} = ISR,
-                #{current_term := CurTerm} = State0)
+                #ra_server_state{current_term = CurTerm} = State0)
   when Term >= CurTerm ->
-    {follower, State0#{votes => 0}, [{next_event, ISR}]};
+    {follower, State0#ra_server_state{votes = 0}, [{next_event, ISR}]};
 handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
                                  token = Token},
-                #{current_term := Term,
-                  votes := Votes,
-                  cfg := #cfg{log_id = LogId},
-                  pre_vote_token := Token,
-                  cluster := Nodes,
-                  membership := voter} = State0) ->
+                #ra_server_state{current_term = Term,
+                                  votes = Votes,
+                                  cfg = #cfg{log_id = LogId},
+                                  pre_vote_token = Token,
+                                  cluster = Nodes,
+                                  membership = voter} = State0) ->
     ?DEBUG("~ts: pre_vote granted ~w for term ~b votes ~b",
           [LogId, Token, Term, Votes + 1]),
     NewVotes = Votes + 1,
@@ -1126,7 +1094,7 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
         NewVotes ->
             call_for_election(candidate, State);
         _ ->
-            {pre_vote, State#{votes => NewVotes}, []}
+            {pre_vote, State#ra_server_state{votes = NewVotes}, []}
     end;
 handle_pre_vote(#pre_vote_result{}, State) ->
     %% just handle negative results to avoid printing an unhandled message log
@@ -1138,23 +1106,23 @@ handle_pre_vote(#request_vote_result{}, State) ->
     {pre_vote, State, []};
 handle_pre_vote(election_timeout, State) ->
     call_for_election(pre_vote, State);
-handle_pre_vote({ra_log_event, Evt}, State = #{log := Log0}) ->
+handle_pre_vote({ra_log_event, Evt}, #ra_server_state{log = Log0} = State) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
-    {pre_vote, State#{log => Log}, Effects};
+    {pre_vote, State#ra_server_state{log = Log}, Effects};
 handle_pre_vote(force_member_change, State0) ->
-    {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
+    {follower, State0#ra_server_state{votes = 0}, [{next_event, force_member_change}]};
 handle_pre_vote(#info_rpc{term = Term} = Msg,
-                #{current_term := CurTerm} = State0)
+                #ra_server_state{current_term = CurTerm} = State0)
   when CurTerm < Term ->
-    {follower, State0#{votes => 0}, [{next_event, Msg}]};
+    {follower, State0#ra_server_state{votes = 0}, [{next_event, Msg}]};
 handle_pre_vote(#info_rpc{} = InfoRpc, State) ->
     InfoReplyEffect = empty_info_reply_effect(State, InfoRpc),
     {pre_vote, State, [InfoReplyEffect]};
 handle_pre_vote(#info_reply{term = Term} = Msg,
-                #{current_term := CurTerm} = State0)
+                #ra_server_state{current_term = CurTerm} = State0)
   when CurTerm < Term ->
-    {follower, State0#{votes => 0}, [{next_event, Msg}]};
+    {follower, State0#ra_server_state{votes = 0}, [{next_event, Msg}]};
 handle_pre_vote(#info_reply{}, State) ->
     {pre_vote, State, []};
 handle_pre_vote(Msg, State) ->
@@ -1170,16 +1138,16 @@ handle_follower(#append_entries_rpc{term = Term,
                                     prev_log_index = PLIdx,
                                     prev_log_term = PLTerm,
                                     entries = Entries0},
-                #{cfg := #cfg{log_id = LogId,
-                              id = Id} = Cfg,
-                  log := Log00,
-                  last_applied := LastApplied,
-                  current_term := CurTerm} = State00)
+                #ra_server_state{cfg = #cfg{log_id = LogId,
+                                              id = Id} = Cfg,
+                                  log = Log00,
+                                  last_applied = LastApplied,
+                                  current_term = CurTerm} = State00)
   when Term >= CurTerm ->
     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER, 1),
     %% this is a valid leader, append entries message
     Effects0 = [{record_leader_msg, LeaderId}],
-    State0 = update_term(Term, State00#{leader_id => LeaderId}),
+    State0 = update_term(Term, State00#ra_server_state{leader_id = LeaderId}),
     case has_log_entry_or_snapshot(PLIdx, PLTerm, Log00) of
         {entry_ok, Log0} ->
             % filter entries already seen
@@ -1212,8 +1180,8 @@ handle_follower(#append_entries_rpc{term = Term,
                         end,
                     case LogIsValidated of
                         true ->
-                            State1 = State0#{log => Log2,
-                                             commit_index => LeaderCommit},
+                            State1 = State0#ra_server_state{log = Log2,
+                                             commit_index = LeaderCommit},
                             ok = put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX,
                                              LeaderCommit),
                             %% evaluate commit index as we may have received
@@ -1246,7 +1214,7 @@ handle_follower(#append_entries_rpc{term = Term,
                              [cast_reply(Id, LeaderId, Reply)]}
                     end;
                 [{FstIdx, _, _} | _] ->
-                    State1 = State0#{commit_index => LeaderCommit},
+                    State1 = State0#ra_server_state{commit_index = LeaderCommit},
                     ok = put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX,
                                      LeaderCommit),
                     %% assert we're not writing below the last applied index
@@ -1255,15 +1223,15 @@ handle_follower(#append_entries_rpc{term = Term,
                                         State1, Entries),
                     case ra_log:write(Entries, Log1) of
                         {ok, Log2} ->
-                            evaluate_commit_index_follower(State#{log => Log2},
+                            evaluate_commit_index_follower(State#ra_server_state{log = Log2},
                                                            Effects0);
                         {error, wal_down} ->
                             %% At this point we know the wal process exited
                             %% but we dont know exactly which in flight messages
                             %% made it to the wal before it crashed.
                             {await_condition,
-                             State#{log => Log1,
-                                    condition =>
+                             State#ra_server_state{log = Log1,
+                                    condition =
                                         #{predicate_fun => fun wal_down_condition/2}},
                              Effects0};
                         {error, _} = Err ->
@@ -1271,7 +1239,7 @@ handle_follower(#append_entries_rpc{term = Term,
                     end
             end;
         {missing, Log0} ->
-            State = State0#{log => Log0},
+            State = State0#ra_server_state{log = Log0},
             Reply = append_entries_reply(Term, false, State),
             ?INFO("~ts: follower did not have entry at ~b in ~b."
                   " Requesting ~w from ~b",
@@ -1279,14 +1247,14 @@ handle_follower(#append_entries_rpc{term = Term,
                    Reply#append_entries_reply.next_index]),
             Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
             {await_condition,
-             State#{condition =>
+             State#ra_server_state{condition =
                     #{predicate_fun => follower_catchup_cond_fun(missing),
                       % repeat reply effect on condition timeout
                       timeout => #{effects => Effects,
                                    transition_to => follower}}},
              Effects};
         {term_mismatch, OtherTerm, Log0} ->
-            LastApplied = maps:get(last_applied, State00),
+            LastApplied = State00#ra_server_state.last_applied,
             ?INFO("~ts: term mismatch - follower had entry at ~b with term ~b "
                   "but not with term ~b. "
                   "Asking leader ~w to resend from ~b",
@@ -1304,8 +1272,8 @@ handle_follower(#append_entries_rpc{term = Term,
                                                            State0),
             Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
             {await_condition,
-             State#{log => Log0,
-                    condition =>
+             State#ra_server_state{log = Log0,
+                    condition =
                     #{predicate_fun => follower_catchup_cond_fun(term_mismatch),
                       % repeat reply effect on condition timeout
                       timeout => #{effects => Effects,
@@ -1313,8 +1281,8 @@ handle_follower(#append_entries_rpc{term = Term,
              Effects}
     end;
 handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
-                #{cfg := #cfg{id = Id, log_id = LogId} = Cfg,
-                  current_term := CurTerm} = State) ->
+                #ra_server_state{cfg = #cfg{id = Id, log_id = LogId} = Cfg,
+                                  current_term = CurTerm} = State) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER, 1),
     % the term is lower than current term
     Reply = append_entries_reply(CurTerm, false, State),
@@ -1325,28 +1293,28 @@ handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
 handle_follower(#heartbeat_rpc{query_index = QueryIndex,
                                term = Term,
                                leader_id = LeaderId},
-                #{current_term := CurTerm,
-                  cfg := #cfg{id = Id}} = State0)
+                #ra_server_state{current_term = CurTerm,
+                                  cfg = #cfg{id = Id}} = State0)
   when Term >= CurTerm ->
     State1 = update_term(Term, State0),
-    State2 = State1#{leader_id => LeaderId},
+    State2 = State1#ra_server_state{leader_id = LeaderId},
     Reply = heartbeat_reply(Term, QueryIndex),
     {follower, State2, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower(#heartbeat_rpc{leader_id = LeaderId,
                                query_index = QueryIndex},
-                #{current_term := CurTerm,
-                  cfg := #cfg{id = Id}} = State) ->
+                #ra_server_state{current_term = CurTerm,
+                                  cfg = #cfg{id = Id}} = State) ->
     Reply = heartbeat_reply(CurTerm, QueryIndex),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
-handle_follower({ra_log_event, Evt}, #{log := Log0,
-                                       cfg := #cfg{id = Id},
-                                       current_term := Term} = State0) ->
-    LeaderId = maps:get(leader_id, State0, undefined),
+handle_follower({ra_log_event, Evt}, #ra_server_state{log = Log0,
+                                                       cfg = #cfg{id = Id},
+                                                       current_term = Term} = State0) ->
+    LeaderId = State0#ra_server_state.leader_id,
     % forward events to ra_log
     % if the last written changes then send an append entries reply
     LW = ra_log:last_written(Log0),
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
-    State = State0#{log => Log},
+    State = State0#ra_server_state{log = Log},
     case LW =/= ra_log:last_written(Log) of
         true when LeaderId =/= undefined ->
             %% last written has changed so we need to send an AER reply
@@ -1356,22 +1324,22 @@ handle_follower({ra_log_event, Evt}, #{log := Log0,
             {follower, State, Effects}
     end;
 handle_follower(#pre_vote_rpc{},
-                #{cfg := #cfg{log_id = LogId},
-                  membership := Membership} = State) when Membership =/= voter ->
+                #ra_server_state{cfg = #cfg{log_id = LogId},
+                                  membership = Membership} = State) when Membership =/= voter ->
     ?DEBUG("~ts: follower ignored pre_vote_rpc, non-voter: ~0p",
            [LogId, Membership]),
     {follower, State, []};
 handle_follower(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(follower, PreVote, State);
 handle_follower(#request_vote_rpc{},
-                #{cfg := #cfg{log_id = LogId},
-                  membership := Membership} = State) when Membership =/= voter ->
+                #ra_server_state{cfg = #cfg{log_id = LogId},
+                                  membership = Membership} = State) when Membership =/= voter ->
     ?DEBUG("~ts: follower ignored request_vote_rpc, non-voter: ~0p",
            [LogId, Membership]),
     {follower, State, []};
 handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
-                #{current_term := Term, voted_for := VotedFor,
-                  cfg := #cfg{log_id = LogId}} = State)
+                #ra_server_state{current_term = Term, voted_for = VotedFor,
+                                  cfg = #cfg{log_id = LogId}} = State)
   when VotedFor /= undefined andalso VotedFor /= Cand ->
     % already voted for another in this term
     ?DEBUG("~ts: follower request_vote_rpc for ~w already voted for ~w in ~b",
@@ -1381,8 +1349,8 @@ handle_follower(#request_vote_rpc{candidate_id = Cand, term = Term},
 handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
                                   last_log_index = LLIdx,
                                   last_log_term = LLTerm},
-                #{current_term := CurTerm,
-                  cfg := #cfg{log_id = LogId}} = State0)
+                #ra_server_state{current_term = CurTerm,
+                                  cfg = #cfg{log_id = LogId}} = State0)
   when Term >= CurTerm ->
     State1 = update_term(Term, State0),
     LastIdxTerm = last_idx_term(State1),
@@ -1403,26 +1371,26 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
             {follower, update_term(Term, State1), [{reply, Reply}]}
     end;
 handle_follower(#request_vote_rpc{term = Term, candidate_id = Candidate},
-                State = #{current_term := CurTerm,
-                          cfg := #cfg{log_id = LogId}})
+                #ra_server_state{current_term = CurTerm,
+                                  cfg = #cfg{log_id = LogId}} = State)
   when Term < CurTerm ->
     ?INFO("~ts: declining vote to ~w for term ~b, current term ~b",
           [LogId, Candidate, Term, CurTerm]),
     Reply = #request_vote_result{term = CurTerm, vote_granted = false},
     {follower, State, [{reply, Reply}]};
 handle_follower({_PeerId, #append_entries_reply{term = TheirTerm}},
-                State = #{current_term := CurTerm}) ->
+                #ra_server_state{current_term = CurTerm} = State) ->
     Term = max(TheirTerm, CurTerm),
     {follower, update_term(Term, State), []};
 handle_follower({_PeerId, #heartbeat_reply{term = TheirTerm}},
-                State = #{current_term := CurTerm}) ->
+                #ra_server_state{current_term = CurTerm} = State) ->
     Term = max(TheirTerm, CurTerm),
     {follower, update_term(Term, State), []};
 handle_follower(#install_snapshot_rpc{term = Term,
                                       meta = #{index := LastIndex,
                                                term := LastTerm}},
-                #{cfg := #cfg{log_id = LogId},
-                  current_term := CurTerm} = State)
+                #ra_server_state{cfg = #cfg{log_id = LogId},
+                                  current_term = CurTerm} = State)
   when Term < CurTerm ->
     ?DEBUG("~ts: install_snapshot old term ~b in ~b",
           [LogId, LastIndex, LastTerm]),
@@ -1436,10 +1404,10 @@ handle_follower(#install_snapshot_rpc{term = Term,
                                                machine_version := SnapMacVer} = Meta,
                                       leader_id = LeaderId,
                                       chunk_state = {Num, ChunkFlag}} = Rpc,
-                #{cfg := #cfg{log_id = LogId,
-                              machine_version = MacVer}, log := Log0,
-                  last_applied := LastApplied,
-                  current_term := CurTerm} = State0)
+                #ra_server_state{cfg = #cfg{log_id = LogId,
+                                              machine_version = MacVer}, log = Log0,
+                                  last_applied = LastApplied,
+                                  current_term = CurTerm} = State0)
   when Term >= CurTerm andalso
        SnapIdx > LastApplied andalso
        %% only install snapshot if the machine version is understood
@@ -1462,16 +1430,16 @@ handle_follower(#install_snapshot_rpc{term = Term,
               _ ->
                   Log1
           end,
-    {receive_snapshot, update_term(Term, State0#{log => Log,
-                                                 leader_id => LeaderId}),
+    {receive_snapshot, update_term(Term, State0#ra_server_state{log = Log,
+                                                 leader_id = LeaderId}),
      [{next_event, Rpc}, {record_leader_msg, LeaderId}]};
 handle_follower(#install_snapshot_rpc{term = Term,
                                       meta = #{index := LastIndex,
                                                machine_version := SnapMacVer,
                                                term := _LastTerm}},
-                #{cfg := #cfg{log_id = LogId,
-                              machine_version = MacVer},
-                  last_applied := LastApplied} = State0)
+                #ra_server_state{cfg = #cfg{log_id = LogId,
+                                              machine_version = MacVer},
+                                  last_applied = LastApplied} = State0)
   when MacVer >= SnapMacVer ->
     ?DEBUG("~ts: install_snapshot received with lower last index ~b in ~b",
            [LogId, LastIndex, Term]),
@@ -1492,8 +1460,8 @@ handle_follower(#append_entries_reply{}, State) ->
     %% could receive a lot of these shortly after standing down as leader
     {follower, State, []};
 handle_follower(election_timeout,
-                #{cfg := #cfg{log_id = LogId},
-                  membership := Membership} = State) when Membership =/= voter ->
+                #ra_server_state{cfg = #cfg{log_id = LogId},
+                                  membership = Membership} = State) when Membership =/= voter ->
     ?INFO("~ts: follower ignored election_timeout, non-voter: ~0p",
            [LogId, Membership]),
     {follower, State, []};
@@ -1502,18 +1470,18 @@ handle_follower(election_timeout, State) ->
 handle_follower(try_become_leader, State) ->
     handle_follower(election_timeout, State);
 handle_follower(force_member_change,
-                #{cfg := #cfg{id = Id,
-                              uid = Uid,
-                              log_id = LogId}} = State0) ->
+                #ra_server_state{cfg = #cfg{id = Id,
+                                              uid = Uid,
+                                              log_id = LogId}} = State0) ->
     Cluster = #{Id => new_peer_with(#{voter_status => #{uid => Uid, 
                                                         membership => voter}})},
     ?WARN("~ts: Forcing cluster change. New cluster ~w",
           [LogId, Cluster]),
     {ok, _, _, State, Effects} =
         append_cluster_change(Cluster, undefined, no_reply, State0, []),
-    call_for_election(pre_vote, State#{membership => voter}, [{reply, ok} | Effects]);
+    call_for_election(pre_vote, State#ra_server_state{membership = voter}, [{reply, ok} | Effects]);
 handle_follower(#info_rpc{term = Term} = Msg,
-                #{current_term := CurTerm} = State)
+                #ra_server_state{current_term = CurTerm} = State)
   when CurTerm < Term ->
     State1 = update_term(Term, State),
     {follower, State1, [{next_event, Msg}]};
@@ -1521,7 +1489,7 @@ handle_follower(#info_rpc{} = InfoRpc, State) ->
     InfoReplyEffect = info_reply_effect(State, InfoRpc),
     {follower, State, [InfoReplyEffect]};
 handle_follower(#info_reply{term = Term} = Msg,
-                #{current_term := CurTerm} = State)
+                #ra_server_state{current_term = CurTerm} = State)
   when CurTerm < Term ->
     State1 = update_term(Term, State),
     {follower, State1, [{next_event, Msg}]};
@@ -1538,16 +1506,16 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                                        term := SnapTerm} = SnapMeta,
                                               chunk_state = {Num, ChunkFlag},
                                               data = ChunkOrEntries},
-                        #{cfg := #cfg{id = Id,
-                                      log_id = LogId,
-                                      effective_machine_version = CurEffMacVer,
-                                      machine_versions = MachineVersions,
-                                      machine = Machine} = Cfg0,
-                          log := Log00,
-                          cluster := Cluster,
-                          current_term := CurTerm,
-                          last_applied := LastApplied,
-                          machine_state := OldMacState} = State0)
+                        #ra_server_state{cfg = #cfg{id = Id,
+                                                      log_id = LogId,
+                                                      effective_machine_version = CurEffMacVer,
+                                                      machine_versions = MachineVersions,
+                                                      machine = Machine} = Cfg0,
+                                          log = Log00,
+                                          cluster = Cluster,
+                                          current_term = CurTerm,
+                                          last_applied = LastApplied,
+                                          machine_state = OldMacState} = State0)
   when Term >= CurTerm ->
     ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
            [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
@@ -1565,13 +1533,13 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                {ok, L} = ra_log:write_sparse(E, LstIdx, L0),
                                {L, I}
                        end, {Log00, LastIdx}, ChunkOrEntries),
-            State = update_term(Term, State0#{log => Log}),
+            State = update_term(Term, State0#ra_server_state{log = Log}),
             {receive_snapshot, State, [{reply, Reply}]};
         next ->
             SnapState0 = ra_log:snapshot_state(Log00),
             SnapState = ra_snapshot:accept_chunk(ChunkOrEntries, Num, SnapState0),
             Log0 = ra_log:set_snapshot_state(SnapState, Log00),
-            State = update_term(Term, State0#{log => Log0}),
+            State = update_term(Term, State0#ra_server_state{log = Log0}),
             {receive_snapshot, State, [{reply, Reply}]};
         last ->
             SnapState0 = ra_log:snapshot_state(Log00),
@@ -1612,17 +1580,17 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                                               OldMeta,
                                                               OldMacState),
             State = update_term(Term,
-                                State0#{cfg => Cfg,
-                                        log => Log,
-                                        commit_index => SnapIndex,
-                                        last_applied => SnapIndex,
+                                State0#ra_server_state{cfg = Cfg,
+                                        log = Log,
+                                        commit_index = SnapIndex,
+                                        last_applied = SnapIndex,
                                         %% this may not be the actual cluster index
-                                        cluster_index_term => {SnapIndex,
+                                        cluster_index_term = {SnapIndex,
                                                                SnapTerm},
-                                        cluster => make_cluster(Id, ClusterIds),
-                                        membership =>
+                                        cluster = make_cluster(Id, ClusterIds),
+                                        membership =
                                             get_membership(ClusterIds, State0),
-                                        machine_state => MacState}),
+                                        machine_state = MacState}),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapIndex),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
@@ -1631,9 +1599,9 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                                      SnapInstalledEffs]}
     end;
 handle_receive_snapshot(#append_entries_rpc{term = Term} = Msg,
-                        #{current_term := CurTerm,
-                          cfg := #cfg{log_id = LogId},
-                          log := Log0} = State)
+                        #ra_server_state{current_term = CurTerm,
+                                          cfg = #cfg{log_id = LogId},
+                                          log = Log0} = State)
   when Term > CurTerm ->
     ?INFO("~ts: follower receiving snapshot saw append_entries_rpc from ~w for term ~b "
           "abdicates term: ~b!",
@@ -1642,30 +1610,30 @@ handle_receive_snapshot(#append_entries_rpc{term = Term} = Msg,
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:abort_accept(SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, update_term(Term, clear_leader_id(State#{log => Log})),
+    {follower, update_term(Term, clear_leader_id(State#ra_server_state{log = Log})),
      [{next_event, Msg}]};
 handle_receive_snapshot({ra_log_event, Evt},
-                        #{cfg := #cfg{log_id = LogId},
-                          log := Log0} = State) ->
+                        #ra_server_state{cfg = #cfg{log_id = LogId},
+                                          log = Log0} = State) ->
     ?DEBUG("~ts: ~s ra_log_event received: ~w",
           [LogId, ?FUNCTION_NAME, Evt]),
     % simply forward all other events to ra_log
     % whilst the snapshot is being received
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
-    {receive_snapshot, State#{log => Log}, Effects};
+    {receive_snapshot, State#ra_server_state{log = Log}, Effects};
 handle_receive_snapshot(receive_snapshot_timeout,
-                        #{cfg := #cfg{log_id = LogId},
-                          log := Log0} = State) ->
+                        #ra_server_state{cfg = #cfg{log_id = LogId},
+                          log = Log0} = State) ->
     ?INFO("~ts: ~s receive snapshot timed out.",
           [LogId, ?FUNCTION_NAME]),
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:abort_accept(SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, State#{log => Log}, []};
+    {follower, State#ra_server_state{log = Log}, []};
 handle_receive_snapshot(#info_rpc{term = Term} = Msg,
-                        #{current_term := CurTerm,
-                          cfg := #cfg{log_id = LogId},
-                          log := Log0} = State)
+                        #ra_server_state{current_term = CurTerm,
+                          cfg = #cfg{log_id = LogId},
+                          log = Log0} = State)
   when CurTerm < Term ->
     ?INFO("~ts: follower receiving snapshot saw info_rpc from ~w for term ~b "
           "abdicates term: ~b!",
@@ -1674,15 +1642,15 @@ handle_receive_snapshot(#info_rpc{term = Term} = Msg,
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:abort_accept(SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, update_term(Term, clear_leader_id(State#{log => Log})),
+    {follower, update_term(Term, clear_leader_id(State#ra_server_state{log = Log})),
      [{next_event, Msg}]};
 handle_receive_snapshot(#info_rpc{} = InfoRpc, State) ->
     InfoReplyEffect = empty_info_reply_effect(State, InfoRpc),
     {receive_snapshot, State, [InfoReplyEffect]};
 handle_receive_snapshot(#info_reply{term = Term} = Msg,
-                        #{current_term := CurTerm,
-                          cfg := #cfg{log_id = LogId},
-                          log := Log0} = State)
+                        #ra_server_state{current_term = CurTerm,
+                          cfg = #cfg{log_id = LogId},
+                          log = Log0} = State)
   when CurTerm < Term ->
     ?INFO("~ts: follower receiving snapshot saw info_reply from ~w for term ~b "
           "abdicates term: ~b!",
@@ -1691,7 +1659,7 @@ handle_receive_snapshot(#info_reply{term = Term} = Msg,
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:abort_accept(SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, update_term(Term, clear_leader_id(State#{log => Log})),
+    {follower, update_term(Term, clear_leader_id(State#ra_server_state{log = Log})),
      [{next_event, Msg}]};
 handle_receive_snapshot(#info_reply{}, State) ->
     {receive_snapshot, State, []};
@@ -1708,36 +1676,36 @@ handle_await_condition(#request_vote_rpc{} = Msg, State) ->
 handle_await_condition(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(await_condition, PreVote, State);
 handle_await_condition(election_timeout,
-                #{cfg := #cfg{log_id = LogId},
-                  membership := Membership} = State) when Membership =/= voter ->
+                #ra_server_state{cfg = #cfg{log_id = LogId},
+                  membership = Membership} = State) when Membership =/= voter ->
     ?DEBUG("~s: await_condition ignored election_timeout, replicate membership state: ~p",
            [LogId, Membership]),
     {await_condition, State, []};
 handle_await_condition(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_await_condition(await_condition_timeout = Msg,
-                       #{condition := #{predicate_fun := Pred} = Cond} = State0) ->
+                       #ra_server_state{condition = #{predicate_fun := Pred} = Cond} = State0) ->
     case Pred(Msg, State0) of
         {true, State1} ->
             CondTransitionTo = maps:get(transition_to, Cond, follower),
-            State = maps:remove(condition, State1),
+            State = State1#ra_server_state{condition = undefined},
             {CondTransitionTo, State, []};
         {false, State1} ->
             Timeout = maps:get(timeout, Cond, #{}),
             Effects = maps:get(effects, Timeout, []),
             TransitionTo = maps:get(transition_to, Timeout, follower),
-            State = maps:remove(condition, State1),
+            State = State1#ra_server_state{condition = undefined},
             {TransitionTo, State, Effects}
     end;
-handle_await_condition({ra_log_event, Evt}, State = #{log := Log0}) ->
+handle_await_condition({ra_log_event, Evt}, State = #ra_server_state{log = Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
-    {await_condition, State#{log => Log}, Effects};
-handle_await_condition(Msg, #{condition := #{predicate_fun := Pred} = Cond} = State0) ->
+    {await_condition, State#ra_server_state{log = Log}, Effects};
+handle_await_condition(Msg, #ra_server_state{condition = #{predicate_fun := Pred} = Cond} = State0) ->
     case Pred(Msg, State0) of
         {true, State1} ->
             TransitionTo = maps:get(transition_to, Cond, follower),
-            State = maps:remove(condition, State1),
+            State = State1#ra_server_state{condition = undefined},
             {TransitionTo, State, [{next_event, Msg}]};
         {false, State} ->
             %% do not log unhandled messages as they are often expected
@@ -1747,48 +1715,48 @@ handle_await_condition(Msg, #{condition := #{predicate_fun := Pred} = Cond} = St
 
 -spec process_new_leader_queries(ra_server_state()) ->
     {ra_server_state(), [from()]}.
-process_new_leader_queries(#{pending_consistent_queries := Pending,
-                             queries_waiting_heartbeats := Waiting} = State0) ->
+process_new_leader_queries(#ra_server_state{pending_consistent_queries = Pending,
+                             queries_waiting_heartbeats = Waiting} = State0) ->
     From0 = lists:map(fun({From, _, _}) -> From end, Pending),
 
     From1 = lists:map(fun({_, {From, _, _}}) -> From end,
                       queue:to_list(Waiting)),
 
-    {State0#{pending_consistent_queries => [],
-             queries_waiting_heartbeats => queue:new()},
+    {State0#ra_server_state{pending_consistent_queries = [],
+             queries_waiting_heartbeats = queue:new()},
      From0 ++ From1}.
 
 -spec tick(ra_server_state()) -> effects().
-tick(#{cfg := #cfg{effective_machine_module = MacMod},
-       machine_state := MacState} = State) ->
+tick(#ra_server_state{cfg = #cfg{effective_machine_module = MacMod},
+       machine_state = MacState} = State) ->
     InfoRpcEffects = info_rpc_effects(State),
     Now = erlang:system_time(millisecond),
     InfoRpcEffects ++ ra_machine:tick(MacMod, Now, MacState).
 
 -spec log_tick(ra_server_state()) -> ra_server_state().
-log_tick(#{cfg := #cfg{},
-           log := Log0} = State) ->
+log_tick(#ra_server_state{cfg = #cfg{},
+           log = Log0} = State) ->
     Now = erlang:system_time(millisecond),
     Log = ra_log:tick(Now, Log0),
-    State#{log => Log}.
+    State#ra_server_state{log = Log}.
 
 
 -spec handle_state_enter(ra_state() | eol, ra_state(), ra_server_state()) ->
     {ra_server_state() | eol, effects()}.
 handle_state_enter(RaftState, OldRaftState,
-                   #{cfg := #cfg{effective_machine_module = MacMod},
-                     machine_state := MacState} = State) ->
+                   #ra_server_state{cfg = #cfg{effective_machine_module = MacMod},
+                     machine_state = MacState} = State) ->
     {become(RaftState, OldRaftState, State),
      ra_machine:state_enter(MacMod, RaftState, MacState)}.
 
 
 -spec overview(ra_server_state()) -> map().
-overview(#{cfg := #cfg{effective_machine_module = MacMod} = Cfg,
-           log := Log,
-           machine_state := MacState,
-           aux_state := Aux,
-           queries_waiting_heartbeats := Queries,
-           pending_consistent_queries := PendingQueries
+overview(#ra_server_state{cfg = #cfg{effective_machine_module = MacMod} = Cfg,
+           log = Log,
+           machine_state = MacState,
+           aux_state = Aux,
+           queries_waiting_heartbeats = Queries,
+           pending_consistent_queries = PendingQueries
           } = State) ->
     NumQueries = queue:len(Queries),
     O0 = maps:with([current_term,
@@ -1821,17 +1789,17 @@ cfg_to_map(Cfg) ->
     {atom(), ra_term(),
      ra_index(), ra_index(),
      ra_index(), ra_index(), non_neg_integer()}.
-metrics(#{cfg := #cfg{metrics_key = Key},
-          commit_index := CI,
-          last_applied := LA,
-          current_term := CT,
-          log := Log} = State) ->
+metrics(#ra_server_state{cfg = #cfg{metrics_key = Key},
+          commit_index = CI,
+          last_applied = LA,
+          current_term = CT,
+          log = Log} = State) ->
     SnapIdx = case ra_log:snapshot_index_term(Log) of
                   undefined -> 0;
                   {I, _} -> I
               end,
     CL = case  State of
-             #{commit_latency := L} ->
+             #ra_server_state{commit_latency = L} ->
                  L;
              _ ->
                  0
@@ -1840,17 +1808,17 @@ metrics(#{cfg := #cfg{metrics_key = Key},
     {Key, CT, SnapIdx, LA, CI, LW, CL}.
 
 -spec is_new(ra_server_state()) -> boolean().
-is_new(#{log := Log}) ->
+is_new(#ra_server_state{log = Log}) ->
     ra_log:next_index(Log) =:= 1.
 
 -spec is_fully_persisted(ra_server_state()) -> boolean().
-is_fully_persisted(#{log := Log}) ->
+is_fully_persisted(#ra_server_state{log = Log}) ->
     LastWritten = ra_log:last_written(Log),
     LastIdxTerm = ra_log:last_index_term(Log),
     LastWritten =:= LastIdxTerm.
 
 -spec is_fully_replicated(ra_server_state()) -> boolean().
-is_fully_replicated(#{commit_index := CI} = State) ->
+is_fully_replicated(#ra_server_state{commit_index = CI} = State) ->
     case maps:values(peers(State)) of
         [] -> true; % there is only one server
         Peers ->
@@ -1860,7 +1828,7 @@ is_fully_replicated(#{commit_index := CI} = State) ->
     end.
 
 handle_aux(RaftState, Type, _Cmd,
-           #{cfg := #cfg{effective_handle_aux_fun = undefined}} = State0) ->
+           #ra_server_state{cfg = #cfg{effective_handle_aux_fun = undefined}} = State0) ->
     %% todo reply with error if Type is a call?
     Effects = case Type of
                   cast ->
@@ -1870,42 +1838,42 @@ handle_aux(RaftState, Type, _Cmd,
               end,
     {RaftState, State0, Effects};
 handle_aux(RaftState, Type, Cmd,
-           #{cfg := #cfg{effective_machine_module = MacMod,
+           #ra_server_state{cfg = #cfg{effective_machine_module = MacMod,
                          effective_handle_aux_fun = {handle_aux, 5}},
-             aux_state := Aux0} = State0) ->
+             aux_state = Aux0} = State0) ->
     %% NEW API
     case ra_machine:handle_aux(MacMod, RaftState, Type, Cmd, Aux0,
                                State0) of
         {reply, Reply, Aux, State} ->
-            {RaftState, State#{aux_state => Aux},
+            {RaftState, State#ra_server_state{aux_state = Aux},
              [{reply, Reply}]};
         {reply, Reply, Aux, State, Effects} ->
-            {RaftState, State#{aux_state => Aux},
+            {RaftState, State#ra_server_state{aux_state = Aux},
              [{reply, Reply} | Effects]};
         {no_reply, Aux, State} ->
-            {RaftState, State#{aux_state => Aux}, []};
+            {RaftState, State#ra_server_state{aux_state = Aux}, []};
         {no_reply, Aux, State, Effects} ->
-            {RaftState, State#{aux_state => Aux}, Effects}
+            {RaftState, State#ra_server_state{aux_state = Aux}, Effects}
     end;
 handle_aux(RaftState, Type, Cmd,
-           #{cfg := #cfg{effective_machine_module = MacMod,
+           #ra_server_state{cfg = #cfg{effective_machine_module = MacMod,
                          effective_handle_aux_fun = {handle_aux, 6}},
-             aux_state := Aux0,
-             machine_state := MacState,
-             log := Log0} = State0) ->
+             aux_state = Aux0,
+             machine_state = MacState,
+             log = Log0} = State0) ->
     %% OLD API
     case ra_machine:handle_aux(MacMod, RaftState, Type, Cmd, Aux0,
                                Log0, MacState) of
         {reply, Reply, Aux, Log} ->
-            {RaftState, State0#{log => Log, aux_state => Aux},
+            {RaftState, State0#ra_server_state{log = Log, aux_state = Aux},
              [{reply, Reply}]};
         {reply, Reply, Aux, Log, Effects} ->
-            {RaftState, State0#{log => Log, aux_state => Aux},
+            {RaftState, State0#ra_server_state{log = Log, aux_state = Aux},
              [{reply, Reply} | Effects]};
         {no_reply, Aux, Log} ->
-            {RaftState, State0#{log => Log, aux_state => Aux}, []};
+            {RaftState, State0#ra_server_state{log = Log, aux_state = Aux}, []};
         {no_reply, Aux, Log, Effects} ->
-            {RaftState, State0#{log => Log, aux_state => Aux}, Effects};
+            {RaftState, State0#ra_server_state{log = Log, aux_state = Aux}, Effects};
         undefined ->
             {RaftState, State0, []}
     end.
@@ -1913,44 +1881,44 @@ handle_aux(RaftState, Type, Cmd,
 % property helpers
 
 -spec id(ra_server_state()) -> ra_server_id().
-id(#{cfg := #cfg{id = Id}}) -> Id.
+id(#ra_server_state{cfg = #cfg{id = Id}}) -> Id.
 
 -spec log_id(ra_server_state()) -> unicode:chardata().
-log_id(#{cfg := #cfg{log_id = LogId}}) -> LogId.
+log_id(#ra_server_state{cfg = #cfg{log_id = LogId}}) -> LogId.
 
 -spec uid(ra_server_state()) -> ra_uid().
-uid(#{cfg := #cfg{uid = UId}}) -> UId.
+uid(#ra_server_state{cfg = #cfg{uid = UId}}) -> UId.
 
 -spec system_config(ra_server_state()) -> ra_system:config().
-system_config(#{cfg := #cfg{system_config = SC}}) -> SC.
+system_config(#ra_server_state{cfg = #cfg{system_config = SC}}) -> SC.
 
 -spec leader_id(ra_server_state()) -> option(ra_server_id()).
 leader_id(State) ->
-    maps:get(leader_id, State, undefined).
+    State#ra_server_state.leader_id.
 
 -spec clear_leader_id(ra_server_state()) -> ra_server_state().
 clear_leader_id(State) ->
-    State#{leader_id => undefined}.
+    State#ra_server_state{leader_id = undefined}.
 
 -spec current_term(ra_server_state()) -> option(ra_term()).
 current_term(State) ->
-    maps:get(current_term, State).
+    State#ra_server_state.current_term.
 
 -spec machine_version(ra_server_state()) -> non_neg_integer().
-machine_version(#{cfg := #cfg{machine_version = MacVer}}) ->
+machine_version(#ra_server_state{cfg = #cfg{machine_version = MacVer}}) ->
     MacVer.
 
 -spec machine(ra_server_state()) -> ra_machine:machine().
-machine(#{cfg := #cfg{machine = Machine}}) ->
+machine(#ra_server_state{cfg = #cfg{machine = Machine}}) ->
     Machine.
 
 -spec machine_query(fun((term()) -> term()), ra_server_state()) ->
     {ra_idxterm(), term()}.
-machine_query(QueryFun, #{cfg := #cfg{effective_machine_module = MacMod},
-                          machine_state := MacState,
-                          last_applied := Last,
-                          current_term := Term
-                         }) ->
+machine_query(QueryFun, #ra_server_state{cfg = #cfg{effective_machine_module = MacMod},
+                                      machine_state = MacState,
+                                      last_applied = Last,
+                                      current_term = Term
+                                     }) ->
     Res = ra_machine:query(MacMod, QueryFun, MacState),
     {{Last, Term}, Res}.
 
@@ -1958,9 +1926,9 @@ machine_query(QueryFun, #{cfg := #cfg{effective_machine_module = MacMod},
 
 % Internal
 
-become(leader, OldRaftState, #{cluster := Cluster,
-                               cluster_change_permitted := CCP0,
-                               log := Log0} = State) ->
+become(leader, OldRaftState, #ra_server_state{cluster = Cluster,
+                               cluster_change_permitted = CCP0,
+                               log = Log0} = State) ->
     Log = ra_log:release_resources(maps:size(Cluster), sequential, Log0),
     CCP = case OldRaftState of
               await_condition ->
@@ -1969,12 +1937,12 @@ become(leader, OldRaftState, #{cluster := Cluster,
                   false
           end,
 
-    State#{log => Log,
-           cluster_change_permitted => CCP};
-become(follower, _, #{log := Log0} = State) ->
+    State#ra_server_state{log = Log,
+           cluster_change_permitted = CCP};
+become(follower, _, #ra_server_state{log = Log0} = State) ->
     %% followers should only ever need a single segment open at any one
     %% time
-    State#{log => ra_log:release_resources(1, random, Log0)};
+    State#ra_server_state{log = ra_log:release_resources(1, random, Log0)};
 become(_RaftState, _, State) ->
     State.
 
@@ -1987,26 +1955,26 @@ follower_catchup_cond(OriginalReason,
                       #append_entries_rpc{term = Term,
                                           prev_log_index = PLIdx,
                                           prev_log_term = PLTerm},
-                      State0 = #{current_term := CurTerm,
-                                 log := Log0})
+                      State0 = #ra_server_state{current_term = CurTerm,
+                                 log = Log0})
   when Term >= CurTerm ->
     case has_log_entry_or_snapshot(PLIdx, PLTerm, Log0) of
         {entry_ok, Log} ->
-            {true, State0#{log => Log}};
+            {true, State0#ra_server_state{log = Log}};
         {term_mismatch, _, Log} ->
             %% if the original reason to enter catch-up was a missing entry
             %% the next entry _could_ result in a term_mismatch if so we
             %% exit await_condition temporarily to process the AppendEntriesRpc
             %% that resulted in the term_mismatch
-            {OriginalReason == missing, State0#{log => Log}};
+            {OriginalReason == missing, State0#ra_server_state{log = Log}};
         {missing, Log} ->
-            {false, State0#{log => Log}}
+            {false, State0#ra_server_state{log = Log}}
     end;
 follower_catchup_cond(_,
                       #install_snapshot_rpc{term = Term,
                                             meta = #{index := PLIdx}},
-                      #{current_term := CurTerm,
-                        log := Log} = State)
+                      #ra_server_state{current_term = CurTerm,
+                        log = Log} = State)
   when Term >= CurTerm ->
     % term is ok - check if the snapshot index is greater than the last
     % index seen
@@ -2014,26 +1982,26 @@ follower_catchup_cond(_,
 follower_catchup_cond(_, _Msg, State) ->
     {false, State}.
 
-wal_down_condition(_Msg, #{log := Log} = State) ->
+wal_down_condition(_Msg, #ra_server_state{log = Log} = State) ->
     {ra_log:can_write(Log), State}.
 
 transfer_leadership_condition(#append_entries_rpc{term = Term},
-                              State = #{current_term := CurTerm})
+                              State = #ra_server_state{current_term = CurTerm})
   when Term > CurTerm ->
     {true, State};
 transfer_leadership_condition(#install_snapshot_rpc{term = Term},
-                              State = #{current_term := CurTerm})
+                              State = #ra_server_state{current_term = CurTerm})
   when Term > CurTerm ->
     {true, State};
 transfer_leadership_condition(_Msg, State) ->
     {false, State}.
 
-evaluate_commit_index_follower(#{commit_index := CommitIndex,
-                                 cfg := #cfg{id = Id},
-                                 leader_id := LeaderId,
-                                 last_applied := LastApplied0,
-                                 current_term := Term,
-                                 log := Log0} = State0, Effects0)
+evaluate_commit_index_follower(#ra_server_state{commit_index = CommitIndex,
+                                 cfg = #cfg{id = Id},
+                                 leader_id = LeaderId,
+                                 last_applied = LastApplied0,
+                                 current_term = Term,
+                                 log = Log0} = State0, Effects0)
   when LeaderId =/= undefined ->
     %% take the minimum of the last index seen and the commit index
     %% This may mean we apply entries that have not yet been fsynced locally.
@@ -2049,7 +2017,7 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
             Reply = append_entries_reply(Term, true, State1),
             {delete_and_terminate, State1,
              [cast_reply(Id, LeaderId, Reply) | Effects]};
-        {#{last_applied := LastApplied} = State, Effects} ->
+        {#ra_server_state{last_applied = LastApplied} = State, Effects} ->
             case LastApplied > LastApplied0 of
                 true ->
                     %% entries were applied, append eval_aux effect
@@ -2066,13 +2034,13 @@ evaluate_commit_index_follower(State, Effects) ->
 make_pipelined_rpc_effects(State, Effects) ->
     make_pipelined_rpc_effects(State, Effects, false).
 
-make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
+make_pipelined_rpc_effects(#ra_server_state{cfg = #cfg{id = Id,
                                          max_append_entries_rpc_batch_size =
                                          MaxBatchSize,
                                          max_pipeline_count = MaxPipelineCount},
-                             commit_index := CommitIndex,
-                             log := Log,
-                             cluster := Cluster} = State0,
+                             commit_index = CommitIndex,
+                             log = Log,
+                             cluster = Cluster} = State0,
                            Effects0, Force) ->
     NextLogIdx = ra_log:next_index(Log),
     %% TODO: refactor this please, why does make_rpc_effect need to take the
@@ -2154,14 +2122,14 @@ make_rpc_effect(PeerId, Peer, MaxBatchSize, State) ->
     make_rpc_effect(PeerId, Peer, MaxBatchSize, State, []).
 
 make_rpc_effect(PeerId, #{next_index := Next}, MaxBatchSize,
-                #{cfg := #cfg{id = Id}, log := Log0,
-                  current_term := Term} = State, EntryCache) ->
+                #ra_server_state{cfg = #cfg{id = Id}, log = Log0,
+                  current_term = Term} = State, EntryCache) ->
     PrevIdx = Next - 1,
     case ra_log:fetch_term(PrevIdx, Log0) of
         {PrevTerm, Log} when is_integer(PrevTerm) ->
             make_append_entries_rpc(PeerId, PrevIdx,
                                     PrevTerm, MaxBatchSize,
-                                    State#{log => Log},
+                                    State#ra_server_state{log = Log},
                                     EntryCache);
         {undefined, Log} ->
             % The assumption here is that a missing entry means we need
@@ -2171,7 +2139,7 @@ make_rpc_effect(PeerId, #{next_index := Next}, MaxBatchSize,
                     % Previous index is the same as snapshot index
                     make_append_entries_rpc(PeerId, PrevIdx,
                                             PrevTerm, MaxBatchSize,
-                                            State#{log => Log},
+                                            State#ra_server_state{log = Log},
                                             EntryCache);
                 {SnapIdx, _} ->
                     ?DEBUG("~ts: sending snapshot to ~w as their next index ~b "
@@ -2185,14 +2153,14 @@ make_rpc_effect(PeerId, #{next_index := Next}, MaxBatchSize,
                     %% and we don't pipeline entries until after snapshot
                     {SnapIdx,
                      {send_snapshot, PeerId, {SnapState, Id, Term}},
-                     State#{log => Log}}
+                     State#ra_server_state{log = Log}}
             end
     end.
 
 make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
-                        #{log := Log0, current_term := Term,
-                          cfg := #cfg{id = Id},
-                          commit_index := CommitIndex} = State,
+                        #ra_server_state{log = Log0, current_term = Term,
+                          cfg = #cfg{id = Id},
+                          commit_index = CommitIndex} = State,
                        EntryCache) ->
     {LastIndex, _} = ra_log:last_index_term(Log0),
     From = PrevIdx + 1,
@@ -2206,7 +2174,7 @@ make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
                           prev_log_index = PrevIdx,
                           prev_log_term = PrevTerm,
                           leader_commit = CommitIndex}},
-     State#{log => Log}}.
+     State#ra_server_state{log = Log}}.
 
 log_read(From, To, [], Log0) ->
     ra_log:fold(From, To, fun (E, A) -> [E | A] end, [], Log0);
@@ -2228,33 +2196,33 @@ log_fold_cache(From, _To, _Cache, Acc) ->
                             term(), ra_server_state()) ->
     {ra_server_state(), effects()}.
 update_release_cursor(Index, MacState,
-                      #{cfg := #cfg{machine = Machine},
-                        log := Log0,
-                        cluster := Cluster} = State) ->
+                      #ra_server_state{cfg = #cfg{machine = Machine},
+                        log = Log0,
+                        cluster = Cluster} = State) ->
     MacVersion = index_machine_version(Index, State),
     MacMod = ra_machine:which_module(Machine, MacVersion),
     % simply pass on release cursor index to log
     {Log, Effects} = ra_log:update_release_cursor(Index, Cluster,
                                                   MacMod,
                                                   MacState, Log0),
-    {State#{log => Log}, Effects}.
+    {State#ra_server_state{log = Log}, Effects}.
 
 -spec checkpoint(ra_index(), term(), ra_server_state()) ->
       {ra_server_state(), effects()}.
 checkpoint(Index, MacState,
-           #{cfg := #cfg{machine = Machine},
-             log := Log0, cluster := Cluster} = State) ->
+           #ra_server_state{cfg = #cfg{machine = Machine},
+             log = Log0, cluster = Cluster} = State) ->
     MacVersion = index_machine_version(Index, State),
     MacMod = ra_machine:which_module(Machine, MacVersion),
     {Log, Effects} = ra_log:checkpoint(Index, Cluster,
                                        MacMod, MacState, Log0),
-    {State#{log => Log}, Effects}.
+    {State#ra_server_state{log = Log}, Effects}.
 
 -spec promote_checkpoint(ra_index(), ra_server_state()) ->
     {ra_server_state(), effects()}.
-promote_checkpoint(Index, #{log := Log0} = State) ->
+promote_checkpoint(Index, #ra_server_state{log = Log0} = State) ->
     {Log, Effects} = ra_log:promote_checkpoint(Index, Log0),
-    {State#{log => Log}, Effects}.
+    {State#ra_server_state{log = Log}, Effects}.
 
 % Persist last_applied - as there is an inherent race we cannot
 % always guarantee that side effects won't be re-issued when a
@@ -2262,14 +2230,14 @@ promote_checkpoint(Index, #{log := Log0} = State) ->
 % takes over and this
 % This is done on a schedule
 -spec persist_last_applied(ra_server_state()) -> ra_server_state().
-persist_last_applied(#{persisted_last_applied := PLA,
-                       last_applied := LA} = State) when LA =< PLA ->
+persist_last_applied(#ra_server_state{persisted_last_applied = PLA,
+                       last_applied = LA} = State) when LA =< PLA ->
     % if last applied is less than PL for some reason do nothing
     State;
-persist_last_applied(#{last_applied := LastApplied,
-                       cfg := #cfg{uid = UId} = Cfg} = State) ->
+persist_last_applied(#ra_server_state{last_applied = LastApplied,
+                       cfg = #cfg{uid = UId} = Cfg} = State) ->
     ok = ra_log_meta:store(meta_name(Cfg), UId, last_applied, LastApplied),
-    State#{persisted_last_applied => LastApplied}.
+    State#ra_server_state{persisted_last_applied = LastApplied}.
 
 
 -spec update_peer(ra_server_id(),
@@ -2278,15 +2246,15 @@ persist_last_applied(#{last_applied := LastApplied,
                     commit_index_sent => non_neg_integer(),
                     status => ra_peer_status()},
                   ra_server_state()) -> ra_server_state().
-update_peer(PeerId, Update, #{cluster := Peers} = State)
+update_peer(PeerId, Update, #ra_server_state{cluster = Peers} = State)
   when is_map(Update) ->
     Peer = maps:merge(maps:get(PeerId, Peers), Update),
     put_peer(PeerId, Peer, State).
 
 -spec update_disconnected_peers(node(), nodeup | nodedown, ra_server_state()) ->
     ra_server_state().
-update_disconnected_peers(Node, nodeup, #{cluster := Peers} = State) ->
-    State#{cluster => maps:map(
+update_disconnected_peers(Node, nodeup, #ra_server_state{cluster = Peers} = State) ->
+    State#ra_server_state{cluster = maps:map(
                         fun ({_, PeerNode}, #{status := disconnected} = Peer)
                               when PeerNode == Node ->
                                 Peer#{status => normal};
@@ -2296,7 +2264,7 @@ update_disconnected_peers(Node, nodeup, #{cluster := Peers} = State) ->
 update_disconnected_peers(_Node, _Status, State) ->
     State.
 
-peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
+peer_snapshot_process_exited(SnapshotPid, #ra_server_state{cluster = Peers} = State) ->
      PeerKv =
          maps:to_list(
            maps:filter(fun(_, #{status := {sending_snapshot, Pid}})
@@ -2321,7 +2289,7 @@ handle_down(leader, machine, Pid, Info, State)
     Eff = {next_event, {command, low, {'$usr', {down, Pid, Info}, noreply}}},
     {leader, State, [Eff]};
 handle_down(RaftState, snapshot_sender, Pid, Info,
-            #{cfg := #cfg{log_id = LogId}} = State)
+            #ra_server_state{cfg = #cfg{log_id = LogId}} = State)
   when (RaftState == leader orelse
         RaftState == await_condition)
        andalso is_pid(Pid)  ->
@@ -2345,13 +2313,13 @@ handle_down(RaftState, snapshot_sender, Pid, Info,
 %     SnapState = ra_snapshot:handle_error(Pid, Info, SnapState0),
 %     Log = ra_log:set_snapshot_state(SnapState, Log0),
 %     {RaftState, State#{log => Log}, []};
-handle_down(RaftState, log, Pid, Info, #{log := Log0} = State) ->
+handle_down(RaftState, log, Pid, Info, #ra_server_state{log = Log0} = State) ->
     {Log, Effects} = ra_log:handle_event({down, Pid, Info}, Log0),
-    {RaftState, State#{log => Log}, Effects};
+    {RaftState, State#ra_server_state{log = Log}, Effects};
 handle_down(RaftState, aux, Pid, Info, State)
   when is_pid(Pid) ->
     handle_aux(RaftState, cast, {down, Pid, Info}, State);
-handle_down(RaftState, Type, Pid, Info, #{cfg := #cfg{log_id = LogId}} = State) ->
+handle_down(RaftState, Type, Pid, Info, #ra_server_state{cfg = #cfg{log_id = LogId}} = State) ->
     ?DEBUG("~ts: handle_down: unexpected ~w ~w exited with ~W",
            [LogId, Type, Pid, Info, 10]),
     {RaftState, State, []}.
@@ -2371,27 +2339,27 @@ handle_node_status(RaftState, aux, Node, Status, _Infos, State)
   when is_atom(Node) ->
     handle_aux(RaftState, cast, {Status, Node}, State);
 handle_node_status(RaftState, Type, Node, Status, _Info,
-                   #{cfg := #cfg{log_id = LogId}} = State) ->
+                   #ra_server_state{cfg = #cfg{log_id = LogId}} = State) ->
     ?DEBUG("~ts: handle_node_status: unexpected ~w ~w status change ~w",
           [LogId, Type, Node, Status]),
     {RaftState, State, []}.
 
 -spec terminate(ra_server_state(), Reason :: {shutdown, delete} | term()) -> ok.
-terminate(#{log := Log,
-            cfg := #cfg{log_id = LogId}} = _State, {shutdown, delete}) ->
+terminate(#ra_server_state{log = Log,
+            cfg = #cfg{log_id = LogId}} = _State, {shutdown, delete}) ->
     ?NOTICE("~ts: terminating with reason 'delete'", [LogId]),
     catch ra_log:delete_everything(Log),
     ok;
-terminate(#{cfg := #cfg{log_id = LogId}} = State, Reason) ->
+terminate(#ra_server_state{cfg = #cfg{log_id = LogId}} = State, Reason) ->
     ?DEBUG("~ts: terminating with reason '~w'", [LogId, Reason]),
-    #{log := Log} = persist_last_applied(State),
+    #ra_server_state{log = Log} = persist_last_applied(State),
     catch ra_log:close(Log),
     ok.
 
 -spec log_fold(ra_server_state(), fun((term(), State) -> State), State) ->
     {ok, State, ra_server_state()} |
     {error, term(), ra_server_state()}.
-log_fold(#{log := Log} = RaState, Fun, State) ->
+log_fold(#ra_server_state{log = Log} = RaState, Fun, State) ->
     Idx = case ra_log:snapshot_index_term(Log) of
               {PrevIdx, _PrevTerm} ->
                   PrevIdx;
@@ -2400,7 +2368,7 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
           end,
     try fold_log_from(Idx, Fun, {State, Log}) of
         {ok, {State1, Log1}} ->
-            {ok, State1, RaState#{log => Log1}}
+            {ok, State1, RaState#ra_server_state{log = Log1}}
     catch _:Err ->
             {error, Err, RaState}
     end.
@@ -2409,16 +2377,16 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
 -spec log_read([ra_index()], ra_server_state()) ->
     {ok, [term()], ra_server_state()} |
     {error, ra_server_state()}.
-log_read(Indexes, #{log := Log0} = State) ->
+log_read(Indexes, #ra_server_state{log = Log0} = State) ->
     {Entries, Log} = ra_log:sparse_read(Indexes, Log0),
     {ok, [Data
           || {_Idx, _Term, {'$usr', _, Data, _}} <- Entries],
-     State#{log => Log}}.
+     State#ra_server_state{log = Log}}.
 
 %% reads user commands at the specified index
 -spec log_partial_read([ra_index()], ra_server_state()) ->
     ra_log:read_plan().
-log_partial_read(Indexes, #{log := Log0}) ->
+log_partial_read(Indexes, #ra_server_state{log = Log0}) ->
     ra_log:partial_read(Indexes, Log0,
                         fun transform_for_partial_read/3).
 
@@ -2429,8 +2397,8 @@ log_partial_read(Indexes, #{log := Log0}) ->
 call_for_election(TargetState, State) ->
     call_for_election(TargetState, State, []).
 
-call_for_election(candidate, #{cfg := #cfg{id = Id, log_id = LogId} = Cfg,
-                               current_term := CurrentTerm} = State0,
+call_for_election(candidate, #ra_server_state{cfg = #cfg{id = Id, log_id = LogId} = Cfg,
+                               current_term = CurrentTerm} = State0,
                  Effects) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_ELECTIONS, 1),
     NewTerm = CurrentTerm + 1,
@@ -2446,13 +2414,13 @@ call_for_election(candidate, #{cfg := #cfg{id = Id, log_id = LogId} = Cfg,
     % vote for self
     VoteForSelf = #request_vote_result{term = NewTerm, vote_granted = true},
     State = update_term_and_voted_for(NewTerm, Id, State0),
-    {candidate, State#{leader_id => undefined, votes => 0},
+    {candidate, State#ra_server_state{leader_id = undefined, votes = 0},
      [{next_event, cast, VoteForSelf},
       {send_vote_requests, Reqs} | Effects]};
-call_for_election(pre_vote, #{cfg := #cfg{id = Id,
+call_for_election(pre_vote, #ra_server_state{cfg = #cfg{id = Id,
                                           log_id = LogId,
                                           machine_version = MacVer} = Cfg,
-                              current_term := Term} = State0,
+                              current_term = Term} = State0,
                  Effects) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_PRE_VOTE_ELECTIONS, 1),
     ?DEBUG("~ts: pre_vote election called for in term ~b", [LogId, Term]),
@@ -2470,8 +2438,8 @@ call_for_election(pre_vote, #{cfg := #cfg{id = Id,
     VoteForSelf = #pre_vote_result{term = Term, token = Token,
                                    vote_granted = true},
     State = update_term_and_voted_for(Term, Id, State0),
-    {pre_vote, State#{leader_id => undefined, votes => 0,
-                      pre_vote_token => Token},
+    {pre_vote, State#ra_server_state{leader_id = undefined, votes = 0,
+                      pre_vote_token = Token},
      [{next_event, cast, VoteForSelf},
       {send_vote_requests, Reqs} | Effects]}.
 
@@ -2481,9 +2449,9 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                                          token = Token,
                                          last_log_index = LLIdx,
                                          last_log_term = LLTerm},
-                 #{cfg := #cfg{machine_version = OurMacVer,
+                 #ra_server_state{cfg = #cfg{machine_version = OurMacVer,
                                effective_machine_version = EffMacVer},
-                   current_term := CurTerm} = State0)
+                   current_term = CurTerm} = State0)
   when Term >= CurTerm  ->
     State = update_term(Term, State0),
     LastIdxTerm = last_idx_term(State),
@@ -2501,7 +2469,7 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                    " for term ~b previous term ~b",
                    [log_id(State0), Cand, TheirMacVer, OurMacVer, EffMacVer,
                     {LLIdx, LLTerm}, Term, CurTerm]),
-            {FsmState, State#{voted_for => Cand},
+            {FsmState, State#ra_server_state{voted_for = Cand},
              [{reply, pre_vote_result(Term, Token, true)}]};
         true ->
             ?DEBUG("~ts: declining pre-vote for ~w their machine version ~b"
@@ -2525,7 +2493,7 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
                                          token = Token,
                                          candidate_id = Candidate},
-                #{current_term := CurTerm} = State)
+                #ra_server_state{current_term = CurTerm} = State)
   when Term < CurTerm ->
     ?DEBUG("~ts declining pre-vote to ~w for term ~b, current term ~b",
            [log_id(State), Candidate, Term, CurTerm]),
@@ -2547,10 +2515,10 @@ new_peer() ->
 new_peer_with(Map) ->
     maps:merge(new_peer(), Map).
 
-peers(#{cfg := #cfg{id = Id}, cluster := Peers}) ->
+peers(#ra_server_state{cfg = #cfg{id = Id}, cluster = Peers}) ->
     maps:remove(Id, Peers).
 
-peer_status(PeerId, #{cluster := Peers}) ->
+peer_status(PeerId, #ra_server_state{cluster = Peers}) ->
     case Peers of
         #{PeerId := #{status := Status}} ->
             Status;
@@ -2565,9 +2533,9 @@ peers_with_normal_status(State) ->
                 end, peers(State)).
 
 % peers that could need an update
-stale_peers(#{commit_index := CommitIndex,
-              cfg := #cfg{id = ThisId},
-              cluster := Cluster}) ->
+stale_peers(#ra_server_state{commit_index = CommitIndex,
+              cfg = #cfg{id = ThisId},
+              cluster = Cluster}) ->
     maps:filter(fun (Id , _) when Id == ThisId ->
                         false;
                     (_, #{status := normal,
@@ -2588,15 +2556,15 @@ stale_peers(#{commit_index := CommitIndex,
 peer_ids(State) ->
     maps:keys(peers(State)).
 
-peer(PeerId, #{cluster := Nodes}) ->
+peer(PeerId, #ra_server_state{cluster = Nodes}) ->
     maps:get(PeerId, Nodes, undefined).
 
-put_peer(PeerId, Peer, #{cluster := Peers} = State) ->
-    State#{cluster => Peers#{PeerId => Peer}}.
+put_peer(PeerId, Peer, #ra_server_state{cluster = Peers} = State) ->
+    State#ra_server_state{cluster = Peers#{PeerId => Peer}}.
 
-update_term_and_voted_for(Term, VotedFor, #{cfg := #cfg{uid = UId} = Cfg,
-                                            current_term := CurTerm} = State) ->
-    CurVotedFor = maps:get(voted_for, State, undefined),
+update_term_and_voted_for(Term, VotedFor, #ra_server_state{cfg = #cfg{uid = UId} = Cfg,
+                                            current_term = CurTerm} = State) ->
+    CurVotedFor = State#ra_server_state.voted_for,
     case Term =:= CurTerm andalso VotedFor =:= CurVotedFor of
         true ->
             %% no update needed
@@ -2609,26 +2577,26 @@ update_term_and_voted_for(Term, VotedFor, #{cfg := #cfg{uid = UId} = Cfg,
             incr_counter(Cfg, ?C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, 1),
             put_counter(Cfg, ?C_RA_SVR_METRIC_TERM, Term),
             %% this is probably not necessary
-            reset_query_index(State#{current_term => Term,
-                                     voted_for => VotedFor})
+            reset_query_index(State#ra_server_state{current_term = Term,
+                                     voted_for = VotedFor})
     end.
 
-update_term(Term, State = #{current_term := CurTerm})
+update_term(Term, State = #ra_server_state{current_term = CurTerm})
   when Term =/= undefined andalso Term > CurTerm ->
     update_term_and_voted_for(Term, undefined, State);
 update_term(_, State) ->
     State.
 
-last_idx_term(#{log := Log}) ->
+last_idx_term(#ra_server_state{log = Log}) ->
     ra_log:last_index_term(Log).
 
 
 state_query(all, State) -> State;
 state_query(overview, State) ->
     overview(State);
-state_query(machine, #{machine_state := MacState}) ->
+state_query(machine, #ra_server_state{machine_state = MacState}) ->
     MacState;
-state_query(voters, #{cluster := Cluster}) ->
+state_query(voters, #ra_server_state{cluster = Cluster}) ->
     maps:fold(fun(K, V, Acc) ->
                       case maps:get(voter_status, V, undefined) of
                           undefined -> [K|Acc];
@@ -2640,15 +2608,15 @@ state_query(voters, #{cluster := Cluster}) ->
                       end
               end, [], Cluster);
 state_query(leader, State) ->
-    maps:get(leader_id, State, undefined);
-state_query(members, #{cluster := Cluster}) ->
+    State#ra_server_state.leader_id;
+state_query(members, #ra_server_state{cluster = Cluster}) ->
     maps:keys(Cluster);
-state_query(members_info, #{cfg := #cfg{id = Self},
-                            cluster := Cluster,
-                            leader_id := Self,
-                            query_index := QI,
-                            commit_index := CI,
-                            membership := Membership}) ->
+state_query(members_info, #ra_server_state{cfg = #cfg{id = Self},
+                            cluster = Cluster,
+                            leader_id = Self,
+                            query_index = QI,
+                            commit_index = CI,
+                            membership = Membership}) ->
     maps:map(fun(Id, Peer) ->
                      case {Id, Peer} of
                          {Self, Peer = #{voter_status := VoterStatus}} ->
@@ -2672,11 +2640,11 @@ state_query(members_info, #{cfg := #cfg{id = Self},
                              Peer#{voter_status => #{membership => voter}}
                      end
              end, Cluster);
-state_query(members_info, #{cfg := #cfg{id = Self},
-                            cluster := Cluster,
-                            query_index := QI,
-                            commit_index := CI,
-                            membership := Membership}) ->
+state_query(members_info, #ra_server_state{cfg = #cfg{id = Self},
+                            cluster = Cluster,
+                            query_index = QI,
+                            commit_index = CI,
+                            membership = Membership}) ->
     %% Followers do not have sufficient information,
     %% bail out and send whatever we have.
     maps:map(fun(Id, Peer) ->
@@ -2693,7 +2661,7 @@ state_query(members_info, #{cfg := #cfg{id = Self},
                              #{}
                      end
              end, Cluster);
-state_query(initial_members, #{log := Log}) ->
+state_query(initial_members, #ra_server_state{log = Log}) ->
     case ra_log:read_config(Log) of
         {ok, #{initial_members := InitialMembers}} ->
             InitialMembers;
@@ -2701,7 +2669,7 @@ state_query(initial_members, #{log := Log}) ->
             error
     end;
 state_query(last_applied, State) ->
-    maps:get(last_applied, State, undefined);
+    State#ra_server_state.last_applied;
 state_query(Query, _State) ->
     {error, {unknown_query, Query}}.
 
@@ -2738,17 +2706,17 @@ has_log_entry_or_snapshot(Idx, Term, Log0) ->
             {term_mismatch, OtherTerm, Log}
     end.
 
-fetch_term(Idx, #{log := Log0} = State) ->
+fetch_term(Idx, #ra_server_state{log = Log0} = State) ->
     case ra_log:fetch_term(Idx, Log0) of
         {undefined, Log} ->
             case ra_log:snapshot_index_term(Log) of
                 {Idx, Term} ->
-                    {Term, State#{log => Log}};
+                    {Term, State#ra_server_state{log = Log}};
                 _ ->
-                    {undefined, State#{log => Log}}
+                    {undefined, State#ra_server_state{log = Log}}
             end;
         {Term, Log} ->
-            {Term, State#{log => Log}}
+            {Term, State#ra_server_state{log = Log}}
     end.
 
 
@@ -2787,7 +2755,7 @@ append_self(Self, Nodes) ->
             Cluster#{Self => new_peer()}
     end.
 
-initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
+initialise_peers(State = #ra_server_state{log = Log, cluster = Cluster0}) ->
     NextIdx = ra_log:next_index(Log),
     Cluster = maps:map(fun (_, Peer0) ->
                                Peer1 = maps:with([voter_status,
@@ -2795,7 +2763,7 @@ initialise_peers(State = #{log := Log, cluster := Cluster0}) ->
                                Peer2 = Peer1#{next_index => NextIdx},
                                new_peer_with(Peer2)
                        end, Cluster0),
-    State#{cluster => Cluster}.
+    State#ra_server_state{cluster = Cluster}.
 
 apply_to(ApplyTo, State, Effs) ->
     apply_to(ApplyTo, fun apply_with/2, #{}, Effs, State).
@@ -2804,12 +2772,12 @@ apply_to(ApplyTo, ApplyFun, State, Effs) ->
     apply_to(ApplyTo, ApplyFun, #{}, Effs, State).
 
 apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
-         #{last_applied := LastApplied,
-           cfg := #cfg{machine_version = MacVer,
+         #ra_server_state{last_applied = LastApplied,
+           cfg = #cfg{machine_version = MacVer,
                        effective_machine_module = MacMod,
                        effective_machine_version = EffMacVer} = Cfg,
-           machine_state := MacState0,
-           log := Log0} = State0)
+           machine_state = MacState0,
+           log = Log0} = State0)
   when ApplyTo > LastApplied andalso MacVer >= EffMacVer ->
     From = LastApplied + 1,
     {LastIdx, _LastTerm} = ra_log:last_index_term(Log0),
@@ -2829,10 +2797,10 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
     FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, AppliedTo),
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, CommitLatency),
-    {State#{last_applied => AppliedTo,
-            log => Log,
-            commit_latency => CommitLatency,
-            machine_state => MacState}, FinalEffs};
+    {State#ra_server_state{last_applied = AppliedTo,
+            log = Log,
+            commit_latency = CommitLatency,
+            machine_state = MacState}, FinalEffs};
 apply_to(_ApplyTo, _, Notifys, Effects, State)
   when is_list(Effects) ->
     FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
@@ -2855,16 +2823,16 @@ cluster_scan_fun({Idx, Term, {'$ra_cluster_change', _Meta, NewCluster, _}},
     ?DEBUG("~ts: ~ts: applying ra cluster change to ~w",
            [log_id(State0), ?FUNCTION_NAME, maps:keys(NewCluster)]),
     %% we are recovering and should apply the cluster change
-    State0#{cluster => NewCluster,
-            membership => get_membership(NewCluster, State0),
-            cluster_change_permitted => true,
-            cluster_index_term => {Idx, Term}};
+    State0#ra_server_state{cluster = NewCluster,
+            membership = get_membership(NewCluster, State0),
+            cluster_change_permitted = true,
+            cluster_index_term = {Idx, Term}};
 cluster_scan_fun(_Cmd, State) ->
     State.
 
 apply_with(_Cmd,
            {Mod, LastAppliedIdx,
-            #{cfg := #cfg{machine_version = MacVer,
+            #ra_server_state{cfg = #cfg{machine_version = MacVer,
                           effective_machine_version = Effective}} = State,
             MacSt, Effects, Notifys, LastTs})
       when MacVer < Effective ->
@@ -2872,7 +2840,7 @@ apply_with(_Cmd,
     {Mod, LastAppliedIdx, State, MacSt, Effects, Notifys, LastTs};
 apply_with({Idx, Term, {'$usr', CmdMeta, Cmd, ReplyMode}},
            {Module, _LastAppliedIdx,
-            State = #{cfg := #cfg{effective_machine_version = MacVer}},
+            State = #ra_server_state{cfg = #cfg{effective_machine_version = MacVer}},
             MacSt, Effects0, Notifys0, LastTs}) ->
     %% augment the meta data structure
     Meta = augment_command_meta(Idx, Term, MacVer, ReplyMode, CmdMeta),
@@ -2895,25 +2863,25 @@ apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyMode}},
     {Effects, Notifys} = add_reply(CmdMeta, ok, ReplyMode,
                                    Effects0, Notifys0),
     State = case State0 of
-                #{cluster_index_term := {CI, CT}}
+                #ra_server_state{cluster_index_term = {CI, CT}}
                   when Idx > CI andalso Term >= CT ->
                     ?DEBUG("~ts: applying ra cluster change at index ~b to ~w",
                            [log_id(State0), Idx, maps:keys(NewCluster)]),
                     %% we are recovering and should apply the cluster change
-                    State0#{cluster => NewCluster,
-                            membership => get_membership(NewCluster, State0),
-                            cluster_change_permitted => true,
-                            cluster_index_term => {Idx, Term}};
+                    State0#ra_server_state{cluster = NewCluster,
+                            membership = get_membership(NewCluster, State0),
+                            cluster_change_permitted = true,
+                            cluster_index_term = {Idx, Term}};
                 _  ->
                     ?DEBUG("~ts: committing ra cluster change at index ~b to ~w",
                            [log_id(State0), Idx, maps:keys(NewCluster)]),
                     %% else just enable further cluster changes again
-                    State0#{cluster_change_permitted => true}
+                    State0#ra_server_state{cluster_change_permitted = true}
             end,
     {Mod, Idx, State, MacSt, Effects, Notifys, LastTs};
 apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
            {CurModule, LastAppliedIdx,
-            #{cfg := #cfg{log_id = LogId,
+            #ra_server_state{cfg = #cfg{log_id = LogId,
                           machine_version = MacVer,
                           %% active machine versions and their index
                           %% (from last snapshot)
@@ -2921,8 +2889,8 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
                           machine_versions = MacVersions,
                           effective_machine_version = OldMacVer
                          } = Cfg0,
-              current_term := CurrentTerm,
-              cluster_change_permitted := ClusterChangePerm0} = State0,
+              current_term = CurrentTerm,
+              cluster_change_permitted = ClusterChangePerm0} = State0,
             MacSt, Effects, Notifys, LastTs}) ->
     ClusterChangePerm = case CurrentTerm of
                             Term ->
@@ -2946,8 +2914,8 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
                            effective_handle_aux_fun =
                                ra_machine:which_aux_fun(Module)
                            },
-            State = State0#{cfg => Cfg,
-                            cluster_change_permitted => ClusterChangePerm},
+            State = State0#ra_server_state{cfg = Cfg,
+                            cluster_change_permitted = ClusterChangePerm},
             Meta = augment_command_meta(Idx, Term, MacVer, undefined, CmdMeta),
             ?DEBUG("~ts: applying new machine version ~b current ~b",
                    [LogId, NextMacVer, OldMacVer]),
@@ -2970,7 +2938,7 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
             {CurModule, LastAppliedIdx, State,
              MacSt, Effects, Notifys, LastTs};
         false ->
-            State = State0#{cluster_change_permitted => ClusterChangePerm},
+            State = State0#ra_server_state{cluster_change_permitted = ClusterChangePerm},
             {CurModule, Idx, State, MacSt, Effects, Notifys, LastTs}
     end;
 apply_with({Idx, _, {'$ra_cluster', CmdMeta, delete, ReplyType}},
@@ -2982,7 +2950,7 @@ apply_with({Idx, _, {'$ra_cluster', CmdMeta, delete, ReplyType}},
     EOLEffects = ra_machine:state_enter(Module, eol, MacSt),
     % non-local return to be caught by ra_server_proc
     % need to update the state before throw
-    State = State0#{last_applied => Idx, machine_state => MacSt},
+    State = State0#ra_server_state{last_applied = Idx, machine_state = MacSt},
     throw({delete_and_terminate, State, EOLEffects ++ NotEffs ++ Effects1});
 apply_with({Idx, _, _} = Cmd, Acc) ->
     % TODO: remove to make more strict, ideally we should not need a catch all
@@ -3096,11 +3064,11 @@ append_log_leader({'$ra_leave', From, LeavingServer, ReplyMode},
             % not a member - do nothing
             {not_appended, not_member, State, Effects}
     end;
-append_log_leader(Cmd, #{log := Log0, current_term := Term} = State, Effects) ->
+append_log_leader(Cmd, #ra_server_state{log = Log0, current_term = Term} = State, Effects) ->
     NextIdx = ra_log:next_index(Log0),
     try ra_log:append({NextIdx, Term, Cmd}, Log0) of
         Log ->
-            {ok, NextIdx, Term, State#{log => Log}, Effects}
+            {ok, NextIdx, Term, State#ra_server_state{log = Log}, Effects}
     catch error:wal_down ->
               {not_appended, wal_down, State, Effects}
     end.
@@ -3116,32 +3084,32 @@ pre_append_log_follower({Idx, Term, Cmd} = Entry,
         {'$ra_cluster_change', _, Cluster, _} ->
             ?DEBUG("~ts: ~ts: follower applying ra cluster change to ~w",
                    [log_id(State), ?FUNCTION_NAME, maps:keys(Cluster)]),
-            State#{cluster => Cluster,
-                   cluster_index_term => {Idx, Term}};
+            State#ra_server_state{cluster = Cluster,
+                                   cluster_index_term = {Idx, Term}};
         _ ->
             % revert back to previous cluster
-            {PrevIdx, PrevTerm, PrevCluster} = maps:get(previous_cluster, State),
+            {PrevIdx, PrevTerm, PrevCluster} = State#ra_server_state.previous_cluster,
             ?DEBUG("~ts: ~ts: follower reverting cluster change to ~w",
                    [log_id(State), ?FUNCTION_NAME, maps:keys(PrevCluster)]),
-            State1 = State#{cluster => PrevCluster,
-                            cluster_index_term => {PrevIdx, PrevTerm}},
+            State1 = State#ra_server_state{cluster = PrevCluster,
+                                            cluster_index_term = {PrevIdx, PrevTerm}},
             pre_append_log_follower(Entry, State1)
     end;
 pre_append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}},
                         State) ->
     ?DEBUG("~ts: ~ts: follower applying ra cluster change to ~w",
            [log_id(State), ?FUNCTION_NAME, maps:keys(Cluster)]),
-    State#{cluster => Cluster,
-           membership => get_membership(Cluster, State),
-           cluster_index_term => {Idx, Term}};
+    State#ra_server_state{cluster = Cluster,
+                          membership = get_membership(Cluster, State),
+                          cluster_index_term = {Idx, Term}};
 pre_append_log_follower(_, State) ->
     State.
 
 append_cluster_change(Cluster, From, ReplyMode,
-                      #{log := Log0,
-                        cluster := PrevCluster,
-                        cluster_index_term := {PrevCITIdx, PrevCITTerm},
-                        current_term := Term} = State,
+                      #ra_server_state{log = Log0,
+                                       cluster = PrevCluster,
+                                       cluster_index_term = {PrevCITIdx, PrevCITTerm},
+                                       current_term = Term} = State,
                       Effects) ->
     % turn join command into a generic cluster change command
     % that include the new cluster configuration
@@ -3153,11 +3121,11 @@ append_cluster_change(Cluster, From, ReplyMode,
     try ra_log:append({NextIdx, Term, Command}, Log0) of
         Log ->
             {ok, NextIdx, Term,
-             State#{log => Log,
-                    cluster => Cluster,
-                    cluster_change_permitted => false,
-                    cluster_index_term => IdxTerm,
-                    previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}},
+             State#ra_server_state{log = Log,
+                                    cluster = Cluster,
+                                    cluster_change_permitted = false,
+                                    cluster_index_term = IdxTerm,
+                                    previous_cluster = {PrevCITIdx, PrevCITTerm, PrevCluster}},
              Effects}
     catch error:wal_down ->
               {not_appended, wal_down, State, Effects}
@@ -3173,7 +3141,7 @@ mismatch_append_entries_reply(Term, LastAppliedIdx, State0) ->
                            last_term = LATerm},
      State}.
 
-append_entries_reply(Term, Success, #{log := Log} = State) ->
+append_entries_reply(Term, Success, #ra_server_state{log = Log} = State) ->
     {LWIdx, LWTerm} = ra_log:last_written(Log),
     {LastIdx, _} = last_idx_term(State),
     #append_entries_reply{term = Term,
@@ -3182,10 +3150,10 @@ append_entries_reply(Term, Success, #{log := Log} = State) ->
                           last_index = LWIdx,
                           last_term = LWTerm}.
 
-evaluate_quorum(#{cfg := Cfg,
-                  commit_index := CI0} = State0, Effects0) ->
+evaluate_quorum(#ra_server_state{cfg = Cfg,
+                                  commit_index = CI0} = State0, Effects0) ->
     % TODO: shortcut function if commit index was not incremented
-    State = #{commit_index := CI} = increment_commit_index(State0),
+    #ra_server_state{commit_index = CI} = State = increment_commit_index(State0),
 
     Effects = case CI > CI0 of
                   true ->
@@ -3196,20 +3164,20 @@ evaluate_quorum(#{cfg := Cfg,
               end,
     apply_to(CI, State, Effects).
 
-increment_commit_index(State0 = #{current_term := CurrentTerm}) ->
+increment_commit_index(#ra_server_state{current_term = CurrentTerm} = State0) ->
     PotentialNewCommitIndex = agreed_commit(match_indexes(State0)),
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
     case fetch_term(PotentialNewCommitIndex, State0) of
         {CurrentTerm, State} ->
-            State#{commit_index => PotentialNewCommitIndex};
+            State#ra_server_state{commit_index = PotentialNewCommitIndex};
         {_, State} ->
             State
     end.
 
-query_indexes(#{cfg := #cfg{id = Id},
-                cluster := Cluster,
-                query_index := QueryIndex}) ->
+query_indexes(#ra_server_state{cfg = #cfg{id = Id},
+                                cluster = Cluster,
+                                query_index = QueryIndex}) ->
     maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
                       Acc;
                   (_K, #{voter_status := #{membership := Membership}}, Acc)
@@ -3219,9 +3187,9 @@ query_indexes(#{cfg := #cfg{id = Id},
                       [Idx | Acc]
               end, [QueryIndex], Cluster).
 
-match_indexes(#{cfg := #cfg{id = Id},
-                cluster := Cluster,
-                log := Log}) ->
+match_indexes(#ra_server_state{cfg = #cfg{id = Id},
+                                cluster = Cluster,
+                                log = Log}) ->
     {LWIdx, _} = ra_log:last_written(Log),
     maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
                       Acc;
@@ -3238,7 +3206,7 @@ agreed_commit(Indexes) ->
     Nth = trunc(length(SortedIdxs) / 2) + 1,
     lists:nth(Nth, SortedIdxs).
 
-log_unhandled_msg(RaState, Msg, #{cfg := #cfg{log_id = LogId}}) ->
+log_unhandled_msg(RaState, Msg, #ra_server_state{cfg = #cfg{log_id = LogId}}) ->
     ?DEBUG("~ts: ~w received unhandled msg: ~W", [LogId, RaState, Msg, 6]).
 
 fold_log_from(From, Folder, {St, Log0}) ->
@@ -3262,7 +3230,7 @@ cast_reply(From, To, Msg) ->
     {cast, To, {From, Msg}}.
 
 
-index_machine_version(Idx, #{cfg := #cfg{machine_versions = Versions}}) ->
+index_machine_version(Idx, #ra_server_state{cfg = #cfg{machine_versions = Versions}}) ->
     %% scan for versions
     index_machine_version0(Idx, Versions).
 
@@ -3279,10 +3247,10 @@ heartbeat_reply(CurTerm, QueryIndex)
   when is_integer(CurTerm) andalso is_integer(QueryIndex) ->
     #heartbeat_reply{term = CurTerm, query_index = QueryIndex}.
 
-update_heartbeat_rpc_effects(#{query_index := QueryIndex,
-                               queries_waiting_heartbeats := Waiting,
-                               current_term := Term,
-                               cfg := #cfg{id = Id}} = State) ->
+update_heartbeat_rpc_effects(#ra_server_state{query_index = QueryIndex,
+                                               queries_waiting_heartbeats = Waiting,
+                                               current_term = Term,
+                                               cfg = #cfg{id = Id}} = State) ->
     Peers = peers(State),
     %% TODO: do a quorum evaluation to find a queries to apply and apply all
     %% queries until that point
@@ -3291,17 +3259,17 @@ update_heartbeat_rpc_effects(#{query_index := QueryIndex,
             %% Apply all if there are no peers.
             {_, QueryRefs} = lists:unzip(queue:to_list(Waiting)),
             Effects = apply_consistent_queries_effects(QueryRefs, State),
-            {State#{queries_waiting_heartbeats => queue:new()}, Effects};
+            {State#ra_server_state{queries_waiting_heartbeats = queue:new()}, Effects};
         _ ->
             Effects = heartbeat_rpc_effects(Peers, Id, Term, QueryIndex),
             {State, Effects}
     end.
 
 make_heartbeat_rpc_effects(QueryRef,
-                           #{query_index := QueryIndex,
-                             queries_waiting_heartbeats := Waiting0,
-                             current_term := Term,
-                             cfg := #cfg{id = Id}} = State0) ->
+                           #ra_server_state{query_index = QueryIndex,
+                                             queries_waiting_heartbeats = Waiting0,
+                                             current_term = Term,
+                                             cfg = #cfg{id = Id}} = State0) ->
     Peers = peers(State0),
     %% TODO: do a quorum evaluation to find a queries to apply and apply all
     %% queries until that point
@@ -3311,14 +3279,14 @@ make_heartbeat_rpc_effects(QueryRef,
             {State0, Effects};
         _ ->
             NewQueryIndex = QueryIndex + 1,
-            State = State0#{query_index => NewQueryIndex},
+            State = State0#ra_server_state{query_index = NewQueryIndex},
             Effects = heartbeat_rpc_effects(Peers, Id, Term, NewQueryIndex),
             Waiting1 = queue:in({NewQueryIndex, QueryRef}, Waiting0),
-            {State#{queries_waiting_heartbeats => Waiting1}, Effects}
+            {State#ra_server_state{queries_waiting_heartbeats = Waiting1}, Effects}
     end.
 
-reset_query_index(#{cluster := Cluster} = State) ->
-    State#{cluster => maps:map(fun(_PeerId, Peer) ->
+reset_query_index(#ra_server_state{cluster = Cluster} = State) ->
+    State#ra_server_state{cluster = maps:map(fun(_PeerId, Peer) ->
                                        Peer#{query_index => 0}
                                end, Cluster)}.
 
@@ -3346,7 +3314,7 @@ heartbeat_rpc_effect_for_peer(_PeerId, _Peer, _Id, _Term, _QueryIndex) ->
     false.
 
 heartbeat_rpc_quorum(NewQueryIndex, PeerId,
-                     #{queries_waiting_heartbeats := Waiting0} = State) ->
+                     #ra_server_state{queries_waiting_heartbeats = Waiting0} = State) ->
     State1 = update_peer_query_index(PeerId, NewQueryIndex, State),
     ConsensusQueryIndex = get_current_query_quorum(State1),
     {QueryRefs, Waiting1} = take_from_queue_while(
@@ -3359,10 +3327,10 @@ heartbeat_rpc_quorum(NewQueryIndex, PeerId,
                               Waiting0),
     case QueryRefs of
         [] -> {[], State1};
-        _  -> {QueryRefs, State1#{queries_waiting_heartbeats := Waiting1}}
+        _  -> {QueryRefs, State1#ra_server_state{queries_waiting_heartbeats = Waiting1}}
     end.
 
-update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster} = State0) ->
+update_peer_query_index(PeerId, QueryIndex, #ra_server_state{cluster = Cluster} = State0) ->
     case maps:get(PeerId, Cluster, undefined) of
         undefined ->
             State0;
@@ -3404,7 +3372,7 @@ take_from_queue_while(Fun, Queue, Result) ->
                                        ra_server_state()) ->
     effects().
 apply_consistent_queries_effects(QueryRefs,
-                                 #{last_applied := LastApplied} = State) ->
+                                 #ra_server_state{last_applied = LastApplied} = State) ->
     lists:map(fun({_, _, ReadCommitIndex} = QueryRef) ->
                       true = LastApplied >= ReadCommitIndex,
                       consistent_query_reply(QueryRef, State)
@@ -3412,21 +3380,21 @@ apply_consistent_queries_effects(QueryRefs,
 
 -spec consistent_query_reply(consistent_query_ref(), ra_server_state()) -> effect().
 consistent_query_reply({From, QueryFun, _ReadCommitIndex},
-                       #{cfg := #cfg{id = Id,
-                                     machine = {machine, MacMod, _}},
-                         machine_state := MacState
-                         }) ->
+                       #ra_server_state{cfg = #cfg{id = Id,
+                                                     machine = {machine, MacMod, _}},
+                                         machine_state = MacState
+                                         }) ->
     Result = ra_machine:query(MacMod, QueryFun, MacState),
     {reply, From, {ok, Result, Id}}.
 
-process_pending_consistent_queries(#{cluster_change_permitted := false} = State0,
+process_pending_consistent_queries(#ra_server_state{cluster_change_permitted = false} = State0,
                                    Effects0) ->
     {State0, Effects0};
-process_pending_consistent_queries(#{pending_consistent_queries := []} = State0,
+process_pending_consistent_queries(#ra_server_state{pending_consistent_queries = []} = State0,
                                    Effects0) ->
     {State0, Effects0};
-process_pending_consistent_queries(#{cluster_change_permitted := true,
-                                     pending_consistent_queries := Pending} = State0,
+process_pending_consistent_queries(#ra_server_state{cluster_change_permitted = true,
+                                                     pending_consistent_queries = Pending} = State0,
                                    Effects0) ->
     %% TODO: submit all pending queries with a single query index.
     lists:foldl(
@@ -3507,20 +3475,26 @@ get_condition_timeout(_, Def) ->
 -spec get_membership(ra_cluster() | ra_cluster_snapshot() | ra_cluster_servers(),
                     ra_server_state()) ->
     ra_membership().
-get_membership(Cluster, #{cfg := #cfg{id = Id, uid = UId}} = State) ->
-    Default = maps:get(membership, State, voter),
+get_membership(Cluster, #ra_server_state{cfg = #cfg{id = Id, uid = UId}} = State) ->
+    Default = case State#ra_server_state.membership of
+                  undefined -> voter;
+                  M -> M
+              end,
     get_membership(Cluster, Id, UId, Default).
 
 %% Get this node's membership.
 %% Defaults to last known-locally value.
 -spec get_membership(ra_server_state()) -> ra_membership().
-get_membership(#{cfg := #cfg{id = Id, uid = UId}, cluster := Cluster} = State) ->
-    Default = maps:get(membership, State, voter),
+get_membership(#ra_server_state{cfg = #cfg{id = Id, uid = UId}, cluster = Cluster} = State) ->
+    Default = case State#ra_server_state.membership of
+                  undefined -> voter;
+                  M -> M
+              end,
     get_membership(Cluster, Id, UId, Default).
 
 -spec maybe_promote_peer(ra_server_id(), ra_server_state(), effects()) -> 
     effects().
-maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
+maybe_promote_peer(PeerId, #ra_server_state{cluster = Cluster}, Effects) ->
     case Cluster of
         #{PeerId := #{match_index := MI,
                       voter_status := #{membership := promotable,
@@ -3571,9 +3545,9 @@ after_log_append_reply(Cmd, Idx, Term, Effects0) ->
             Effects0
     end.
 
-post_election_effects(#{cfg := #cfg{effective_machine_version = EffectiveMacVer,
-                                    machine = Mac,
-                                    system_config = SystemConfig}} = State) ->
+post_election_effects(#ra_server_state{cfg = #cfg{effective_machine_version = EffectiveMacVer,
+                                                  machine = Mac,
+                                                  system_config = SystemConfig}} = State) ->
     Peers = peers(State),
     PeerIds = maps:keys(Peers),
 
@@ -3609,7 +3583,7 @@ post_election_effects(#{cfg := #cfg{effective_machine_version = EffectiveMacVer,
             [NoopEffect | InfoRpcEffects]
     end.
 
-info_rpc_effects(#{cfg := #cfg{id = Id}, cluster := Cluster} = State) ->
+info_rpc_effects(#ra_server_state{cfg = #cfg{id = Id}, cluster = Cluster} = State) ->
     InfoRpcEffects = maps:fold(
                        fun
                            (PeerId, _, Acc) when PeerId =:= Id ->
@@ -3619,8 +3593,8 @@ info_rpc_effects(#{cfg := #cfg{id = Id}, cluster := Cluster} = State) ->
                        end, [], Cluster),
     InfoRpcEffects.
 
-info_rpc_effects_for_peer(#{cluster := Cluster,
-                            current_term := CurTerm} = State, PeerId) ->
+info_rpc_effects_for_peer(#ra_server_state{cluster = Cluster,
+                            current_term = CurTerm} = State, PeerId) ->
     %% We determine if we need to ask (for the fist time or again) the info
     %% from a peer.
     SendRpc = case Cluster of
@@ -3648,7 +3622,7 @@ info_rpc_effects_for_peer(#{cluster := Cluster,
             []
     end.
 
-info_reply_effect(#{current_term := CurTerm} = State,
+info_reply_effect(#ra_server_state{current_term = CurTerm} = State,
                   #info_rpc{from = FromId, keys = Keys}) ->
     Id = id(State),
     Info = ra_server_info(State, Keys),
@@ -3658,7 +3632,7 @@ info_reply_effect(#{current_term := CurTerm} = State,
                             info = Info},
     {cast, FromId, InfoReply}.
 
-empty_info_reply_effect(#{current_term := CurTerm} = State,
+empty_info_reply_effect(#ra_server_state{current_term = CurTerm} = State,
                         #info_rpc{from = FromId, keys = Keys}) ->
     Id = id(State),
     InfoReply = #info_reply{from = Id,
@@ -3680,7 +3654,7 @@ ra_server_info(State, Keys) ->
               end, Info0),
     Info1.
 
-handle_info_reply(#{cluster := Cluster} = State,
+handle_info_reply(#ra_server_state{cluster = Cluster} = State,
                   #info_reply{from = PeerId, keys = Keys, info = Info})
   when is_map_key(PeerId, Cluster) ->
     PeerState0 = maps:get(PeerId, Cluster),
@@ -3693,7 +3667,7 @@ handle_info_reply(#{cluster := Cluster} = State,
                                      end
                              end, PeerState0, Keys),
     Cluster1 = Cluster#{PeerId => PeerState1},
-    State1 = State#{cluster => Cluster1},
+    State1 = State#ra_server_state{cluster = Cluster1},
     determine_if_machine_upgrade_allowed(State1);
 handle_info_reply(State, #info_reply{} = _InfoReply) ->
     %% The Ra node who sent the `#info_reply{}' was removed from the cluster

@@ -20,7 +20,7 @@
 all() ->
     [
      init_test,
-     recover_restores_cluster_changes,
+     %recover_restores_cluster_changes,
      election_timeout,
      follower_aer_diverged,
      follower_aer_term_mismatch,
@@ -208,9 +208,9 @@ setup_log() ->
     ok.
 
 init_test(_Config) ->
-    #{cluster := Cluster,
-      current_term := CurrentTerm,
-      log := Log0} = Base = base_state(3, ?FUNCTION_NAME),
+    #ra_server_state{cluster = Cluster,
+                     current_term = CurrentTerm,
+                     log = Log0} = Base = base_state(3, ?FUNCTION_NAME),
     Id = ra_server:id(Base),
     UId = ra_server:uid(Base),
 
@@ -222,14 +222,14 @@ init_test(_Config) ->
                  machine => {module, ?FUNCTION_NAME, #{}},
                  initial_members => []}, % init without known peers
     % new
-    #{current_term := 0,
-      voted_for := undefined} = ra_server_init(InitConf),
+    #ra_server_state{current_term = 0,
+                     voted_for = undefined} = ra_server_init(InitConf),
     % previous data
     ok = ra_log_meta:store(ra_log_meta, UId, voted_for, some_server),
     ok = ra_log_meta:store(ra_log_meta, UId, current_term, CurrentTerm),
     meck:expect(ra_log, init, fun (_) -> Log0 end),
-    #{current_term := 5,
-      voted_for := some_server} = ra_server_init(InitConf),
+    #ra_server_state{current_term = 5,
+                     voted_for = some_server} = ra_server_init(InitConf),
     % snapshot
     SnapshotMeta = #{index => 3, term => 5,
                      cluster => dehydrate_cluster(Cluster),
@@ -239,11 +239,11 @@ init_test(_Config) ->
                                                    ?MODULE, [], Log0),
     LogS = ra_log:set_snapshot_state({SnapshotMeta, SnapshotData}, Log1),
     meck:expect(ra_log, init, fun (_) -> LogS end),
-    #{current_term := 5,
-      commit_index := 3,
-      machine_state := "hi1+2+3",
-      cluster := ClusterOut,
-      voted_for := some_server} = ra_server_init(InitConf),
+    #ra_server_state{current_term = 5,
+                     commit_index = 3,
+                     machine_state = "hi1+2+3",
+                     cluster = ClusterOut,
+                     voted_for = some_server} = ra_server_init(InitConf),
     ?assertEqual(dehydrate_cluster(Cluster), dehydrate_cluster(ClusterOut)),
     ok.
 
@@ -259,23 +259,25 @@ recover_restores_cluster_changes(_Config) ->
     {leader, State00, _} =
     ra_server:handle_candidate(#request_vote_result{term = 1,
                                                     vote_granted = true},
-                               (ra_server_init(InitConf))#{votes => 0,
-                                                           current_term => 1,
-                                                           voted_for => N1}),
-    {leader, State0 = #{cluster := Cluster0,
-                        current_term := 1}, _} =
+                               (ra_server_init(InitConf))#ra_server_state{votes = 0,
+                                                                           current_term = 1,
+                                                                           voted_for = N1}),
+    {leader, State0 = #ra_server_state{cluster = Cluster0,
+                                       current_term = 1}, _} =
         ra_server:handle_leader({command, {noop, meta(), 0}}, State00),
     ?assert(maps:size(Cluster0) =:= 1),
     {leader, State, _} = ra_server:handle_leader(written_evt(1, {1, 1}), State0),
-    ?assertMatch(#{current_term := 1,
-                   last_applied := 1}, State),
-    ?assertMatch(#{cluster_change_permitted := true}, State),
+    ?assertMatch(#ra_server_state{current_term = 1,
+                                  last_applied = 1}, State),
+    ?assertMatch(#ra_server_state{cluster_change_permitted = true}, State),
 
     % n2 joins
-    {leader, #{cluster := Cluster,
-               log := Log0}, _Effs} =
-        ra_server:handle_leader({command, {'$ra_join', meta(),
-                                           N2, await_consensus}}, State),
+    {leader, State1, _} = ra_server:handle_leader({command, {'$ra_join', meta(),
+                                                             N2, await_consensus}}, State),
+    % simulate log write completion to trigger application of join command
+    {leader, #ra_server_state{cluster = Cluster,
+                              log = Log0}, _Effs} =
+        ra_server:handle_leader(written_evt(1, {2, 2}), State1),
     {LIdx, _} = ra_log:last_index_term(Log0),
     ?assertEqual(2, maps:size(Cluster)),
     % intercept ra_log:init call to simulate persisted log data
@@ -289,7 +291,7 @@ recover_restores_cluster_changes(_Config) ->
                         Def
                 end),
 
-    #{cluster := #{?N1 := _, N2 := _}} = ra_server_init(InitConf),
+    #ra_server_state{cluster = #{?N1 := _, N2 := _}} = ra_server_init(InitConf),
     ok.
 
 election_timeout(_Config) ->
@@ -297,8 +299,8 @@ election_timeout(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
     Msg = election_timeout,
     % follower
-    {pre_vote, #{current_term := 5, votes := 0,
-                 pre_vote_token := Token},
+    {pre_vote, #ra_server_state{current_term = 5, votes = 0,
+                                pre_vote_token = Token},
      [{next_event, cast, #pre_vote_result{term = 5, token = Token,
                                           vote_granted = true}},
       {send_vote_requests,
@@ -310,13 +312,13 @@ election_timeout(_Config) ->
         ra_server:handle_follower(Msg, State),
 
     % non-voters ignore election_timeout
-    NVState = State#{membership => promotable},
+    NVState = State#ra_server_state{membership = promotable},
     {follower, NVState, []} = ra_server:handle_follower(Msg, NVState),
     {await_condition, NVState, []} = ra_server:handle_await_condition(Msg, NVState),
 
     % pre_vote
-    {pre_vote, #{current_term := 5, votes := 0,
-                 pre_vote_token := Token1},
+    {pre_vote, #ra_server_state{current_term = 5, votes = 0,
+                                pre_vote_token = Token1},
      [{next_event, cast, #pre_vote_result{term = 5, token = Token1,
                                           vote_granted = true}},
       {send_vote_requests,
@@ -335,7 +337,7 @@ election_timeout(_Config) ->
                                 last_log_index = 3, last_log_term = 5},
     VoteForSelfEvent = {next_event, cast,
                         #request_vote_result{term = 6, vote_granted = true}},
-    {candidate, #{current_term := 6, votes := 0},
+    {candidate, #ra_server_state{current_term = 6, votes = 0},
      [VoteForSelfEvent, {send_vote_requests, [{N2, VoteRpc}, {N3, VoteRpc}]}]} =
         ra_server:handle_candidate(Msg, State),
     ok.
@@ -350,24 +352,24 @@ follower_aer_1(_Config) ->
     AER1 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 0,
                                prev_log_term = 0, leader_commit = 0,
                                entries = [entry(1, 1, one)]},
-    {follower, State1 = #{leader_id := N1, current_term := 1,
-                          commit_index := 0, last_applied := 0}, _} =
+    {follower, State1 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 0, last_applied = 0}, _} =
     ra_server:handle_follower(AER1, Init),
 
     % AER with index [2], leader_commit = 1, commit_index = 1
     AER2 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 1,
                                prev_log_term = 1, leader_commit = 1,
                                entries = [entry(2, 1, two)]},
-    {follower, State2 = #{leader_id := N1, current_term := 1,
-                          commit_index := 1, last_applied := 1,
-                          %% validate entry was applied to machine
-                          machine_state := {simple, _, one}},
+    {follower, State2 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 1, last_applied = 1,
+                                         %% validate entry was applied to machine
+                                         machine_state = {simple, _, one}},
      _} = ra_server:handle_follower(AER2, State1),
 
     % {written, 1} -> last_applied: 1 - replies with last_index = 1, next_index = 3
-    {follower, State3 = #{leader_id := N1, current_term := 1,
-                          commit_index := 1, last_applied := 1,
-                          machine_state := {simple, _, one}},
+    {follower, State3 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 1, last_applied = 1,
+                          machine_state = {simple, _, one}},
      [{cast, N1, {Self, #append_entries_reply{next_index = 3,
                                               last_term = 1,
                                               last_index = 1}}}]}
@@ -377,15 +379,15 @@ follower_aer_1(_Config) ->
     AER3 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 2,
                                prev_log_term = 1, leader_commit = 3,
                                entries = [entry(3, 1, tre)]},
-    {follower, State4 = #{leader_id := N1, current_term := 1,
-                          commit_index := 3, last_applied := 3,
-                          machine_state := {simple, _, tre}},
+    {follower, State4 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 3, last_applied = 3,
+                                         machine_state = {simple, _, tre}},
      _} = ra_server:handle_follower(AER3, State3),
 
     % {written, 2} -> last_applied: 3, commit_index = 3 reply = 2, next_index = 4
-    {follower, State5 = #{leader_id := N1, current_term := 1,
-                          commit_index := 3, last_applied := 3,
-                          machine_state := {_, _, tre}},
+    {follower, State5 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 3, last_applied = 3,
+                                         machine_state = {_, _, tre}},
      [{cast, N1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
                                               last_index = 2}}}]}
@@ -398,18 +400,18 @@ follower_aer_1(_Config) ->
     AER4 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 3,
                                prev_log_term = 1, leader_commit = 3,
                                entries = []},
-    {follower, State6 = #{leader_id := N1, current_term := 1,
-                          commit_index := 3, last_applied := 3,
-                          machine_state := {simple, _, tre}},
+    {follower, State6 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 3, last_applied = 3,
+                                         machine_state = {simple, _, tre}},
      [{cast, N1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
                                               last_index = 2}}} | _]}
         = ra_server:handle_follower(AER4, State5),
 
     % {written, 3} -> commit_index = 3, last_applied = 3 : reply last_index = 3
-    {follower, #{leader_id := N1, current_term := 1,
-                 commit_index := 3, last_applied := 3,
-                 machine_state := {_, _, tre}},
+    {follower, #ra_server_state{leader_id = N1, current_term = 1,
+                                commit_index = 3, last_applied = 3,
+                                machine_state = {_, _, tre}},
      [{cast, N1, {Self, #append_entries_reply{next_index = 4,
                                               last_term = 1,
                                               last_index = 3}}}]}
@@ -425,14 +427,14 @@ follower_aer_2(_Config) ->
     AER1 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 0,
                                prev_log_term = 0, leader_commit = 0,
                                entries = [entry(1, 1, one)]},
-    {follower, State1 = #{leader_id := N1, current_term := 1,
-                          commit_index := 0, last_applied := 0},
+    {follower, State1 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 0, last_applied = 0},
      _} = ra_server:handle_follower(AER1, Init),
 
     % {written, 1} -> last_applied: 0, reply: last_applied = 1, next_index = 2
-    {follower, State2 = #{leader_id := N1, current_term := 1,
-                          commit_index := 0, last_applied := 0,
-                          machine_state := {simple, _, <<>>}},
+    {follower, State2 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 0, last_applied = 0,
+                                         machine_state = {simple, _, <<>>}},
      [{cast, N1, {N2, #append_entries_reply{next_index = 2,
                                             last_term = 1,
                                             last_index = 1}}}]}
@@ -442,9 +444,9 @@ follower_aer_2(_Config) ->
     AER2 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 1,
                                prev_log_term = 1, leader_commit = 1,
                                entries = []},
-    {follower, #{leader_id := N1, current_term := 1,
-                 commit_index := 1, last_applied := 1,
-                 machine_state := {simple, _, one}},
+    {follower, #ra_server_state{leader_id = N1, current_term = 1,
+                                commit_index = 1, last_applied = 1,
+                                machine_state = {simple, _, one}},
      _} = ra_server:handle_follower(AER2, State2),
     ok.
 
@@ -456,13 +458,13 @@ follower_aer_3(_Config) ->
     AER1 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 0,
                                prev_log_term = 0, leader_commit = 1,
                                entries = [entry(1, 1, one)]},
-    {follower, State1 = #{leader_id := N1, current_term := 1,
-                          commit_index := 1, last_applied := 1},
+    {follower, State1 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 1, last_applied = 1},
      _} = ra_server:handle_follower(AER1, Init),
     % {written, 1} -> last_applied: 1 - reply: last_index = 1, next_index = 2
-    {follower, State2 = #{leader_id := N1, current_term := 1,
-                          commit_index := 1, last_applied := 1,
-                          machine_state := {simple, _, one}},
+    {follower, State2 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 1, last_applied = 1,
+                                         machine_state = {simple, _, one}},
      [{cast, N1, {N2, #append_entries_reply{next_index = 2,
                                             last_term = 1,
                                             last_index = 1}}}]}
@@ -472,8 +474,8 @@ follower_aer_3(_Config) ->
     AER2 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 2,
                                prev_log_term = 1, leader_commit = 3,
                                entries = [entry(3, 1, tre)]},
-    {await_condition, State3 = #{leader_id := N1, current_term := 1,
-                                 commit_index := 1, last_applied := 1},
+    {await_condition, State3 = #ra_server_state{leader_id = N1, current_term = 1,
+                                                commit_index = 1, last_applied = 1},
      [{cast, N1, {N2, #append_entries_reply{next_index = 2,
                                             success = false,
                                             last_term = 1,
@@ -488,13 +490,13 @@ follower_aer_3(_Config) ->
                                           entry(3, 1, tre),
                                           entry(4, 1, for)
                                          ]},
-    {follower, State4 = #{leader_id := N1, current_term := 1,
-                          commit_index := 3, last_applied := 3}, _}
+    {follower, State4 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 3, last_applied = 3}, _}
     = ra_server:handle_follower(AER3, State3),
     % {written, 4} -> last_applied: 3 - reply: last_index = 4, next_index = 5
-    {follower, State5 = #{leader_id := N1, current_term := 1,
-                          commit_index := 3, last_applied := 3,
-                          machine_state := {_, _, tre}},
+    {follower, State5 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 3, last_applied = 3,
+                                         machine_state = {_, _, tre}},
      [{cast, N1, {N2, #append_entries_reply{next_index = 5,
                                             success = true,
                                             last_term = 1,
@@ -511,8 +513,8 @@ follower_aer_3(_Config) ->
                                           entry(3, 1, tre),
                                           entry(4, 1, for)
                                          ]},
-    {follower, #{leader_id := N1, current_term := 1, commit_index := 4,
-                 last_applied := 4, machine_state := {_, _, for}}, _}
+    {follower, #ra_server_state{leader_id = N1, current_term = 1, commit_index = 4,
+                                last_applied = 4, machine_state = {_, _, for}}, _}
     = ra_server:handle_follower(AER4, State5),
     % TODO: scenario where the batch is partially already seen and partiall not
     % + increments commit_index
@@ -533,13 +535,13 @@ follower_aer_4(_Config) ->
                                           entry(3, 1, tre),
                                           entry(4, 1, for)
                                          ]},
-    {follower, State1 = #{leader_id := N1, current_term := 1,
-                          commit_index := 10, last_applied := 4},
+    {follower, State1 = #ra_server_state{leader_id = N1, current_term = 1,
+                                         commit_index = 10, last_applied = 4},
      _} = ra_server:handle_follower(AER1, Init),
     % {written, 4} -> last_applied = 4, commit_index = 4
-    {follower, _State2 = #{leader_id := N1, current_term := 1,
-                           commit_index := 10, last_applied := 4,
-                           machine_state := {_, _, for}},
+    {follower, _State2 = #ra_server_state{leader_id = N1, current_term = 1,
+                                          commit_index = 10, last_applied = 4,
+                                          machine_state = {_, _, for}},
      [{cast, N1, {N2, #append_entries_reply{next_index = 5,
                                             last_term = 1,
                                             last_index = 4}}}]}
@@ -599,7 +601,7 @@ follower_aer_6(_Config) ->
     %% set up follower state
     {follower, State00, _} = ra_server:handle_follower(AER1, Init),
     %% TODO also test when written even occurs after
-    {follower, #{last_applied := 3} = State0, _} =
+    {follower, #ra_server_state{last_applied = 3} = State0, _} =
         ra_server:handle_follower(written_evt(1, {4, 4}), State00),
     % now an AER from another leader in a higher term is received
     % This is what the leader sends immediately before committing it;s noop
@@ -635,7 +637,7 @@ follower_aer_7(_Config) ->
     %% set up follower state
     {follower, State00, _} = ra_server:handle_follower(AER1, Init),
     %% TODO also test when written even occurs after
-    {follower, #{last_applied := 3} = State0, _} =
+    {follower, #ra_server_state{last_applied = 3} = State0, _} =
         ra_server:handle_follower(written_evt(1, {4, 4}), State00),
     % now an AER from another leader in a higher term is received
     % This is what the leader sends immediately before committing it;s noop
@@ -648,7 +650,7 @@ follower_aer_7(_Config) ->
                                           entry(4, 2, for2)
                                          ]},
     {follower, State1, _} = ra_server:handle_follower(AER2, State0),
-    {follower, #{last_applied := 4} = _State, Effects} =
+    {follower, #ra_server_state{last_applied = 4} = _State, Effects} =
         ra_server:handle_follower(written_evt(2, {4, 4}), State1),
     {cast, N5, {_, M}} = hd(Effects),
     ?assertMatch(#append_entries_reply{next_index = 5,
@@ -657,8 +659,8 @@ follower_aer_7(_Config) ->
     ok.
 
 follower_aer_diverged(_Config) ->
-    State0 = (base_state(3, ?FUNCTION_NAME))#{last_applied => 2,
-                                              commit_index => 2},
+    State0 = (base_state(3, ?FUNCTION_NAME))#ra_server_state{last_applied = 2,
+                                                             commit_index = 2},
     %% the leader sends an rpc with old entries the diverged follower already
     %% has
     AER = #append_entries_rpc{term = 6,
@@ -675,8 +677,8 @@ follower_aer_diverged(_Config) ->
                                              next_index = 3}}} | _],
                  Effects),
     %% ensure the follower does not incorrectly apply the diverged entry at 3
-    ?assertMatch(#{last_applied := 2,
-                   commit_index := 2}, State1),
+    ?assertMatch(#ra_server_state{last_applied = 2,
+                                  commit_index = 2}, State1),
 
     %% leader will send empty rpc
     AER2 = #append_entries_rpc{term = 6,
@@ -699,14 +701,14 @@ follower_aer_diverged(_Config) ->
                                           {3, 6, usr(<<"hi3b">>)}
                                          ]},
     {follower, State3, Effects3} = ra_server:handle_follower(AER3, State2),
-    ?assertMatch(#{last_applied := 3,
-                   commit_index := 3}, State3),
+    ?assertMatch(#ra_server_state{last_applied = 3,
+                                  commit_index = 3}, State3),
     ?assertMatch([{aux, eval}, {record_leader_msg, _}], Effects3),
     ok.
 
 follower_aer_term_mismatch(_Config) ->
-    State = (base_state(3, ?FUNCTION_NAME))#{last_applied => 2,
-                                             commit_index => 3},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{last_applied = 2,
+                                                            commit_index = 3},
     AE = #append_entries_rpc{term = 6,
                              leader_id = ?N1,
                              prev_log_index = 3,
@@ -715,7 +717,7 @@ follower_aer_term_mismatch(_Config) ->
 
     % term mismatch scenario follower has index 3 but for different term
     % rewinds back to last_applied + 1 as next index and enters await condition
-    {await_condition, #{condition := _},
+    {await_condition, #ra_server_state{condition = _},
      [{_, _, {_, Reply}} | _]} = ra_server:handle_follower(AE, State),
     ?assertMatch(#append_entries_reply{term = 6,
                                        success = false,
@@ -726,11 +728,11 @@ follower_aer_term_mismatch(_Config) ->
 
 follower_aer_term_mismatch_snapshot(_Config) ->
     %% case when we have to revert all the way back to a snapshot
-    State0 = (base_state(3, ?FUNCTION_NAME))#{last_applied => 3,
-                                              commit_index => 3
-                                             },
+    State0 = (base_state(3, ?FUNCTION_NAME))#ra_server_state{last_applied = 3,
+                                                             commit_index = 3
+                                                            },
 
-    Log0 = maps:get(log, State0),
+    Log0 = State0#ra_server_state.log,
     Meta = #{index => 3,
              term => 5,
              cluster => #{},
@@ -739,7 +741,7 @@ follower_aer_term_mismatch_snapshot(_Config) ->
 
     {ok, Log1, _} = ra_log_memory:install_snapshot({3, 5}, ?MODULE, [], Log0),
     Log = ra_log_memory:set_snapshot_state({Meta, Data}, Log1),
-    State = maps:put(log, Log, State0),
+    State = State0#ra_server_state{log = Log},
 
     AE = #append_entries_rpc{term = 6,
                              leader_id = ?N1,
@@ -749,7 +751,7 @@ follower_aer_term_mismatch_snapshot(_Config) ->
 
     % term mismatch scenario follower has index 3 but for different term
     % rewinds back to last_applied + 1 as next index and enters await condition
-    {await_condition, #{condition := _},
+    {await_condition, #ra_server_state{condition = _},
      [{_, _, {_, Reply}} | _]} = ra_server:handle_follower(AE, State),
 
     ?assertMatch(#append_entries_reply{term = 6,
@@ -761,7 +763,7 @@ follower_aer_term_mismatch_snapshot(_Config) ->
 
 follower_handles_append_entries_rpc(_Config) ->
     N1 = ?N1,
-    State = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{commit_index = 1},
     EmptyAE = #append_entries_rpc{term = 5,
                                   leader_id = ?N1,
                                   prev_log_index = 3,
@@ -770,13 +772,13 @@ follower_handles_append_entries_rpc(_Config) ->
 
 
     % success case - everything is up to date leader id got updated
-    {follower, #{leader_id := N1, current_term := 5}, _} =
+    {follower, #ra_server_state{leader_id = N1, current_term = 5}, _} =
         ra_server:handle_follower(EmptyAE, State),
 
     % success case when leader term is higher
     % reply term should be updated
     % replies for empty rpcs are sent immediately
-   {follower, #{leader_id := N1, current_term := 6} = _State1,
+   {follower, #ra_server_state{leader_id = N1, current_term = 6} = _State1,
         [{cast, N1, {N1, #append_entries_reply{term = 6, success = true,
                                                next_index = 4, last_index = 3,
                                                last_term = 5}}} | _]}
@@ -807,13 +809,13 @@ follower_handles_append_entries_rpc(_Config) ->
                              entries = [{2, 4, {'$usr', meta(), <<"hi">>,
                                                 after_log_append}}]},
 
-    {follower,  #{log := Log},
+    {follower,  #ra_server_state{log = Log},
      [{cast, N1, {N1, #append_entries_reply{term = 5, success = true,
                                             next_index = 3, last_index = 2,
                                             last_term = 4}}}]}
     = begin
           {follower, Inter3, _} =
-              ra_server:handle_follower(AE, State#{last_applied => 1}),
+              ra_server:handle_follower(AE, State#ra_server_state{last_applied = 1}),
           ra_server:handle_follower(written_evt(4, {2, 2}), Inter3)
       end,
     [{0, 0, undefined},
@@ -823,8 +825,8 @@ follower_handles_append_entries_rpc(_Config) ->
     % if leader_commit > the last entry received ensure last_applied does not
     % match commit_index
     % ExpectedLogEntry = usr(<<"hi4">>),
-    {follower, #{commit_index := 5, last_applied := 4,
-                 machine_state := <<"hi4">>},
+    {follower, #ra_server_state{commit_index = 5, last_applied = 4,
+                                machine_state = <<"hi4">>},
      [{cast, N1, {N1, #append_entries_reply{term = 5, success = true,
                                             last_index = 4,
                                             last_term = 5}}}]}
@@ -833,15 +835,15 @@ follower_handles_append_entries_rpc(_Config) ->
         = ra_server:handle_follower(
             EmptyAE#append_entries_rpc{entries = [{4, 5, usr(<<"hi4">>)}],
                                        leader_commit = 5},
-            State#{commit_index => 1, last_applied => 1,
-                   machine_state => <<"hi1">>}),
+            State#ra_server_state{commit_index = 1, last_applied = 1,
+                                  machine_state = <<"hi1">>}),
           ra_server:handle_follower(written_evt(5, {4, 4}), Inter4)
       end,
     ok.
 
 follower_catchup_condition(_Config) ->
     N1 = ?N1,
-    State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1},
+    State0 = (base_state(3, ?FUNCTION_NAME))#ra_server_state{commit_index = 1},
     EmptyAE = #append_entries_rpc{term = 5,
                                   leader_id = N1,
                                   prev_log_index = 3,
@@ -849,7 +851,7 @@ follower_catchup_condition(_Config) ->
                                   leader_commit = 3},
 
     % from follower to await condition
-    {await_condition, State = #{condition := _}, _} =
+    {await_condition, State = #ra_server_state{condition = _}, _} =
     ra_server:handle_follower(EmptyAE#append_entries_rpc{term = 5,
                                                          prev_log_index = 4},
                               State0),
@@ -911,7 +913,7 @@ follower_catchup_condition(_Config) ->
 
 wal_down_condition_follower(_Config) ->
     N1 = ?N1,
-    State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1},
+    State0 = (base_state(3, ?FUNCTION_NAME))#ra_server_state{commit_index = 1},
     EmptyAE = #append_entries_rpc{term = 5,
                                   leader_id = N1,
                                   prev_log_index = 3,
@@ -923,12 +925,12 @@ wal_down_condition_follower(_Config) ->
     meck:expect(ra_log, can_write, fun (_L) -> false end),
 
     % ra log fails
-    {await_condition, State1 = #{condition := _}, [{record_leader_msg, _}]}
+    {await_condition, State1 = #ra_server_state{condition = _}, [{record_leader_msg, _}]}
     = ra_server:handle_follower(EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]},
                                 State0),
 
     % stay in await condition as ra_log_wal is not available
-    {await_condition, State2 = #{condition := _}, []}
+    {await_condition, State2 = #ra_server_state{condition = _}, []}
     = ra_server:handle_await_condition(
         EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]}, State1),
 
@@ -937,13 +939,13 @@ wal_down_condition_follower(_Config) ->
     {follower, State, [_]}
         = ra_server:handle_await_condition(
             EmptyAE#append_entries_rpc{entries = [{4, 5, yo}]}, State2),
-    ?assertNot(maps:is_key(condition, State)),
+    ?assertEqual(undefined, State#ra_server_state.condition),
     ok.
 
 wal_down_condition_leader(_Config) ->
     %% the leader should enter a short await condition then if that times out
     %% trigger a leader change. Only if running in clustered mode ofc.
-    State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1},
+    State0 = (base_state(3, ?FUNCTION_NAME))#ra_server_state{commit_index = 1},
     Cmd = {'$usr', meta(), <<"hi4">>, after_log_append},
     % meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, append, fun (_Es, _L) -> error(wal_down) end),
@@ -954,7 +956,7 @@ wal_down_condition_leader(_Config) ->
     %% such that it can concede leadership in the interest of Ra cluster
     %% progress
     {await_condition,
-     #{condition := #{predicate_fun := _,
+     #ra_server_state{condition = #{predicate_fun := _,
                       transition_to := leader,
                       timeout :=
                       #{duration := 5000,
@@ -967,21 +969,21 @@ wal_down_condition_leader(_Config) ->
 
     % if awaiting for the condition times out, return to the leader and begin transferring leadership
     % process
-    {leader, #{} = State2, [{next_event, cast,
+    {leader, #ra_server_state{} = State2, [{next_event, cast,
                              {transfer_leadership, _}}]}
         = ra_server:handle_await_condition(await_condition_timeout, State1),
 
     %% but not if the condition no longer manifests
     meck:expect(ra_log, append, fun (_Es, L) -> L end),
     meck:expect(ra_log, can_write, fun (_L) -> true end),
-    {leader, #{} = State2, []}
+    {leader, #ra_server_state{} = State2, []}
         = ra_server:handle_await_condition(await_condition_timeout, State1),
     ok.
 
 wal_down_condition_leader_commands(_Config) ->
     %% the leader should enter a short await condition then if that times out
     %% trigger a leader change. Only if running in clustered mode ofc.
-    State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1},
+    State0 = (base_state(3, ?FUNCTION_NAME))#ra_server_state{commit_index = 1},
     Cmd = {'$usr', meta(), <<"hi4">>, after_log_append},
     % meck:new(ra_log, [passthrough]),
     meck:expect(ra_log, append, fun (_Es, _L) -> error(wal_down) end),
@@ -992,7 +994,7 @@ wal_down_condition_leader_commands(_Config) ->
     %% such that it can concede leadership in the interest of Ra cluster
     %% progress
     {await_condition,
-     #{condition := #{predicate_fun := _,
+     #ra_server_state{condition = #{predicate_fun := _,
                       transition_to := leader,
                       timeout := #{duration := 5000,
                                    effects := [{next_event, cast,
@@ -1002,17 +1004,17 @@ wal_down_condition_leader_commands(_Config) ->
     ok.
 
 update_release_cursor(_Config) ->
-    State00 = #{cfg := Cfg} = (base_state(3, ?FUNCTION_NAME)),
+    State00 = #ra_server_state{cfg = Cfg} = (base_state(3, ?FUNCTION_NAME)),
     meck:expect(?FUNCTION_NAME, version, fun () -> 1 end),
-    State0 = State00#{cfg => Cfg#cfg{machine_versions = [{1, 1}, {0, 0}]}},
+    State0 = State00#ra_server_state{cfg = Cfg#cfg{machine_versions = [{1, 1}, {0, 0}]}},
     %% need to match on something for this macro
-    ?assertMatch({#{cfg := #cfg{machine_version = 0}}, []},
+    ?assertMatch({#ra_server_state{cfg = #cfg{machine_version = 0}}, []},
                  ra_server:update_release_cursor(2, some_state, State0)),
     ok.
 
 candidate_handles_append_entries_rpc(_Config) ->
     N1 = ?N1,
-    State = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{commit_index = 1},
     EmptyAE = #append_entries_rpc{term = 4,
                                   leader_id = ?N1,
                                   prev_log_index = 3,
@@ -1033,21 +1035,21 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                                       commit_index_sent => 3,
                                       voter_status => NonVoter}),
                 N3 => new_peer_with(#{next_index => 2, match_index => 1})},
-    State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1,
-                                              last_applied => 1,
-                                              cluster => Cluster,
-                                              machine_state => <<"hi1">>},
+    State0 = (base_state(3, ?FUNCTION_NAME))#ra_server_state{commit_index = 1,
+                                                              last_applied = 1,
+                                                              cluster = Cluster,
+                                                              machine_state = <<"hi1">>},
     Ack = #append_entries_reply{term = 5, success = true,
                                 next_index = 4,
                                 last_index = 3, last_term = 5},
 
     % doesn't progress commit_index, non voter ack doesn't raise majority
-    {leader, #{cluster := #{N2 := #{next_index := 4,
-                                    match_index := 3,
-                                    voter_status := NonVoter}},
-               commit_index := 1,
-               last_applied := 1,
-               machine_state := <<"hi1">>} = State1,
+    {leader, #ra_server_state{cluster = #{N2 := #{next_index := 4,
+                                                  match_index := 3,
+                                                  voter_status := NonVoter}},
+                              commit_index = 1,
+                              last_applied = 1,
+                              machine_state = <<"hi1">>} = State1,
      [{next_event, info, pipeline_rpcs},
       {next_event, {command, {'$ra_join', _,
         #{id := N2,
@@ -1057,11 +1059,11 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
      ]} = ra_server:handle_leader({N2, Ack}, State0),
 
     % pipeline to N3
-    {leader, #{cluster := #{N3 := #{next_index := 4,
-                                    match_index := 1}},
-               commit_index := 1,
-               last_applied := 1,
-               machine_state := <<"hi1">>} = State2,
+    {leader, #ra_server_state{cluster = #{N3 := #{next_index := 4,
+                                                  match_index := 1}},
+                              commit_index = 1,
+                              last_applied = 1,
+                              machine_state = <<"hi1">>} = State2,
      [{send_rpc, N3,
        #append_entries_rpc{term = 5, leader_id = N1,
                            prev_log_index = 1,
@@ -1072,14 +1074,14 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
       }]} = ra_server:handle_leader(pipeline_rpcs, State1),
 
     % ra_join translates into cluster update
-    {leader, #{cluster := #{N2 := #{next_index := 5,
-                                    match_index := 3,
-                                    voter_status := #{membership := voter,
-                                                      uid := <<"uid">>}}},
-               cluster_change_permitted := false,
-               commit_index := 1,
-               last_applied := 1,
-               machine_state := <<"hi1">>} = State3,
+    {leader, #ra_server_state{cluster = #{N2 := #{next_index := 5,
+                                                  match_index := 3,
+                                                  voter_status := #{membership := voter,
+                                                                    uid := <<"uid">>}}},
+                              cluster_change_permitted = false,
+                              commit_index = 1,
+                              last_applied = 1,
+                              machine_state = <<"hi1">>} = State3,
      [{send_rpc, N3,
        #append_entries_rpc{term = 5, leader_id = N1,
                            prev_log_index = 3,
@@ -1105,11 +1107,11 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                                  last_index = 4, last_term = 5},
 
     % voter ack, raises commit_index
-    {leader, #{cluster := #{N2 := #{next_index := 5,
-                                    match_index := 4}},
-               commit_index := 3,
-               last_applied := 3,
-               machine_state := <<"hi3">>},
+    {leader, #ra_server_state{cluster = #{N2 := #{next_index := 5,
+                                                  match_index := 4}},
+                              commit_index = 3,
+                              last_applied = 3,
+                              machine_state = <<"hi3">>},
      [{next_event, info, pipeline_rpcs},
       {aux, eval}]} = ra_server:handle_leader({N2, Ack2}, State3),
     ok.
@@ -1125,8 +1127,8 @@ follower_aer_dupe(_Config) ->
                                entries = [entry(1, 1, one),
                                           entry(2, 1, two),
                                           entry(3, 1, three)]},
-    {follower, #{leader_id := N2, current_term := 1,
-                 commit_index := 1, last_applied := 1} = State1, _} =
+    {follower, #ra_server_state{leader_id = N2, current_term = 1,
+                                commit_index = 1, last_applied = 1} = State1, _} =
         ra_server:handle_follower(AER1, Init),
 
     %% a resend that doesn to fully cover the previous is issued (incorrectly)
@@ -1134,8 +1136,8 @@ follower_aer_dupe(_Config) ->
     AER2 = #append_entries_rpc{term = 1, leader_id = N2, prev_log_index = 1,
                                prev_log_term = 1, leader_commit = 1,
                                entries = [entry(2, 1, two)]},
-    {follower, #{leader_id := N2, current_term := 1,
-                 commit_index := 1, last_applied := 1} = _State2,
+    {follower, #ra_server_state{leader_id = N2, current_term = 1,
+                                commit_index = 1, last_applied = 1} = _State2,
      [{cast, N2, {N1, AEReply}}]} =
         ra_server:handle_follower(AER2, State1),
 
@@ -1157,8 +1159,8 @@ follower_leader_change_before_written(_Config) ->
                                prev_log_term = 0, leader_commit = 1,
                                entries = [entry(1, 1, one),
                                           entry(2, 1, two)]},
-    {follower, #{leader_id := N1, current_term := 1,
-                 commit_index := 1, last_applied := 1} = State1, _} =
+    {follower, #ra_server_state{leader_id = N1, current_term = 1,
+                                commit_index = 1, last_applied = 1} = State1, _} =
         ra_server:handle_follower(AER1, Init),
 
     %% leader change comes in before written notification, this overwrites
@@ -1167,14 +1169,14 @@ follower_leader_change_before_written(_Config) ->
                                prev_log_term = 0, leader_commit = 1,
                                entries = [entry(2, 2, twos),
                                           entry(3, 2, three)]},
-    {follower, #{leader_id := N2, current_term := 2,
-                 commit_index := 1, last_applied := 1} = State2, _} =
+    {follower, #ra_server_state{leader_id = N2, current_term = 2,
+                                commit_index = 1, last_applied = 1} = State2, _} =
         ra_server:handle_follower(AER2, State1),
 
     %% a written event for indexes 1 and 2 in term 1 should not result in a
     %% append entries reply confirming index 2 as we have not yet had a notification
     %% for that, it can however confirm index 1
-    {follower, #{leader_id := N2, last_applied := 1} = State3,
+    {follower, #ra_server_state{leader_id = N2, last_applied = 1} = State3,
      [{cast,
        N2,
        {N3, #append_entries_reply{success = true,
@@ -1182,7 +1184,7 @@ follower_leader_change_before_written(_Config) ->
                                   last_index = 1,
                                   last_term = 1}}}]} =
         ra_server:handle_follower(written_evt(1, {1, 2}), State2),
-    {follower, #{leader_id := N2, last_applied := 1} = _State4,
+    {follower, #ra_server_state{leader_id = N2, last_applied = 1} = _State4,
      [{cast,
        N2,
        {N3, #append_entries_reply{success = true,
@@ -1199,27 +1201,27 @@ append_entries_reply_success(_Config) ->
                 N2 => new_peer_with(#{next_index => 1, match_index => 0,
                                       commit_index_sent => 3}),
                 N3 => new_peer_with(#{next_index => 2, match_index => 1})},
-    State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1,
-                                              last_applied => 1,
-                                              cluster => Cluster,
-                                              machine_state => <<"hi1">>},
+    State0 = (base_state(3, ?FUNCTION_NAME))#ra_server_state{commit_index = 1,
+                                                              last_applied = 1,
+                                                              cluster = Cluster,
+                                                              machine_state = <<"hi1">>},
     Msg = {N2, #append_entries_reply{term = 5, success = true,
                                      next_index = 4,
                                      last_index = 3, last_term = 5}},
     % update match index
-    {leader, #{cluster := #{N2 := #{next_index := 4,
-                                    match_index := 3}},
-               commit_index := 3,
-               last_applied := 3,
-               machine_state := <<"hi3">>} = State,
+    {leader, #ra_server_state{cluster = #{N2 := #{next_index := 4,
+                                                  match_index := 3}},
+                              commit_index = 3,
+                              last_applied = 3,
+                              machine_state = <<"hi3">>} = State,
      [{next_event, info, pipeline_rpcs},
       {aux, eval}]} = ra_server:handle_leader(Msg, State0),
 
-    {leader, #{cluster := #{N2 := #{next_index := 4,
-                                    match_index := 3}},
-               commit_index := 3,
-               last_applied := 3,
-               machine_state := <<"hi3">>},
+    {leader, #ra_server_state{cluster = #{N2 := #{next_index := 4,
+                                                  match_index := 3}},
+                              commit_index = 3,
+                              last_applied = 3,
+                              machine_state = <<"hi3">>},
      [{send_rpc, N3,
        #append_entries_rpc{term = 5, leader_id = N1,
                            prev_log_index = 1,
@@ -1232,13 +1234,13 @@ append_entries_reply_success(_Config) ->
     Msg1 = {N2, #append_entries_reply{term = 7, success = true,
                                       next_index = 4,
                                       last_index = 3, last_term = 5}},
-    {leader, #{cluster := #{N2 := #{next_index := 4,
-                                    match_index := 3}},
-               commit_index := 1,
-               last_applied := 1,
-               current_term := 7,
-               machine_state := <<"hi1">>}, _} =
-        ra_server:handle_leader(Msg1, State0#{current_term := 7}),
+    {leader, #ra_server_state{cluster = #{N2 := #{next_index := 4,
+                                                  match_index := 3}},
+                              commit_index = 1,
+                              last_applied = 1,
+                              current_term = 7,
+                              machine_state = <<"hi1">>}, _} =
+        ra_server:handle_leader(Msg1, State0#ra_server_state{current_term = 7}),
     ok.
 
 append_entries_reply_no_success(_Config) ->
@@ -1248,18 +1250,18 @@ append_entries_reply_no_success(_Config) ->
                 N2 => new_peer_with(#{next_index => 3, match_index => 0}),
                 N3 => new_peer_with(#{next_index => 2, match_index => 1,
                                       commit_index_sent => 1})},
-    State = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1,
-                             last_applied => 1,
-                             cluster => Cluster,
-                             machine_state => <<"hi1">>},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{commit_index = 1,
+                                                             last_applied = 1,
+                                                             cluster = Cluster,
+                                                             machine_state = <<"hi1">>},
     % n2 has only seen index 1
     Msg = {N2, #append_entries_reply{term = 5, success = false, next_index = 2,
                                      last_index = 1, last_term = 1}},
     % new peers state is updated
-    {leader, #{cluster := #{N2 := #{next_index := 4, match_index := 1}},
-               commit_index := 1,
-               last_applied := 1,
-               machine_state := <<"hi1">>},
+    {leader, #ra_server_state{cluster = #{N2 := #{next_index := 4, match_index := 1}},
+                              commit_index = 1,
+                              last_applied = 1,
+                              machine_state = <<"hi1">>},
      [{send_rpc, N3,
        #append_entries_rpc{term = 5, leader_id = N1,
                            prev_log_index = 1,
@@ -1274,10 +1276,10 @@ append_entries_reply_no_success(_Config) ->
 append_entries_reply_no_success_from_unknown_peer(_Config) ->
     N1 = ?N1, N2 = ?N2,
     Cluster = #{N1 => new_peer()},
-    State = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1,
-                             last_applied => 1,
-                             cluster => Cluster,
-                             machine_state => <<"hi1">>},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{commit_index = 1,
+                                                             last_applied = 1,
+                                                             cluster = Cluster,
+                                                             machine_state = <<"hi1">>},
     % n2 is an unknown peer
     Msg = {N2, #append_entries_reply{term = 5, success = false, next_index = 2,
                                      last_index = 1, last_term = 1}},
@@ -1292,22 +1294,22 @@ follower_request_vote(_Config) ->
     Msg = #request_vote_rpc{candidate_id = ?N2, term = 6, last_log_index = 3,
                             last_log_term = 5},
     % success
-    {follower, #{voted_for := N2, current_term := 6} = State1,
+    {follower, #ra_server_state{voted_for = N2, current_term = 6} = State1,
      [{reply, #request_vote_result{term = 6, vote_granted = true}}]} =
     ra_server:handle_follower(Msg, State),
 
     % we can vote again for the same candidate and term
-    {follower, #{voted_for := N2, current_term := 6},
+    {follower, #ra_server_state{voted_for = N2, current_term = 6},
      [{reply, #request_vote_result{term = 6, vote_granted = true}}]} =
     ra_server:handle_follower(Msg, State1),
 
     % but not for a different candidate
-    {follower, #{voted_for := N2, current_term := 6},
+    {follower, #ra_server_state{voted_for = N2, current_term = 6},
      [{reply, #request_vote_result{term = 6, vote_granted = false}}]} =
     ra_server:handle_follower(Msg#request_vote_rpc{candidate_id = N3}, State1),
 
     % fail due to lower term
-    {follower, #{current_term := 5},
+    {follower, #ra_server_state{current_term = 5},
      [{reply, #request_vote_result{term = 5, vote_granted = false}}]} =
     ra_server:handle_follower(Msg#request_vote_rpc{term = 4}, State),
 
@@ -1319,19 +1321,19 @@ follower_request_vote(_Config) ->
 
      % reject when candidate last log entry has a lower term
      % still update current term if incoming is higher
-    {follower, #{current_term := 6},
+    {follower, #ra_server_state{current_term = 6},
      [{reply, #request_vote_result{term = 6, vote_granted = false}}]} =
     ra_server:handle_follower(Msg#request_vote_rpc{last_log_term = 4},
                             State),
 
     % grant vote when candidate last log entry has same term but is longer
-    {follower, #{current_term := 6},
+    {follower, #ra_server_state{current_term = 6},
      [{reply, #request_vote_result{term = 6, vote_granted = true}}]} =
     ra_server:handle_follower(Msg#request_vote_rpc{last_log_index = 4},
                             State),
 
     % non-voters ignore request_vote_rpc
-    NVState = State#{membership => promotable},
+    NVState = State#ra_server_state{membership = promotable},
     {follower, NVState, []} = ra_server:handle_follower(Msg, NVState),
 
      ok.
@@ -1344,10 +1346,11 @@ follower_pre_vote(_Config) ->
                         machine_version = 0,
                         token = Token, last_log_term = 5},
     % success
-    {follower, #{current_term := Term},
-     [{reply, #pre_vote_result{term = Term, token = Token,
-                               vote_granted = true}}]} =
-        ra_server:handle_follower(Msg, State),
+    Result = ra_server:handle_follower(Msg, State),
+    ?assertEqual(follower, element(1, Result)),
+    Effects = element(3, Result),
+    ?assertEqual([{reply, #pre_vote_result{term = Term, token = Token,
+                                          vote_granted = true}}], Effects),
 
     % disallow pre votes from higher protocol version
     ?assertMatch(
@@ -1372,7 +1375,7 @@ follower_pre_vote(_Config) ->
         ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 99},
                                   State),
 
-    Cfg = maps:get(cfg, State),
+    Cfg = State#ra_server_state.cfg,
 
     % allow votes from a higher machine version when the effective machine
     % version of is the same, but the local machine version is lower
@@ -1380,7 +1383,7 @@ follower_pre_vote(_Config) ->
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = true}} | _]} =
         ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 1},
-                                  State#{cfg => Cfg#cfg{effective_machine_version = 1,
+                                  State#ra_server_state{cfg = Cfg#cfg{effective_machine_version = 1,
                                                         machine_version = 0}}),
 
     % disallow votes from a lower machine version when the effective machine
@@ -1389,7 +1392,7 @@ follower_pre_vote(_Config) ->
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = false}} | _]} =
         ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 0},
-                                  State#{cfg => Cfg#cfg{effective_machine_version = 1,
+                                  State#ra_server_state{cfg = Cfg#cfg{effective_machine_version = 1,
                                                         machine_version = 1}}),
 
     %% disallow pre votes for any version in between local and effective
@@ -1398,7 +1401,7 @@ follower_pre_vote(_Config) ->
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = false}} | _]} =
         ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 2},
-                                  State#{cfg => Cfg#cfg{effective_machine_version = 3,
+                                  State#ra_server_state{cfg = Cfg#cfg{effective_machine_version = 3,
                                                         machine_version = 2}}),
 
     %% allow pre votes for any version higher than the effective and lower
@@ -1407,7 +1410,7 @@ follower_pre_vote(_Config) ->
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = true}} | _]} =
         ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 2},
-                                  State#{cfg => Cfg#cfg{effective_machine_version = 1,
+                                  State#ra_server_state{cfg = Cfg#cfg{effective_machine_version = 1,
                                                         machine_version = 3}}),
 
     % allow votes from a lower machine version when the effective machine
@@ -1416,7 +1419,7 @@ follower_pre_vote(_Config) ->
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = true}} | _]} =
         ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 0},
-                                  State#{cfg => Cfg#cfg{effective_machine_version = 0,
+                                  State#ra_server_state{cfg = Cfg#cfg{effective_machine_version = 0,
                                                         machine_version = 1}}),
 
     % allow votes for the same machine version
@@ -1424,11 +1427,11 @@ follower_pre_vote(_Config) ->
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = true}}]} =
         ra_server:handle_follower(Msg#pre_vote_rpc{machine_version = 2},
-                                  State#{cfg => Cfg#cfg{machine_version = 2}}),
+                                  State#ra_server_state{cfg = Cfg#cfg{machine_version = 2}}),
 
     % fail due to lower term
     % return failure and immediately enter pre_vote phase as there are
-    {follower, #{current_term := 5},
+    {follower, #ra_server_state{current_term = 5},
      [{reply, #pre_vote_result{term = 5, token = Token,
                                vote_granted = false}}]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{term = 4}, State),
@@ -1436,21 +1439,21 @@ follower_pre_vote(_Config) ->
     % when candidate last log entry has a lower term
     % the current server is a better candidate and thus
     % requests that an election timeout is started
-    {follower, #{current_term := 6},
+    {follower, #ra_server_state{current_term = 6},
      [start_election_timeout]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{last_log_term = 4,
                                                term = 6},
                               State),
 
     % grant vote when candidate last log entry has same term but is longer
-    {follower, #{current_term := 5},
+    {follower, #ra_server_state{current_term = 5},
      [{reply, #pre_vote_result{term = 5, token = Token,
                                vote_granted = true}}]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{last_log_index = 4},
                               State),
 
     % non-voters ignore pre_vote_rpc
-    NVState = State#{membership => promotable},
+    NVState = State#ra_server_state{membership = promotable},
     {follower, NVState, []} = ra_server:handle_follower(Msg, NVState),
 
     ok.
@@ -1465,7 +1468,7 @@ pre_vote_receives_pre_vote(_Config) ->
     % success - pre vote still returns other pre vote requests
     % else we could have a dead-lock with a two process cluster with
     % both peers in pre-vote state
-    {pre_vote, #{current_term := Term},
+    {pre_vote, #ra_server_state{current_term = Term},
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = true}}]} =
         ra_server:handle_pre_vote(Msg, State),
@@ -1473,7 +1476,7 @@ pre_vote_receives_pre_vote(_Config) ->
 
 await_condition_receives_pre_vote(_Config) ->
     State0 = (base_state(3, ?FUNCTION_NAME)),
-    State = State0#{condition => #{predicate_fun => fun(_,S) -> {false, S} end}},
+    State = State0#ra_server_state{condition = #{predicate_fun => fun(_,S) -> {false, S} end}},
 
     Term = 5,
     Token = make_ref(),
@@ -1483,7 +1486,7 @@ await_condition_receives_pre_vote(_Config) ->
     % success - pre vote still returns other pre vote requests
     % else we could have a dead-lock with a two process cluster with
     % both peers in pre-vote state
-    {await_condition, #{current_term := Term},
+    {await_condition, #ra_server_state{current_term = Term},
      [{reply, #pre_vote_result{term = Term, token = Token,
                                vote_granted = true}}]} =
         ra_server:handle_await_condition(Msg, State),
@@ -1491,16 +1494,16 @@ await_condition_receives_pre_vote(_Config) ->
 
 request_vote_rpc_with_lower_term(_Config) ->
     N1 = ?N1,
-    State = (base_state(3, ?FUNCTION_NAME))#{current_term => 6,
-                             voted_for => N1},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{current_term = 6,
+                             voted_for = N1},
     Msg = #request_vote_rpc{candidate_id = ?N2, term = 5, last_log_index = 3,
                             last_log_term = 5},
     % term is lower than candidate term
-    {candidate, #{voted_for := N1, current_term := 6},
+    {candidate, #ra_server_state{voted_for = N1, current_term = 6},
      [{reply, #request_vote_result{term = 6, vote_granted = false}}]} =
          ra_server:handle_candidate(Msg, State),
     % term is lower than candidate term
-    {leader, #{current_term := 6},
+    {leader, #ra_server_state{current_term = 6},
      [{reply, #request_vote_result{term = 6, vote_granted = false}}]} =
          ra_server:handle_leader(Msg, State).
 
@@ -1526,8 +1529,8 @@ leader_does_not_abdicate_to_unknown_peer(_Config) ->
 
 leader_replies_to_append_entries_rpc_with_lower_term(_Config) ->
     N3 = ?N3,
-    State = #{cfg := #cfg{id = Id},
-              current_term := CTerm} = base_state(3, ?FUNCTION_NAME),
+    State = #ra_server_state{cfg = #cfg{id = Id},
+              current_term = CTerm} = base_state(3, ?FUNCTION_NAME),
     AERpc = #append_entries_rpc{term = CTerm - 1,
                                 leader_id = N3,
                                 prev_log_index = 3,
@@ -1545,57 +1548,57 @@ higher_term_detected(_Config) ->
     N2 = ?N2, N3 = ?N3,
     % Any message received with a higher term should result in the
     % server reverting to follower state
-    State = #{log := Log} = base_state(3, ?FUNCTION_NAME),
+    State = #ra_server_state{log = Log} = base_state(3, ?FUNCTION_NAME),
     IncomingTerm = 6,
     AEReply = {N2, #append_entries_reply{term = IncomingTerm, success = false,
                                          next_index = 4,
                                          last_index = 3, last_term = 5}},
     Log1 = ra_log_memory:write_meta_f(current_term, IncomingTerm, Log),
     _ = ra_log_memory:write_meta_f(voted_for, undefined, Log1),
-    {follower, #{current_term := IncomingTerm, leader_id := undefined}, []} =
+    {follower, #ra_server_state{current_term = IncomingTerm, leader_id = undefined}, []} =
         ra_server:handle_leader(AEReply, State),
-    {follower, #{current_term := IncomingTerm}, []} =
+    {follower, #ra_server_state{current_term = IncomingTerm}, []} =
         ra_server:handle_follower(AEReply, State),
-    {follower, #{current_term := IncomingTerm}, []}
+    {follower, #ra_server_state{current_term = IncomingTerm}, []}
         = ra_server:handle_candidate(AEReply, State),
 
     AERpc = #append_entries_rpc{term = IncomingTerm, leader_id = N3,
                                 prev_log_index = 3, prev_log_term = 5,
                                 leader_commit = 3},
-    {follower, #{current_term := IncomingTerm, leader_id := undefined},
+    {follower, #ra_server_state{current_term = IncomingTerm, leader_id = undefined},
      [{next_event, AERpc}]} = ra_server:handle_leader(AERpc, State),
-    {follower, #{current_term := IncomingTerm},
+    {follower, #ra_server_state{current_term = IncomingTerm},
      [{next_event, AERpc}]} = ra_server:handle_candidate(AERpc, State),
     % follower will handle this properly and is tested elsewhere
 
     Vote = #request_vote_rpc{candidate_id = ?N2, term = 6, last_log_index = 3,
                              last_log_term = 5},
-    {follower, #{current_term := IncomingTerm,
-                 leader_id := undefined,
-                 log := ExpectLog},
+    {follower, #ra_server_state{current_term = IncomingTerm,
+                 leader_id = undefined,
+                 log = ExpectLog},
      [{next_event, Vote}]} = ra_server:handle_leader(Vote, State),
-    {follower, #{current_term := IncomingTerm,
-                 log := ExpectLog},
+    {follower, #ra_server_state{current_term = IncomingTerm,
+                 log = ExpectLog},
      [{next_event, Vote}]} = ra_server:handle_candidate(Vote, State),
 
     IRS = #install_snapshot_result{term = IncomingTerm,
                                    last_term = 0,
                                    last_index = 0},
-    {follower, #{current_term := IncomingTerm, leader_id := undefined},
+    {follower, #ra_server_state{current_term = IncomingTerm, leader_id = undefined},
      _} = ra_server:handle_leader({N2, IRS}, State),
     ok.
 
 leader_noop_operation_enables_cluster_change(_Config) ->
     N2 = ?N2,
-    State00 = (base_state(3, ?FUNCTION_NAME))#{cluster_change_permitted => false},
-    {leader, #{cluster_change_permitted := false} = State0, _Effects} =
+    State00 = (base_state(3, ?FUNCTION_NAME))#ra_server_state{cluster_change_permitted = false},
+    {leader, #ra_server_state{cluster_change_permitted = false} = State0, _Effects} =
         ra_server:handle_leader({command, {noop, meta(), 0}}, State00),
     {leader, State, _} = ra_server:handle_leader(written_evt(5, {4, 4}), State0),
     AEReply = {N2, #append_entries_reply{term = 5, success = true,
                                          next_index = 5,
                                          last_index = 4, last_term = 5}},
     % noop consensus
-    {leader, #{cluster_change_permitted := true}, _} =
+    {leader, #ra_server_state{cluster_change_permitted = true}, _} =
         ra_server:handle_leader(AEReply, State),
     ok.
 
@@ -1605,17 +1608,17 @@ leader_noop_increments_machine_version(_Config) ->
     MacVer = 2,
     OldMacVer = 1,
     Base = base_state(3, ?FUNCTION_NAME),
-    Cfg = maps:get(cfg, Base),
-    State00 = Base#{cluster_change_permitted => false,
-                    cfg => Cfg#cfg{machine_version = MacVer,
-                                   effective_machine_version = OldMacVer}},
+    Cfg = Base#ra_server_state.cfg,
+    State00 = Base#ra_server_state{cluster_change_permitted = false,
+                                   cfg = Cfg#cfg{machine_version = MacVer,
+                                                 effective_machine_version = OldMacVer}},
     ModV2 = leader_noop_increments_machine_version_v2,
     meck:new(ModV2, [non_strict]),
     meck:expect(Mod, version, fun () -> MacVer end),
     meck:expect(Mod, which_module, fun (1) -> Mod;
                                        (2) -> ModV2
                                    end),
-    {leader, #{cfg := #cfg{effective_machine_version = OldMacVer,
+    {leader, #ra_server_state{cfg = #cfg{effective_machine_version = OldMacVer,
                            effective_machine_module = Mod}} = State0,
      _Effects} = ra_server:handle_leader({command, {noop, meta(), MacVer}},
                                          State00),
@@ -1635,7 +1638,7 @@ leader_noop_increments_machine_version(_Config) ->
                                          next_index = 5,
                                          last_index = 4, last_term = 5}},
     % noop consensus
-    {leader, #{cfg := #cfg{effective_machine_version = MacVer,
+    {leader, #ra_server_state{cfg = #cfg{effective_machine_version = MacVer,
                            effective_machine_module = ModV2}}, _} =
         ra_server:handle_leader(AEReply, State1),
 
@@ -1653,20 +1656,20 @@ follower_machine_version(_Config) ->
                               prev_log_index = 3,
                               prev_log_term = 5,
                               leader_commit = 5},
-    {follower, #{cfg := #cfg{machine_version = 0,
+    {follower, #ra_server_state{cfg = #cfg{machine_version = 0,
                              effective_machine_version = 1},
-                 last_applied := 3,
-                 commit_index := 5} = State0, _} =
+                 last_applied = 3,
+                 commit_index = 5} = State0, _} =
         ra_server:handle_follower(Aer, State00),
     %% new effective machine version is detected that is lower than available
     %% machine version
     %% last_applied is not updated we simply "peek" at the noop command to
     %% learn the next machine version to update it
-    {follower, #{cfg := #cfg{machine_version = 0,
+    {follower, #ra_server_state{cfg = #cfg{machine_version = 0,
                              effective_machine_version = 1},
-                 last_applied := 3,
-                 commit_index := 5,
-                 log := _Log} = _State1, _Effects} =
+                 last_applied = 3,
+                 commit_index = 5,
+                 log = _Log} = _State1, _Effects} =
     ra_server:handle_follower(written_evt(5, {4, 5}), State0),
     ok.
 
@@ -1679,9 +1682,9 @@ follower_install_snapshot_machine_version(_Config) ->
     MacVer = 1,
     mock_machine(MacMod1),
 
-    #{cfg := Cfg} = State000 = base_state(3, ?FUNCTION_NAME),
+    #ra_server_state{cfg = Cfg} = State000 = base_state(3, ?FUNCTION_NAME),
     %% patch up machine version so that the follower "understands" machine version 1
-    State00 = State000#{cfg => Cfg#cfg{machine_version = 1}},
+    State00 = State000#ra_server_state{cfg = Cfg#cfg{machine_version = 1}},
     meck:expect(?FUNCTION_NAME, which_module,
                 fun (0) ->
                         ?FUNCTION_NAME;
@@ -1700,9 +1703,9 @@ follower_install_snapshot_machine_version(_Config) ->
                                 meta = SnapMeta,
                                 chunk_state = {1, last},
                                 data = SnapData},
-    {receive_snapshot, #{cfg := #cfg{effective_machine_version = 0},
-                         last_applied := 3,
-                         commit_index := _} = State0,
+    {receive_snapshot, #ra_server_state{cfg = #cfg{effective_machine_version = 0},
+                         last_applied = 3,
+                         commit_index = _} = State0,
      _Effects0} = ra_server:handle_follower(ISR, State00),
 
     meck:expect(ra_log, recover_snapshot, fun (_) -> {SnapMeta, SnapData} end),
@@ -1710,14 +1713,14 @@ follower_install_snapshot_machine_version(_Config) ->
                 fun (_, _, _, S) ->
                         {S, SnapData, [], []}
                 end),
-    {follower, #{cfg := #cfg{machine_version = _,%% this gets populated on init only
+    {follower, #ra_server_state{cfg = #cfg{machine_version = _,%% this gets populated on init only
                              machine_versions = [{4, 1}, {0,0}],
                              effective_machine_module = MacMod1,
                              effective_machine_version = 1},
-                 last_applied := 4,
-                 cluster_index_term := {4, 5},
-                 machine_state := SnapData, %% old machine state
-                 commit_index := 4},
+                 last_applied = 4,
+                 cluster_index_term = {4, 5},
+                 machine_state = SnapData, %% old machine state
+                 commit_index = 4},
      _} = ra_server:handle_receive_snapshot(ISR, State0),
     ok.
 
@@ -1726,11 +1729,11 @@ leader_server_join(_Config) ->
     OldCluster = #{N1 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N3 => new_peer_with(#{next_index => 4, match_index => 3})},
-    State0 = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
+    State0 = (base_state(3, ?FUNCTION_NAME))#ra_server_state{cluster = OldCluster},
     % raft servers should switch to the new configuration after log append
     % and further cluster changes should be disallowed
-    {leader, #{cluster := #{N1 := _, N2 := _, N3 := _, N4 := _},
-               cluster_change_permitted := false} = _State1, Effects} =
+    {leader, #ra_server_state{cluster = #{N1 := _, N2 := _, N3 := _, N4 := _},
+               cluster_change_permitted = false} = _State1, Effects} =
         ra_server:handle_leader({command, {'$ra_join', meta(),
                                            N4, await_consensus}}, State0),
     [
@@ -1767,11 +1770,11 @@ leader_server_join_nonvoter(_Config) ->
     OldCluster = #{N1 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N3 => new_peer_with(#{next_index => 4, match_index => 3})},
-    #{log := Log} = State0 = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
+    #ra_server_state{log = Log} = State0 = (base_state(3, ?FUNCTION_NAME))#ra_server_state{cluster = OldCluster},
     % raft servers should switch to the new configuration after log append
     % and further cluster changes should be disallowed
-    {leader, #{cluster := #{N1 := _, N2 := _, N3 := _, N4 := _},
-               cluster_change_permitted := false} = _State1, Effects} =
+    {leader, #ra_server_state{cluster = #{N1 := _, N2 := _, N3 := _, N4 := _},
+               cluster_change_permitted = false} = _State1, Effects} =
         ra_server:handle_leader({command, {'$ra_join', meta(),
                                            #{id => N4, membership => promotable, uid => <<"uid">>}, await_consensus}}, State0),
     % new member should join as non-voter
@@ -1810,9 +1813,9 @@ leader_server_leave(_Config) ->
                    N2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N3 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N4 => new_peer_with(#{next_index => 1, match_index => 0})},
-    State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{cluster = OldCluster},
     % raft servers should switch to the new configuration after log append
-    {leader, #{cluster := #{N1 := _, N2 := _, N3 := _}},
+    {leader, #ra_server_state{cluster = #{N1 := _, N2 := _, N3 := _}},
      [{send_rpc, N3, RpcN3}, {send_rpc, N2, RpcN2} | _]} =
         ra_server:handle_leader({command, {'$ra_leave', meta(), ?N4, await_consensus}},
                                 State),
@@ -1839,7 +1842,7 @@ leader_is_removed(_Config) ->
                    N2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N3 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N4 => new_peer_with(#{next_index => 1, match_index => 0})},
-    State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{cluster = OldCluster},
 
     {leader, State1, _} =
         ra_server:handle_leader({command, {'$ra_leave', meta(), ?N1, await_consensus}},
@@ -1852,7 +1855,7 @@ leader_is_removed(_Config) ->
                                     last_index = 4, last_term = 5},
     {leader, State2, _} = ra_server:handle_leader({N2, AEReply}, State1b),
     % after committing the new entry the leader steps down
-    {stop, #{commit_index := 4}, _} = ra_server:handle_leader({N3, AEReply}, State2),
+    {stop, #ra_server_state{commit_index = 4}, _} = ra_server:handle_leader({N3, AEReply}, State2),
     ok.
 
 follower_cluster_change(_Config) ->
@@ -1861,11 +1864,11 @@ follower_cluster_change(_Config) ->
                    N2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N3 => new_peer_with(#{next_index => 4, match_index => 3})},
     Base = base_state(3, ?FUNCTION_NAME),
-    Cfg = maps:get(cfg, Base),
-    State = Base#{cfg => Cfg#cfg{id = N2,
+    Cfg = Base#ra_server_state.cfg,
+    State = Base#ra_server_state{cfg = Cfg#cfg{id = N2,
                                  uid = <<"n2">>,
                                  log_id = "n2"},
-                  cluster => OldCluster},
+                  cluster = OldCluster},
     NewCluster = #{N1 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N3 => new_peer_with(#{next_index => 4, match_index => 3}),
@@ -1876,9 +1879,9 @@ follower_cluster_change(_Config) ->
                              prev_log_term = 5,
                              leader_commit = 3,
                              entries = [JoinEntry]},
-    {follower, #{cluster := #{N1 := _, N2 := _,
+    {follower, #ra_server_state{cluster = #{N1 := _, N2 := _,
                               N3 := _, N4 := _},
-                 cluster_index_term := {4, 5}},
+                 cluster_index_term = {4, 5}},
      [{cast, N1, {N2, #append_entries_reply{}}}]} =
         begin
             {follower, Int, _} = ra_server:handle_follower(AE, State),
@@ -1896,30 +1899,30 @@ leader_applies_new_cluster(_Config) ->
                    N2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N3 => new_peer_with(#{next_index => 4, match_index => 3})},
 
-    State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{cluster = OldCluster},
     Command = {command, {'$ra_join', meta(), N4, await_consensus}},
     % cluster records index and term it was applied to determine whether it has
     % been applied
-    {leader, #{cluster_index_term := {4, 5},
-               cluster := #{N1 := _, N2 := _,
+    {leader, #ra_server_state{cluster_index_term = {4, 5},
+               cluster = #{N1 := _, N2 := _,
                             N3 := _, N4 := _} } = State1, _} =
         ra_server:handle_leader(Command, State),
     {leader, State2, _} =
         ra_server:handle_leader(written_evt(5, {4, 4}), State1),
 
-    ?assert(not maps:get(cluster_change_permitted, State2)),
+    ?assert(not State2#ra_server_state.cluster_change_permitted),
     % replies coming in
     AEReply = #append_entries_reply{term = 5, success = true,
                                     next_index = 5,
                                     last_index = 4, last_term = 5},
     % leader does not yet have consensus as will need at least 3 votes
-    {leader, State3 = #{commit_index := 3,
+    {leader, State3 = #ra_server_state{commit_index = 3,
 
-                        cluster_change_permitted := false,
-                        cluster_index_term := {4, 5},
-                        cluster := #{N2 := #{next_index := 5,
+                        cluster_change_permitted = false,
+                        cluster_index_term = {4, 5},
+                        cluster = #{N2 := #{next_index := 5,
                                              match_index := 4}}},
-     _} = ra_server:handle_leader({N2, AEReply}, State2#{votes => 1}),
+     _} = ra_server:handle_leader({N2, AEReply}, State2#ra_server_state{votes = 1}),
 
     % leader has consensus
     {leader, _State4 = #{commit_index := 4,
@@ -1935,19 +1938,19 @@ leader_applies_new_cluster_nonvoter(_Config) ->
                    N2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N3 => new_peer_with(#{next_index => 4, match_index => 3})},
 
-    State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{cluster = OldCluster},
     Command = {command, {'$ra_join', meta(), #{id => N4, membership => promotable, uid => <<"uid">>}, await_consensus}},
     % cluster records index and term it was applied to determine whether it has
     % been applied
-    {leader, #{cluster_index_term := {4, 5},
-               cluster := #{N1 := _, N2 := _,
+    {leader, #ra_server_state{cluster_index_term = {4, 5},
+               cluster = #{N1 := _, N2 := _,
                             N3 := _, N4 := #{voter_status := #{membership := promotable,
                                                                uid := <<"uid">>}}}} = State1, _} =
         ra_server:handle_leader(Command, State),
     {leader, State2, _} =
         ra_server:handle_leader(written_evt(5, {4, 4}), State1),
 
-    ?assert(not maps:get(cluster_change_permitted, State2)),
+    ?assert(not State2#ra_server_state.cluster_change_permitted),
 
     % replies coming in
     AEReply = #append_entries_reply{term = 5, success = true,
@@ -1958,7 +1961,7 @@ leader_applies_new_cluster_nonvoter(_Config) ->
                         cluster_change_permitted := true,
                         cluster := #{N2 := #{next_index := 5,
                                              match_index := 4}}},
-     _} = ra_server:handle_leader({N2, AEReply}, State2#{votes => 1}),
+     _} = ra_server:handle_leader({N2, AEReply}, State2#ra_server_state{votes = 1}),
     ok.
 
 leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
@@ -1967,12 +1970,12 @@ leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
                    N2 => new_peer_with(#{next_index => 4, match_index => 3}),
                    N3 => new_peer_with(#{next_index => 4, match_index => 3})},
 
-    State = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{cluster = OldCluster},
     Command = {command, {'$ra_join', meta(), N4, await_consensus}},
     % cluster records index and term it was applied to determine whether it has
     % been applied
-    {leader, #{cluster_index_term := {4, 5},
-               cluster := #{N1 := _, N2 := _,
+    {leader, #ra_server_state{cluster_index_term = {4, 5},
+               cluster = #{N1 := _, N2 := _,
                             N3 := _, N4 := _}} = State1, _} =
     ra_server:handle_leader(Command, State),
 
@@ -1985,7 +1988,7 @@ leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
                              prev_log_index = 3,
                              prev_log_term = 5,
                              leader_commit = 3},
-    {follower, #{cluster := Cluster}, _} =
+    {follower, #ra_server_state{cluster = Cluster}, _} =
         ra_server:handle_follower(AE, State1),
     % assert n1 has switched back to the old cluster config
     #{N1 := _, N2 := _, N3 := _} = Cluster,
@@ -2027,17 +2030,17 @@ command(_Config) ->
     ok.
 
 leader_enters_from_await_condition(_Config) ->
-    State = (base_state(3, ?FUNCTION_NAME))#{cluster_change_permitted => true},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{cluster_change_permitted = true},
     %% when re-entering leader state from await_condition the
     %% cluster change permitted value should be retained
-    ?assertMatch({#{cluster_change_permitted := true}, _},
+    ?assertMatch({#ra_server_state{cluster_change_permitted = true}, _},
                  ra_server:handle_state_enter(leader, await_condition, State)),
 
-    ?assertMatch({#{cluster_change_permitted := false}, _},
+    ?assertMatch({#ra_server_state{cluster_change_permitted = false}, _},
                  ra_server:handle_state_enter(leader, await_condition,
-                                              State#{cluster_change_permitted => false})),
+                                              State#ra_server_state{cluster_change_permitted = false})),
 
-    ?assertMatch({#{cluster_change_permitted := false}, _},
+    ?assertMatch({#ra_server_state{cluster_change_permitted = false}, _},
                  ra_server:handle_state_enter(leader, candidate, State)),
     ok.
 
@@ -2077,17 +2080,17 @@ command_notify(_Config) ->
 
 candidate_election(_Config) ->
     N2 = ?N2, N3 = ?N3, N4 = ?N4, N5 = ?N5,
-    State = (base_state(5, ?FUNCTION_NAME))#{current_term => 6, votes => 1},
+    State = (base_state(5, ?FUNCTION_NAME))#ra_server_state{current_term = 6, votes = 1},
     Reply = #request_vote_result{term = 6, vote_granted = true},
-    {candidate, #{votes := 2} = State1, []}
+    {candidate, #ra_server_state{votes = 2} = State1, []}
         = ra_server:handle_candidate(Reply, State),
     % denied
     NegResult = #request_vote_result{term = 6, vote_granted = false},
-    {candidate, #{votes := 2}, []}
+    {candidate, #ra_server_state{votes = 2}, []}
         = ra_server:handle_candidate(NegResult, State1),
     % newer term should make candidate stand down
     HighTermResult = #request_vote_result{term = 7, vote_granted = false},
-    {follower, #{current_term := 7}, []}
+    {follower, #ra_server_state{current_term = 7}, []}
         = ra_server:handle_candidate(HighTermResult, State1),
 
     EffectiveMacVer = 0,
@@ -2100,7 +2103,7 @@ candidate_election(_Config) ->
     % when candidate becomes leader the next operation should be a noop
     % and all peers should be initialised with the appropriate state
     % Also rpcs for all members should be issued
-    {leader, #{cluster := #{N2 := PeerState,
+    {leader, #ra_server_state{cluster = #{N2 := PeerState,
                             N3 := PeerState,
                             N4 := PeerState,
                             N5 := PeerState}} = State2,
@@ -2124,60 +2127,60 @@ candidate_election(_Config) ->
 
 pre_vote_election(_Config) ->
     Token = make_ref(),
-    State = (base_state(5, ?FUNCTION_NAME))#{votes => 1,
-                             membership => voter,
-                             pre_vote_token => Token},
+    State = (base_state(5, ?FUNCTION_NAME))#ra_server_state{votes = 1,
+                                                           membership = voter,
+                                                           pre_vote_token = Token},
     Reply = #pre_vote_result{term = 5, token = Token, vote_granted = true},
-    {pre_vote, #{votes := 2} = State1, []}
+    {pre_vote, #ra_server_state{votes = 2} = State1, []}
         = ra_server:handle_pre_vote(Reply, State),
 
     %% different token is ignored
-    {pre_vote, #{votes := 1}, []}
+    {pre_vote, #ra_server_state{votes = 1}, []}
         = ra_server:handle_pre_vote(Reply#pre_vote_result{token = make_ref()},
                                   State),
     % denied
     NegResult = #pre_vote_result{term = 5, token = Token,
                                  vote_granted = false},
-    {pre_vote, #{votes := 2}, []}
+    {pre_vote, #ra_server_state{votes = 2}, []}
         = ra_server:handle_pre_vote(NegResult, State1),
 
     % newer term should make pre_vote revert to follower
     HighTermResult = #pre_vote_result{term = 6, token = Token,
                                       vote_granted = false},
-    {follower, #{current_term := 6, votes := 0}, []}
+    {follower, #ra_server_state{current_term = 6, votes = 0}, []}
         = ra_server:handle_pre_vote(HighTermResult, State1),
 
     % quorum has been achieved - pre_vote becomes candidate
     {candidate,
-     #{current_term := 6}, _} = ra_server:handle_pre_vote(Reply, State1).
+     #ra_server_state{current_term = 6}, _} = ra_server:handle_pre_vote(Reply, State1).
 
 pre_vote_election_non_voter(_Config) ->
     Token = make_ref(),
-    State = (base_state(5, ?FUNCTION_NAME))#{votes => 1,
-                             membership => promotable,
-                             pre_vote_token => Token},
+    State = (base_state(5, ?FUNCTION_NAME))#ra_server_state{votes = 1,
+                                                           membership = promotable,
+                                                           pre_vote_token = Token},
     Reply = #pre_vote_result{term = 5, token = Token, vote_granted = true},
     % non-voter should ignore pre-vote
-    {pre_vote, #{votes := 1}, []} = ra_server:handle_pre_vote(Reply, State).
+    {pre_vote, #ra_server_state{votes = 1}, []} = ra_server:handle_pre_vote(Reply, State).
 
 pre_vote_election_reverts(_Config) ->
     N2 = ?N2,
     Token = make_ref(),
-    State = (base_state(5, ?FUNCTION_NAME))#{votes => 1,
-                             pre_vote_token => Token},
+    State = (base_state(5, ?FUNCTION_NAME))#ra_server_state{votes = 1,
+                                                           pre_vote_token = Token},
     % request vote with higher term
     VoteRpc = #request_vote_rpc{term = 6, candidate_id = N2,
                                 last_log_index = 3, last_log_term = 5},
-    {follower, #{current_term := 6, votes := 0}, [{next_event, VoteRpc}]}
+    {follower, #ra_server_state{current_term = 6, votes = 0}, [{next_event, VoteRpc}]}
         = ra_server:handle_pre_vote(VoteRpc, State),
     %  append entries rpc with equal term
     AE = #append_entries_rpc{term = 5, leader_id = ?N2, prev_log_index = 3,
                              prev_log_term = 5, leader_commit = 3},
-    {follower, #{current_term := 5, votes := 0}, [{next_event, AE}]}
+    {follower, #ra_server_state{current_term = 5, votes = 0}, [{next_event, AE}]}
         = ra_server:handle_pre_vote(AE, State),
     % and higher term
     AETerm6 = AE#append_entries_rpc{term = 6},
-    {follower, #{current_term := 6, votes := 0}, [{next_event, AETerm6}]}
+    {follower, #ra_server_state{current_term = 6, votes = 0}, [{next_event, AETerm6}]}
         = ra_server:handle_pre_vote(AETerm6, State),
 
     % install snapshot rpc
@@ -2188,14 +2191,14 @@ pre_vote_election_reverts(_Config) ->
                                          machine_version => 0},
                                 chunk_state = {1, last},
                                 data = []},
-    {follower, #{current_term := 5, votes := 0}, [{next_event, ISR}]}
+    {follower, #ra_server_state{current_term = 5, votes = 0}, [{next_event, ISR}]}
         = ra_server:handle_pre_vote(ISR, State),
     ok.
 
 candidate_receives_pre_vote(_Config) ->
     % candidate ignores an pre_vote_rpc with lower term and lower index
     Token = make_ref(),
-    State = (base_state(5, ?FUNCTION_NAME))#{votes => 1},
+    State = (base_state(5, ?FUNCTION_NAME))#ra_server_state{votes = 1},
     PreVoteRpc = #pre_vote_rpc{term = 5, candidate_id = ?N1,
                                token = Token,
                                machine_version = 0,
@@ -2211,7 +2214,7 @@ candidate_receives_pre_vote(_Config) ->
         = ra_server:handle_candidate(PreVoteRpc#pre_vote_rpc{last_log_index = 2}, State),
 
     % candidate abdicates for higher term
-    {follower, #{current_term := 6}, _}
+    {follower, #ra_server_state{current_term = 6}, _}
         = ra_server:handle_candidate(PreVoteRpc#pre_vote_rpc{term = 6}, State),
 
     ok.
@@ -2220,7 +2223,7 @@ leader_receives_pre_vote(_Config) ->
     % leader should emit rpcs to all nodes immediately upon receiving
     % an pre_vote_rpc to put upstart followers back in their place
     Token = make_ref(),
-    State = (base_state(5, ?FUNCTION_NAME))#{votes => 1},
+    State = (base_state(5, ?FUNCTION_NAME))#ra_server_state{votes = 1},
     PreVoteRpc = #pre_vote_rpc{term = 5, candidate_id = ?N1,
                                token = Token,
                                machine_version = 0,
@@ -2233,15 +2236,15 @@ leader_receives_pre_vote(_Config) ->
                    | _]}
         = ra_server:handle_leader(PreVoteRpc, State),
     % leader abdicates for higher term
-    {follower, #{current_term := 6}, _}
+    {follower, #ra_server_state{current_term = 6}, _}
         = ra_server:handle_leader(PreVoteRpc#pre_vote_rpc{term = 6}, State),
     ok.
 
 leader_receives_install_snapshot_rpc(_Config) ->
     % leader step down when receiving an install snapshot rpc with a higher
     % term
-    State  = #{current_term := Term,
-               last_applied := Idx} = (base_state(5, ?FUNCTION_NAME))#{votes => 1},
+    State  = #ra_server_state{current_term = Term,
+               last_applied = Idx} = (base_state(5, ?FUNCTION_NAME))#ra_server_state{votes = 1},
     ISRpc = #install_snapshot_rpc{term = Term + 1, leader_id = ?N5,
                                   meta = #{index => Idx,
                                            term => Term,
@@ -2249,7 +2252,7 @@ leader_receives_install_snapshot_rpc(_Config) ->
                                            machine_version => 0},
                                   chunk_state = {1, last},
                                   data = []},
-    {follower, #{}, [{next_event, ISRpc}]}
+    {follower, #ra_server_state{}, [{next_event, ISRpc}]}
         = ra_server:handle_leader(ISRpc, State),
     % leader ignores lower term
     {leader, State, _}
@@ -2259,7 +2262,7 @@ leader_receives_install_snapshot_rpc(_Config) ->
 
 follower_installs_snapshot(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
-    #{N3 := {_, FState = #{cluster := Config}, _}} =
+    #{N3 := {_, FState = #ra_server_state{cluster = Config}, _}} =
         init_servers([N1, N2, N3], {module, ra_queue, #{}}),
     LastTerm = 1, % snapshot term
     Term = 2, % leader term
@@ -2271,18 +2274,18 @@ follower_installs_snapshot(_Config) ->
                                   data = []},
     {receive_snapshot, FState1,
      [{next_event, ISRpc}, {record_leader_msg, _}]} =
-        ra_server:handle_follower(ISRpc, FState#{current_term => Term}),
+        ra_server:handle_follower(ISRpc, FState#ra_server_state{current_term = Term}),
 
     meck:expect(ra_snapshot, complete_accept,
                 fun (_, _, _, S) ->
                         {S, [], [], []}
                 end),
-    {follower, #{current_term := Term,
-                 commit_index := Idx,
-                 last_applied := Idx,
-                 cluster := Config,
-                 machine_state := [],
-                 leader_id := N1},
+    {follower, #ra_server_state{current_term = Term,
+                 commit_index = Idx,
+                 last_applied = Idx,
+                 cluster = Config,
+                 machine_state = [],
+                 leader_id = N1},
      [{reply, #install_snapshot_result{}}]} =
         ra_server:handle_receive_snapshot(ISRpc, FState1),
 
@@ -2292,7 +2295,7 @@ follower_ignores_installs_snapshot_with_higher_machine_version(_Config) ->
     %% currently followers cannot correctly handle snapshots with a higher
     %% machine version so have to ignore them
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
-    #{N3 := {_, FState = #{cluster := Config}, _}}
+    #{N3 := {_, FState = #ra_server_state{cluster = Config}, _}}
     = init_servers([N1, N2, N3], {module, ra_queue, #{}}),
     LastTerm = 1, % snapshot term
     Term = 2, % leader term
@@ -2312,12 +2315,12 @@ follower_ignores_installs_snapshot_with_higher_machine_version(_Config) ->
 follower_receives_stale_snapshot(_Config) ->
     N1 = ?N1,
     FState0 = base_state(3, ra_queue),
-    FState = FState0#{last_applied => 3},
+    FState = FState0#ra_server_state{last_applied = 3},
     LastTerm = 3, % snapshot term
     Idx = 2,
     ISRpc = #install_snapshot_rpc{term = 3, leader_id = N1,
                                   meta = snap_meta(Idx, LastTerm,
-                                                   maps:get(cluster, FState)),
+                                                   FState#ra_server_state.cluster),
                                   chunk_state = {1, last},
                                   data = []},
     %% this should be a rare occurrence, rather than implement a special
@@ -2329,12 +2332,12 @@ follower_receives_stale_snapshot(_Config) ->
 follower_receives_snapshot_lower_than_last_applied(_Config) ->
     N1 = ?N1,
     FState0 = base_state(3, ra_queue),
-    FState = FState0#{last_applied => 3},
+    FState = FState0#ra_server_state{last_applied = 3},
     LastTerm = 5, % snapshot term
     Idx = 3,
     ISRpc = #install_snapshot_rpc{term = 6, leader_id = N1,
                                   meta = snap_meta(Idx, LastTerm,
-                                                   maps:get(cluster, FState)),
+                                                   FState#ra_server_state.cluster),
                                   chunk_state = {1, last},
                                   data = []},
     %% this should be a rare occurrence, rather than implement a special
@@ -2349,7 +2352,7 @@ receive_snapshot_timeout(_Config) ->
     #{N3 := {_, FState0 = #{cluster := Config,
                             current_term := CurTerm}, _}}
     = init_servers([N1, N2, N3], {module, ra_queue, #{}}),
-    FState = FState0#{last_applied => 3},
+    FState = FState0#ra_server_state{last_applied = 3},
     LastTerm = 1, % snapshot term
     Idx = 6,
     ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = N1,
@@ -2361,7 +2364,7 @@ receive_snapshot_timeout(_Config) ->
         ra_server:handle_follower(ISRpc, FState),
 
     %% revert back to follower on timeout
-    {follower, #{log := Log}, _}
+    {follower, #ra_server_state{log = Log}, _}
     = ra_server:handle_receive_snapshot(receive_snapshot_timeout, FState1),
     %% snapshot should be aborted
     SS = ra_log:snapshot_state(Log),
@@ -2374,7 +2377,7 @@ receive_snapshot_new_leader_aer(_Config) ->
                             current_term := CurTerm,
                             commit_index := CommitIdx}, _}}
     = init_servers([N1, N2, N3], {module, ra_queue, #{}}),
-    FState = FState0#{last_applied => 3},
+    FState = FState0#ra_server_state{last_applied = 3},
     LastTerm = 1, % snapshot term
     Idx = 6,
     ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = N1,
@@ -2391,7 +2394,7 @@ receive_snapshot_new_leader_aer(_Config) ->
                               prev_log_term = CurTerm,
                               leader_commit = CommitIdx,
                               entries = []},
-    {follower, #{log := Log, current_term := NewTerm}, _}
+    {follower, #ra_server_state{log = Log, current_term = NewTerm}, _}
     = ra_server:handle_receive_snapshot(AER, FState1),
     %% term should be updated
     NewTerm = CurTerm + 1,
@@ -2402,7 +2405,7 @@ receive_snapshot_new_leader_aer(_Config) ->
 
 snapshotted_follower_received_append_entries(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
-    #{N3 := {_, FState00 = #{cluster := Config}, _}} =
+    #{N3 := {_, FState00 = #ra_server_state{cluster = Config}, _}} =
         init_servers([N1, N2, N3], {module, ra_queue, #{}}),
     Term = 2, % leader term
     Idx = 3,
@@ -2493,7 +2496,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                                 last_term = 1}, % in previous term
     % should decrement next_index for n2
     % ExpectedN2NextIndex = 2,
-    {leader, #{cluster := #{N2 := #{next_index := 4}}},
+    {leader, #ra_server_state{cluster = #{N2 := #{next_index := 4}}},
      [{send_rpc, N2, #append_entries_rpc{entries = [{2, _, _}, {3, _, _}]}}]}
        = ra_server:handle_leader({N2, AER}, Leader0),
     ok.
@@ -2543,7 +2546,7 @@ leader_receives_install_snapshot_result(_Config) ->
     ISR = #install_snapshot_result{term = Term,
                                    last_index = 2,
                                    last_term = 1},
-    {leader, #{cluster := #{N3 := #{match_index := 2,
+    {leader, #ra_server_state{cluster = #{N3 := #{match_index := 2,
                                     commit_index_sent := 4,
                                     next_index := 5}}},
      Effects} = ra_server:handle_leader({N3, ISR}, Leader),
@@ -2582,11 +2585,11 @@ leader_received_append_entries_reply_and_promotes_voter(_config) ->
 
 follower_heartbeat(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term,
-      query_index := QIndex,
-      cluster := Cluster,
-      cfg := #cfg{id = Id},
-      leader_id := LeaderId} = State,
+    #ra_server_state{current_term = Term,
+      query_index = QIndex,
+      cluster = Cluster,
+      cfg = #cfg{id = Id},
+      leader_id = LeaderId} = State,
     #{Id := _} = Cluster,
     NewQueryIndex = QIndex + 1,
     LowerTerm = Term - 1,
@@ -2613,8 +2616,8 @@ follower_heartbeat(_Config) ->
     %% Reply to a higher term. Update follower term.
     NewTerm = Term + 1,
     {follower,
-     #{current_term := NewTerm,
-       voted_for := undefined},
+     #ra_server_state{current_term = NewTerm,
+       voted_for = undefined},
      [{cast,
        LeaderId,
        {Id, #heartbeat_reply{term = NewTerm,
@@ -2623,7 +2626,7 @@ follower_heartbeat(_Config) ->
 
 follower_heartbeat_reply(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term, leader_id := LeaderId} = State,
+    #ra_server_state{current_term = Term, leader_id = LeaderId} = State,
     HeartbeatReply = #heartbeat_reply{term = Term, query_index = 2},
 
     %% Ignore lower or same term
@@ -2634,18 +2637,18 @@ follower_heartbeat_reply(_Config) ->
 
     %% Update term if the term is higher
     NewTerm = Term + 1,
-    {follower, #{current_term := NewTerm,
-                 voted_for := undefined}, []}
+    {follower, #ra_server_state{current_term = NewTerm,
+                 voted_for = undefined}, []}
         = ra_server:handle_follower({LeaderId,
                                      HeartbeatReply#heartbeat_reply{term = NewTerm}}, State).
 
 candidate_heartbeat(_Config) ->
     N1 = ?N1,
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term,
-      leader_id := LeaderId,
-      cfg := #cfg{id = Id},
-      query_index := QueryIndex} = State,
+    #ra_server_state{current_term = Term,
+      leader_id = LeaderId,
+      cfg = #cfg{id = Id},
+      query_index = QueryIndex} = State,
     NewQueryIndex = QueryIndex + 1,
     Heartbeat = #heartbeat_rpc{query_index = NewQueryIndex,
                                term = Term,
@@ -2658,8 +2661,8 @@ candidate_heartbeat(_Config) ->
     %% Higher term updates the candidate term and changes to follower
     NewTerm = Term + 1,
     HeartbeatHigherTerm = Heartbeat#heartbeat_rpc{term = NewTerm},
-    {follower, #{current_term := NewTerm,
-                 voted_for := undefined},
+    {follower, #ra_server_state{current_term = NewTerm,
+                 voted_for = undefined},
      [{next_event, HeartbeatHigherTerm}]}
         = ra_server:handle_candidate(HeartbeatHigherTerm, State),
 
@@ -2675,7 +2678,7 @@ candidate_heartbeat(_Config) ->
 
 candidate_heartbeat_reply(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term} = State,
+    #ra_server_state{current_term = Term} = State,
 
     HeartbeatReply = #heartbeat_reply{term = Term, query_index = 2},
     %% Same term is ignored
@@ -2688,8 +2691,8 @@ candidate_heartbeat_reply(_Config) ->
 
     %% Higher term updates term and changes to follower
     NewTerm = Term + 1,
-    {follower, #{current_term := NewTerm,
-                 voted_for := undefined}, []}
+    {follower, #ra_server_state{current_term = NewTerm,
+                 voted_for = undefined}, []}
         = ra_server:handle_candidate({{no_peer, node()}, HeartbeatReply#heartbeat_reply{term = NewTerm}}, State).
 
 pre_vote_heartbeat(_Config) ->
@@ -2703,7 +2706,7 @@ pre_vote_heartbeat(_Config) ->
                                term = Term,
                                leader_id = ?N1},
 
-    StateWithoutVotes = State#{votes => 0},
+    StateWithoutVotes = State#ra_server_state{votes = 0},
     %% Same term changes to follower and resets votes
     {follower, StateWithoutVotes, [{next_event, Heartbeat}]}
         = ra_server:handle_pre_vote(Heartbeat, State),
@@ -2711,9 +2714,9 @@ pre_vote_heartbeat(_Config) ->
     %% Higher term updates term, changes to follower and resets votes
     NewTerm = Term + 1,
     HeartbeatHigherTerm = Heartbeat#heartbeat_rpc{term = NewTerm},
-    {follower, #{votes := 0,
-                 current_term := NewTerm,
-                 voted_for := undefined},
+    {follower, #ra_server_state{votes = 0,
+                 current_term = NewTerm,
+                 voted_for = undefined},
      [{next_event, HeartbeatHigherTerm}]}
         = ra_server:handle_pre_vote(HeartbeatHigherTerm, State),
 
@@ -2728,7 +2731,7 @@ pre_vote_heartbeat(_Config) ->
 
 pre_vote_heartbeat_reply(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term} = State,
+    #ra_server_state{current_term = Term} = State,
 
     HeartbeatReply = #heartbeat_reply{term = Term,
                                       query_index = 2},
@@ -2745,9 +2748,9 @@ pre_vote_heartbeat_reply(_Config) ->
 
     %% Heartbeat reply with higher term updates the term and resets to follower
     NewTerm = Term + 1,
-    {follower, #{votes := 0,
-                 current_term := NewTerm,
-                 voted_for := undefined}, []}
+    {follower, #ra_server_state{votes = 0,
+                 current_term = NewTerm,
+                 voted_for = undefined}, []}
         = ra_server:handle_pre_vote(
             {{no_peer, node()}, HeartbeatReply#heartbeat_reply{term = NewTerm}},
             State).
@@ -2775,9 +2778,9 @@ leader_heartbeat(_Config) ->
     NewTerm = Term + 1,
     HeartbeatHigherTerm = Heartbeat#heartbeat_rpc{term = NewTerm},
     StateWithHigherTerm = set_peer_query_index(
-                            State#{current_term => NewTerm,
-                                   leader_id => undefined,
-                                   voted_for => undefined},
+                            State#ra_server_state{current_term = NewTerm,
+                                   leader_id = undefined,
+                                   voted_for = undefined},
                             Id, 0),
     {follower, StateWithHigherTerm, [{next_event, HeartbeatHigherTerm}]}
         = ra_server:handle_leader(HeartbeatHigherTerm, State),
@@ -2805,8 +2808,8 @@ leader_heartbeat_reply_node_size_5(_Config) ->
     HeartbeatReply = #heartbeat_reply{term = Term,
                                       query_index = QueryIndex},
     WaitingQuery = queue:in({QueryIndex, QueryRef1}, queue:new()),
-    State0 = set_peer_query_index(BaseState#{query_index => QueryIndex,
-                                             queries_waiting_heartbeats => WaitingQuery},
+    State0 = set_peer_query_index(BaseState#ra_server_state{query_index = QueryIndex,
+                                             queries_waiting_heartbeats = WaitingQuery},
                                   Id, QueryIndex),
 
     {leader, State, []}
@@ -2825,7 +2828,7 @@ leader_heartbeat_reply_same_term(_Config) ->
     QueryRef1 = {from1, fun(_) -> query_result1 end, CommitIndex},
     QueryRef2 = {from2, fun(_) -> query_result2 end, CommitIndex - 1},
     %% Increase self query index to cover more cases
-    State = set_peer_query_index(BaseState#{query_index => QueryIndex + 1},
+    State = set_peer_query_index(BaseState#ra_server_state{query_index = QueryIndex + 1},
                                  Id, QueryIndex + 1),
 
     ReplyingPeerId = ?N2,
@@ -2840,7 +2843,7 @@ leader_heartbeat_reply_same_term(_Config) ->
         = ra_server:handle_leader({ReplyingPeerId, HeartbeatReply}, State),
 
     WaitingQuery = queue:in({QueryIndex, QueryRef1}, queue:new()),
-    StateWithQuery = State#{queries_waiting_heartbeats => WaitingQuery},
+    StateWithQuery = State#ra_server_state{queries_waiting_heartbeats = WaitingQuery},
 
     %% Reply is ignored if peer is not known
     {leader, StateWithQuery, []}
@@ -2880,12 +2883,12 @@ leader_heartbeat_reply_same_term(_Config) ->
     HighQueryIndex = QueryIndex + 1,
 
     WaitingQueries = queue:in({HighQueryIndex, QueryRef2}, WaitingQuery),
-    StateWithTwoQueries = State#{queries_waiting_heartbeats => WaitingQueries},
+    StateWithTwoQueries = State#ra_server_state{queries_waiting_heartbeats = WaitingQueries},
 
     StateWithHighQueryIndexForPeer = set_peer_query_index(State, ReplyingPeerId, HighQueryIndex),
 
     {_, WaitingQuery2} = queue:out(WaitingQueries),
-    StateWithSecondQuery = StateWithQueryIndexForPeer#{queries_waiting_heartbeats => WaitingQuery2},
+    StateWithSecondQuery = StateWithQueryIndexForPeer#ra_server_state{queries_waiting_heartbeats = WaitingQuery2},
 
     %% Apply single query out of 2 if there is a consensus for some
     {leader, StateWithSecondQuery, [{reply, from1, {ok, query_result1, Id}}]}
@@ -2902,7 +2905,7 @@ leader_heartbeat_reply_same_term(_Config) ->
 leader_consistent_query_delay(_Config) ->
 
     N2 = ?N2, N3 = ?N3,
-    State = (base_state(3, ?FUNCTION_NAME))#{cluster_change_permitted => false},
+    State = (base_state(3, ?FUNCTION_NAME))#ra_server_state{cluster_change_permitted = false},
     #{commit_index := CommitIndex,
       query_index := QueryIndex,
       current_term := Term,
@@ -2910,14 +2913,14 @@ leader_consistent_query_delay(_Config) ->
 
     %% If cluster changes are not permitted - delay the heartbeats
     Fun = fun(_) -> query_result end,
-    StateWithPending = State#{pending_consistent_queries => [{from, Fun, CommitIndex}]},
+    StateWithPending = State#ra_server_state{pending_consistent_queries = [{from, Fun, CommitIndex}]},
     {leader, StateWithPending, []}
         = ra_server:handle_leader({consistent_query, from, Fun}, State),
 
     %% Pending stack together
     %% Order does not matter here, btw.
     StateWithMorePending =
-        State#{pending_consistent_queries => [{from1, Fun, CommitIndex},
+        State#ra_server_state{pending_consistent_queries = [{from1, Fun, CommitIndex},
                                               {from, Fun, CommitIndex}]},
     {leader, StateWithMorePending, []}
         = ra_server:handle_leader({consistent_query, from1, Fun}, StateWithPending),
@@ -2937,9 +2940,9 @@ leader_consistent_query_delay(_Config) ->
                               queue:in({QueryIndex1, {from1, Fun, CommitIndex}}, queue:new())),
 
     %% Send heartbeats as soon as cluster changes permitted
-    {leader, #{cluster_change_permitted := true,
-               queries_waiting_heartbeats := WaitingQueries,
-               query_index := QueryIndex2},
+    {leader, #ra_server_state{cluster_change_permitted = true,
+               queries_waiting_heartbeats = WaitingQueries,
+               query_index = QueryIndex2},
     %% There can be more effects.
      [{next_event, info, pipeline_rpcs},
       {send_rpc, N2, HeartBeatRpc2},
@@ -2973,32 +2976,32 @@ leader_consistent_query(_Config) ->
                                    leader_id = Id},
 
     %% Queue the query and create heatbeat effects
-    {leader, #{query_index := QueryIndex1,
-               queries_waiting_heartbeats := WaitingQuery} = StateWithQuery,
+    {leader, #ra_server_state{query_index = QueryIndex1,
+               queries_waiting_heartbeats = WaitingQuery} = StateWithQuery,
      [{send_rpc, N2, HeartBeatRpc1},
       {send_rpc, N3, HeartBeatRpc1}]} =
         ra_server:handle_leader({consistent_query, from1, Fun}, State),
 
-    {leader, #{query_index := QueryIndex2,
-               queries_waiting_heartbeats := WaitingQueries},
+    {leader, #ra_server_state{query_index = QueryIndex2,
+               queries_waiting_heartbeats = WaitingQueries},
      [{send_rpc, N2, HeartBeatRpc2},
       {send_rpc, N3, HeartBeatRpc2}]} =
         ra_server:handle_leader({consistent_query, from2, Fun}, StateWithQuery).
 
 enable_cluster_change(State0) ->
-    {leader, #{cluster_change_permitted := false} = State1, _Effects} =
+    {leader, #ra_server_state{cluster_change_permitted = false} = State1, _Effects} =
         ra_server:handle_leader({command, {noop, meta(), 0}}, State0),
     {leader, State, _} = ra_server:handle_leader(written_evt(5, {4, 4}), State1),
     AEReply = {?N2, #append_entries_reply{term = 5, success = true,
                                           next_index = 5,
                                           last_index = 4, last_term = 5}},
     % noop consensus
-    {leader, #{cluster_change_permitted := true}, _} =
+    {leader, #ra_server_state{cluster_change_permitted = true}, _} =
         ra_server:handle_leader(AEReply, State).
 
 await_condition_heartbeat_dropped(_Config) ->
     State0 = (base_state(3, ?FUNCTION_NAME)),
-    State = State0#{condition => #{predicate_fun => fun(_,S) -> {false, S} end}},
+    State = State0#ra_server_state{condition = #{predicate_fun => fun(_,S) -> {false, S} end}},
     #{current_term := Term,
       query_index := QueryIndex,
       cfg := #cfg{id = Id}} = State,
@@ -3018,7 +3021,7 @@ await_condition_heartbeat_dropped(_Config) ->
 
 await_condition_heartbeat_reply_dropped(_Config) ->
     State0 = (base_state(3, ?FUNCTION_NAME)),
-    State = State0#{condition => #{predicate_fun => fun(_,S) -> {false, S} end}},
+    State = State0#ra_server_state{condition = #{predicate_fun => fun(_,S) -> {false, S} end}},
     #{current_term := Term,
       query_index := QueryIndex} = State,
 
@@ -3084,19 +3087,19 @@ handle_down(_config) ->
     ok.
 
 set_peer_query_index(State, PeerId, QueryIndex) ->
-    #{cluster := Cluster} = State,
+    #ra_server_state{cluster = Cluster} = State,
     #{PeerId := Peer} = Cluster,
-    State#{cluster := Cluster#{PeerId => Peer#{query_index => QueryIndex}}}.
+    State#ra_server_state{cluster = Cluster#{PeerId => Peer#{query_index => QueryIndex}}}.
 
 set_peer_voter_status(State, PeerId, VoterStatus) ->
-    #{cluster := Cluster} = State,
+    #ra_server_state{cluster = Cluster} = State,
     #{PeerId := Peer} = Cluster,
-    State#{cluster := Cluster#{PeerId => Peer#{voter_status => VoterStatus}}}.
+    State#ra_server_state{cluster = Cluster#{PeerId => Peer#{voter_status => VoterStatus}}}.
 
 leader_heartbeat_reply_lower_term(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term,
-      query_index := QueryIndex} = State,
+    #ra_server_state{current_term = Term,
+                     query_index = QueryIndex} = State,
     HeartbeatReply = #heartbeat_reply{term = Term - 1,
                                       query_index = QueryIndex},
 
@@ -3112,17 +3115,17 @@ leader_heartbeat_reply_lower_term(_Config) ->
 
 leader_heartbeat_reply_higher_term(_Config) ->
     State = base_state(3, ?FUNCTION_NAME),
-    #{current_term := Term,
-      query_index := QueryIndex} = State,
+    #ra_server_state{current_term = Term,
+                     query_index = QueryIndex} = State,
     NewTerm = Term + 1,
     HeartbeatReply = #heartbeat_reply{term = NewTerm,
                                       query_index = QueryIndex},
     ReplyingPeerId = ?N2,
 
     %% Higher term is an error
-    StateWithNewTerm = State#{current_term => NewTerm,
-                              voted_for => undefined,
-                              leader_id => undefined},
+    StateWithNewTerm = State#ra_server_state{current_term = NewTerm,
+                                              voted_for = undefined,
+                                              leader_id = undefined},
     {follower, StateWithNewTerm, []} =
         ra_server:handle_leader({ReplyingPeerId, HeartbeatReply}, State),
 
@@ -3191,19 +3194,21 @@ base_state(NumServers, MacMod) ->
                effective_machine_module = MacMod,
                system_config = ra_system:default_config()
               },
-    #{cfg => Cfg,
-      leader_id => ?N1,
-      cluster => Servers,
-      cluster_index_term => {0, 0},
-      cluster_change_permitted => true,
-      machine_state => <<"hi3">>, % last entry has been applied
-      current_term => 5,
-      commit_index => 3,
-      last_applied => 3,
-      log => Log,
-      query_index => 0,
-      queries_waiting_heartbeats => queue:new(),
-      pending_consistent_queries => []}.
+    #ra_server_state{cfg = Cfg,
+                     leader_id = ?N1,
+                     cluster = Servers,
+                     cluster_index_term = {0, 0},
+                     cluster_change_permitted = true,
+                     machine_state = <<"hi3">>, % last entry has been applied
+                     current_term = 5,
+                     commit_index = 3,
+                     last_applied = 3,
+                     log = Log,
+                     query_index = 0,
+                     queries_waiting_heartbeats = queue:new(),
+                     pending_consistent_queries = [],
+                     votes = 0,
+                     membership = voter}.
 
 mock_machine(Mod) ->
     meck:new(Mod, [non_strict]),

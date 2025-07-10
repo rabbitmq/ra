@@ -27,3 +27,29 @@
          counter :: undefined | counters:counters_ref(),
          system_config :: ra_system:config()
         }).
+
+-record(ra_server_state,
+        {cfg :: #cfg{},
+         leader_id :: term(),
+         cluster :: term(),
+         cluster_change_permitted :: boolean(),
+         cluster_index_term :: term(),
+         previous_cluster :: term(),
+         current_term :: term(),
+         log :: term(),
+         voted_for :: term(),
+         votes :: non_neg_integer(),
+         membership :: term(),
+         commit_index :: term(),
+         last_applied :: term(),
+         persisted_last_applied :: term(),
+         stop_after :: term(),
+         machine_state :: term(),
+         aux_state :: term(),
+         condition :: term(),
+         pre_vote_token :: reference(),
+         query_index :: non_neg_integer(),
+         queries_waiting_heartbeats :: term(),
+         pending_consistent_queries :: term(),
+         commit_latency :: term()
+        }).
