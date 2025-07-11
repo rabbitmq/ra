@@ -875,6 +875,7 @@ handle_event(major_compaction, #?MODULE{reader = Reader0,
     end;
 handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
              #?MODULE{cfg = #cfg{uid = UId,
+                                 log_id = LogId,
                                  names = Names} = Cfg,
                       range = {FstIdx, _} = Range,
                       mem_table = Mt0,
@@ -886,6 +887,8 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
     % ?assert(ra_snapshot:pending(SnapState0) =/= undefined),
     SnapState1 = ra_snapshot:complete_snapshot(Snap, SnapKind, LiveIndexes,
                                                SnapState0),
+    ?DEBUG("~ts: ra_log: ~s written at index ~b with ~b live indexes",
+           [LogId, SnapKind, SnapIdx, ra_seq:length(LiveIndexes)]),
     case SnapKind of
         snapshot ->
             put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
