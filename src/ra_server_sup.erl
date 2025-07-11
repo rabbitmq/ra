@@ -11,6 +11,7 @@
 
 %% API functions
 -export([start_link/1]).
+-export([start_ra_worker/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -20,7 +21,18 @@
 %%%===================================================================
 
 start_link(Config) ->
-    supervisor:start_link(?MODULE, [Config]).
+    supervisor:start_link(?MODULE, Config).
+
+-spec start_ra_worker(pid(), ra_server:config()) ->
+    supervisor:startchild_ret().
+start_ra_worker(SupPid, Config)
+  when is_pid(SupPid) andalso
+       is_map(Config) ->
+    RaWorker = #{id => ra_worker,
+                 type => worker,
+                 restart => transient,
+                 start => {ra_worker, start_link, [Config]}},
+    supervisor:start_child(SupPid, RaWorker).
 
 %%%===================================================================
 %%% Supervisor callbacks
@@ -28,20 +40,20 @@ start_link(Config) ->
 
 %%--------------------------------------------------------------------
 
-init([Config0]) ->
+init(Config0) ->
     Id = maps:get(id, Config0),
     Config = Config0#{parent => self()},
     Name = ra_lib:ra_server_id_to_local_name(Id),
-    SupFlags = #{strategy => one_for_one,
+    SupFlags = #{strategy => one_for_all,
                  intensity => 2,
                  period => 5},
-    ChildSpec = #{id => Name,
-                  type => worker,
-                  % needs to be transient as may shut itself down by returning
-                  % {stop, normal, State}
-                  restart => transient,
-                  start => {ra_server_proc, start_link, [Config]}},
-    {ok, {SupFlags, [ChildSpec]}}.
+    RaServer = #{id => Name,
+                 type => worker,
+                 % needs to be transient as may shut itself down by returning
+                 % {stop, normal, State}
+                 restart => transient,
+                 start => {ra_server_proc, start_link, [Config]}},
+    {ok, {SupFlags, [RaServer]}}.
 
 %%%===================================================================
 %%% Internal functions
