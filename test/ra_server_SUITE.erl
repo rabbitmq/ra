@@ -65,6 +65,7 @@ all() ->
      leader_appends_cluster_change_then_steps_before_applying_it,
      leader_receives_install_snapshot_rpc,
      follower_installs_snapshot,
+     follower_installs_snapshot_with_pre,
      follower_ignores_installs_snapshot_with_higher_machine_version,
      follower_receives_stale_snapshot,
      follower_receives_snapshot_lower_than_last_applied,
@@ -168,8 +169,8 @@ setup_log() ->
                         {ok, {Meta, Data}, []}
                 end),
     meck:expect(ra_snapshot, complete_accept,
-                fun(_Data, _Num, _Machine, {_Meta, MacSt} = State) ->
-                        {State, MacSt, [], []}
+                fun(Data, _Num, _Machine, {_Meta, MacSt} = State) ->
+                        {State, Data ++ MacSt, [], []}
                 end),
     meck:expect(ra_snapshot, abort_accept, fun(SS) -> SS end),
     meck:expect(ra_snapshot, accepting, fun(_SS) -> undefined end),
@@ -193,6 +194,7 @@ setup_log() ->
     meck:expect(ra_log, next_index, fun ra_log_memory:next_index/1),
     meck:expect(ra_log, append, fun ra_log_memory:append/2),
     meck:expect(ra_log, write, fun ra_log_memory:write/2),
+    meck:expect(ra_log, write_sparse, fun ra_log_memory:write_sparse/3),
     meck:expect(ra_log, handle_event, fun ra_log_memory:handle_event/2),
     meck:expect(ra_log, last_written, fun ra_log_memory:last_written/1),
     meck:expect(ra_log, last_index_term, fun ra_log_memory:last_index_term/1),
@@ -2345,6 +2347,55 @@ follower_installs_snapshot(_Config) ->
      [{reply, #install_snapshot_result{}}]} =
         ra_server:handle_receive_snapshot(ISRpc, FState1),
 
+    ok.
+
+follower_installs_snapshot_with_pre(_Config) ->
+    N1 = ?N1, N2 = ?N2, N3 = ?N3,
+    #{N3 := {_, State = #{cluster := Config}, _}} =
+        init_servers([N1, N2, N3], {module, ra_queue, #{}}),
+    LastTerm = 1, % snapshot term
+    Term = 2, % leader term
+    Idx = 3,
+    ISRpcInit = #install_snapshot_rpc{term = Term, leader_id = N1,
+                                  meta = snap_meta(Idx, LastTerm, Config),
+                                  chunk_state = {0, init},
+                                  data = []},
+    %% the init message starts the process
+    {receive_snapshot, State1,
+     [{next_event, ISRpc}, {record_leader_msg, _}]} =
+        ra_server:handle_follower(ISRpcInit, State#{current_term => Term}),
+
+    %% actually process init message in the correct state
+    {receive_snapshot, State2, [{reply, _}]} =
+        ra_server:handle_receive_snapshot(ISRpc, State1),
+
+    %% now send a pre message
+    ISRpcPre = ISRpcInit#install_snapshot_rpc{chunk_state = {0, pre},
+                                           data = [{2, 1, <<"e1">>}]},
+    {receive_snapshot, State3, [{reply, _}]} =
+        ra_server:handle_receive_snapshot(ISRpcPre, State2),
+
+    %% test that init returns to follower and retries
+    {follower, State3b, [{next_event, ISRpcInit}]} =
+        ra_server:handle_receive_snapshot(ISRpcInit, State3),
+    ?assertNot(maps:is_key(snapshot_phase, State3b)),
+
+    meck:expect(ra_snapshot, complete_accept,
+                fun (Mac, _, _, S) ->
+                        {S, Mac, [], []}
+                end),
+
+    %% finally process the actual snapshot
+    ISRpc1 = ISRpc#install_snapshot_rpc{chunk_state = {1, last},
+                                        data = [2]},
+    {follower, #{current_term := Term,
+                 commit_index := Idx,
+                 last_applied := Idx,
+                 cluster := Config,
+                 machine_state := [2],
+                 leader_id := N1} = _State,
+     [{reply, #install_snapshot_result{}}]} =
+        ra_server:handle_receive_snapshot(ISRpc1, State3),
     ok.
 
 follower_ignores_installs_snapshot_with_higher_machine_version(_Config) ->
