@@ -526,7 +526,7 @@ handle_msg({append, {UId, Pid} = Id, MtTid, ExpectedPrevIdx, Idx, Term, Entry},
         {in_seq, PrevIdx} ->
             % writer was in seq but has sent an out of seq entry
             % notify writer
-            ?DEBUG("WAL in ~ts: requesting resend from `~w`, "
+            ?DEBUG("WAL in ~ts: requesting resend for `~s`, "
                    "last idx ~b idx received (~b,~b)",
                    [Conf#conf.system, UId, PrevIdx, ExpectedPrevIdx, Idx]),
             Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},

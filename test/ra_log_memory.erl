@@ -10,6 +10,7 @@
          close/1,
          append/2,
          write/2,
+         write_sparse/3,
          take/3,
          fold/5,
          last_index_term/1,
@@ -94,7 +95,7 @@ write([{FirstIdx, _, _} | _] = Entries,
                                            {Acc#{Idx => {Term, Data}}, Idx}
                                    end, {Log1, FirstIdx}, Entries),
     {ok, State#state{last_index = LastInIdx,
-                          entries = Log}};
+                     entries = Log}};
 write([{FirstIdx, _, _} | _] = Entries,
       #state{snapshot = {#{index := SnapIdx}, _}, entries = Log0} = State)
  when SnapIdx + 1 =:= FirstIdx ->
@@ -106,6 +107,12 @@ write([{FirstIdx, _, _} | _] = Entries,
 write(_Entries, _State) ->
     {error, {integrity_error, undefined}}.
 
+write_sparse({Idx, Term, Data}, PrevIdx, #state{last_index = PrevIdx,
+                                                entries = Log0} = State) ->
+    {ok, State#state{last_index = Idx,
+                     entries = Log0#{Idx => {Term, Data}}}};
+write_sparse(_, _, _) ->
+    {error, gap_detected}.
 
 take(Start, Num, #state{last_index = LastIdx, entries = Log} = State) ->
     Entries = sparse_take(Start, Log, Num, LastIdx, []),

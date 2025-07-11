@@ -1943,6 +1943,7 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                                        [To, [last_applied]]),
             RPC = #install_snapshot_rpc{term = Term,
                                         leader_id = Id,
+                                        chunk_state = {0, init},
                                         meta = Meta},
             case ra_snapshot:indexes(
                    ra_snapshot:current_snapshot_dir(SnapState)) of
@@ -1951,6 +1952,9 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                     Indexes = ra_seq:floor(LastApplied + 1, Indexes0),
                     ?DEBUG("~ts: sending live indexes ~w to ~w ",
                            [LogId, ra_seq:range(Indexes), To]),
+                    %% first send the init phase
+                    _Res0 = gen_statem:call(To, RPC,
+                                            {dirty_timeout, InstallTimeout}),
                     %% there are live indexes to send before the snapshot
                     %% TODO: write ra_seq:list_chunk function to avoid expansion
                     Idxs = lists:reverse(ra_seq:expand(Indexes)),
@@ -1962,7 +1966,7 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                      RPC1 = RPC#install_snapshot_rpc{chunk_state = {0, pre},
                                                                      data = Ents},
                                      _Res1 = gen_statem:call(To, RPC1,
-                                                            {dirty_timeout, InstallTimeout}),
+                                                             {dirty_timeout, InstallTimeout}),
                                      %% TODO: assert Res1 is successful
                                      F
                              end, undefined, ra_lib:lists_chunk(16, Idxs)),
