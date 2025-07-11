@@ -99,7 +99,8 @@
       queries_waiting_heartbeats := queue:queue({non_neg_integer(),
                                                  consistent_query_ref()}),
       pending_consistent_queries := [consistent_query_ref()],
-      commit_latency => option(non_neg_integer())
+      commit_latency => option(non_neg_integer()),
+      snapshot_phase => chunk_flag()
      }.
 
 -type state() :: ra_server_state().
@@ -1447,11 +1448,12 @@ handle_follower(#install_snapshot_rpc{term = Term,
        SnapIdx > LastApplied andalso
        %% only install snapshot if the machine version is understood
        MacVer >= SnapMacVer andalso
-       Num =< 1 ->
+       Num =< 1 andalso
+       ChunkFlag /= pre ->
     %% only begin snapshot procedure if Idx is higher than the last_applied
     %% index.
-    ?DEBUG("~ts: begin_accept snapshot at index ~b in term ~b",
-           [LogId, SnapIdx, Term]),
+    ?DEBUG("~ts: begin_accept snapshot at index ~b in term ~b, phase ~s",
+           [LogId, SnapIdx, Term, ChunkFlag]),
     SnapState0 = ra_log:snapshot_state(Log0),
     {ok, SS} = ra_snapshot:begin_accept(Meta, SnapState0),
     Log1 = ra_log:set_snapshot_state(SS, Log0),
@@ -1459,13 +1461,14 @@ handle_follower(#install_snapshot_rpc{term = Term,
     %% if the snaphost includes pre entries (live entries) then we need
     %% to reset the log to the last applied index to avoid issues
     Log = case ChunkFlag of
-              pre ->
+              init ->
                   {ok, L} = ra_log:set_last_index(LastApplied, Log1),
                   L;
               _ ->
                   Log1
           end,
     {receive_snapshot, update_term(Term, State0#{log => Log,
+                                                 snapshot_phase => ChunkFlag,
                                                  leader_id => LeaderId}),
      [{next_event, Rpc}, {record_leader_msg, LeaderId}]};
 handle_follower(#install_snapshot_rpc{term = Term,
@@ -1540,7 +1543,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                                        cluster := ClusterIds,
                                                        term := SnapTerm} = SnapMeta,
                                               chunk_state = {Num, ChunkFlag},
-                                              data = ChunkOrEntries},
+                                              data = ChunkOrEntries} = Rpc,
                         #{cfg := #cfg{id = Id,
                                       log_id = LogId,
                                       effective_machine_version = CurEffMacVer,
@@ -1550,15 +1553,33 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                           cluster := Cluster,
                           current_term := CurTerm,
                           last_applied := LastApplied,
-                          machine_state := OldMacState} = State0)
+                          machine_state := OldMacState,
+                          snapshot_phase := SnapPhase} = State0)
   when Term >= CurTerm ->
-    ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
-           [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = SnapTerm,
                                      last_index = SnapIndex},
     case ChunkFlag of
+        init when SnapPhase == init ->
+            %% this is ok, just reply
+            {receive_snapshot, State0, [{reply, Reply}]};
+        init  ->
+            ?DEBUG("~ts: receiving snapshot saw unexpected init phase at snapshot"
+                   " index term {~b, ~b}, current phase ~s restarting
+                   snapshot receive process",
+                   [LogId, SnapIndex, SnapTerm, SnapPhase]),
+            %% the snapshot sending must have been interrupted and restarted
+            %% during the init or pre-phase
+            %% abort the snapshot, and revert to follower
+            SnapState0 = ra_log:snapshot_state(Log00),
+            SnapState = ra_snapshot:abort_accept(SnapState0),
+            Log = ra_log:set_snapshot_state(SnapState, Log00),
+            {follower, maps:remove(snapshot_phase, State0#{log => Log}),
+             [{next_event, Rpc}]};
         pre when is_list(ChunkOrEntries) ->
+            [{_FstIdx, _, _} | _] = ChunkOrEntries,
+            % ?DEBUG("~ts: receiving snapshot chunk pre first index ~b snap index ~b, term ~b",
+            %        [LogId, FstIdx, SnapIndex, SnapTerm]),
             %% reset last index to last applied
             %% as we dont know for sure indexes after last applied
             %% are of the right term
@@ -1568,15 +1589,21 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                {ok, L} = ra_log:write_sparse(E, LstIdx, L0),
                                {L, I}
                        end, {Log00, LastIdx}, ChunkOrEntries),
-            State = update_term(Term, State0#{log => Log}),
+            State = update_term(Term, State0#{log => Log,
+                                              snapshot_phase => pre}),
             {receive_snapshot, State, [{reply, Reply}]};
         next ->
+            ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
+                   [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
             SnapState0 = ra_log:snapshot_state(Log00),
             SnapState = ra_snapshot:accept_chunk(ChunkOrEntries, Num, SnapState0),
             Log0 = ra_log:set_snapshot_state(SnapState, Log00),
-            State = update_term(Term, State0#{log => Log0}),
+            State = update_term(Term, State0#{log => Log0,
+                                              snapshot_phase => next}),
             {receive_snapshot, State, [{reply, Reply}]};
         last ->
+            ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
+                   [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
             SnapState0 = ra_log:snapshot_state(Log00),
             {SnapState, MacState, LiveIndexes, Effs0} =
                 ra_snapshot:complete_accept(ChunkOrEntries, Num, Machine,
@@ -1614,7 +1641,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                                               MacState,
                                                               OldMeta,
                                                               OldMacState),
-            State = update_term(Term,
+            State1 = update_term(Term,
                                 State0#{cfg => Cfg,
                                         log => Log,
                                         commit_index => SnapIndex,
@@ -1626,6 +1653,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                         membership =>
                                             get_membership(ClusterIds, State0),
                                         machine_state => MacState}),
+            State = maps:remove(snapshot_phase, State1),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapIndex),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
@@ -1645,13 +1673,15 @@ handle_receive_snapshot(#append_entries_rpc{term = Term} = Msg,
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:abort_accept(SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, update_term(Term, clear_leader_id(State#{log => Log})),
+    {follower, maps:remove(snapshot_phase,
+                           update_term(Term,
+                                       clear_leader_id(State#{log => Log}))),
      [{next_event, Msg}]};
 handle_receive_snapshot({ra_log_event, Evt},
-                        #{cfg := #cfg{log_id = LogId},
+                        #{cfg := #cfg{log_id = _LogId},
                           log := Log0} = State) ->
-    ?DEBUG("~ts: ~s ra_log_event received: ~w",
-          [LogId, ?FUNCTION_NAME, Evt]),
+    % ?DEBUG("~ts: ~s ra_log_event received: ~w",
+    %       [LogId, ?FUNCTION_NAME, Evt]),
     % simply forward all other events to ra_log
     % whilst the snapshot is being received
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
@@ -1664,7 +1694,7 @@ handle_receive_snapshot(receive_snapshot_timeout,
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:abort_accept(SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, State#{log => Log}, []};
+    {follower, maps:remove(snapshot_phase, State#{log => Log}), []};
 handle_receive_snapshot(#info_rpc{term = Term} = Msg,
                         #{current_term := CurTerm,
                           cfg := #cfg{log_id = LogId},
@@ -1677,7 +1707,8 @@ handle_receive_snapshot(#info_rpc{term = Term} = Msg,
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:abort_accept(SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, update_term(Term, clear_leader_id(State#{log => Log})),
+    {follower, maps:remove(snapshot_phase,
+                           update_term(Term, clear_leader_id(State#{log => Log}))),
      [{next_event, Msg}]};
 handle_receive_snapshot(#info_rpc{} = InfoRpc, State) ->
     InfoReplyEffect = empty_info_reply_effect(State, InfoRpc),
@@ -1694,7 +1725,8 @@ handle_receive_snapshot(#info_reply{term = Term} = Msg,
     SnapState0 = ra_log:snapshot_state(Log0),
     SnapState = ra_snapshot:abort_accept(SnapState0),
     Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, update_term(Term, clear_leader_id(State#{log => Log})),
+    {follower, maps:remove(snapshot_phase,
+                           update_term(Term, clear_leader_id(State#{log => Log}))),
      [{next_event, Msg}]};
 handle_receive_snapshot(#info_reply{}, State) ->
     {receive_snapshot, State, []};
