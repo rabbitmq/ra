@@ -2312,7 +2312,7 @@ follower_installs_snapshot_with_pre(_Config) ->
 
     %% now send a pre message
     ISRpcPre = ISRpcInit#install_snapshot_rpc{chunk_state = {0, pre},
-                                           data = [{2, 1, <<"e1">>}]},
+                                              data = [{2, 1, <<"e1">>}]},
     {receive_snapshot, State3, [{reply, _}]} =
         ra_server:handle_receive_snapshot(ISRpcPre, State2),
 

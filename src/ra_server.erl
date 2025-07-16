@@ -1640,17 +1640,18 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                                               OldMeta,
                                                               OldMacState),
             State1 = update_term(Term,
-                                State0#{cfg => Cfg,
-                                        log => Log,
-                                        commit_index => SnapIndex,
-                                        last_applied => SnapIndex,
-                                        %% this may not be the actual cluster index
-                                        cluster_index_term => {SnapIndex,
-                                                               SnapTerm},
-                                        cluster => make_cluster(Id, ClusterIds),
-                                        membership =>
-                                            get_membership(ClusterIds, State0),
-                                        machine_state => MacState}),
+                                 State0#{cfg => Cfg,
+                                         log => Log,
+                                         commit_index => SnapIndex,
+                                         last_applied => SnapIndex,
+                                         %% this may not be the actual
+                                         %% cluster index
+                                         cluster_index_term => {SnapIndex,
+                                                                SnapTerm},
+                                         cluster => make_cluster(Id, ClusterIds),
+                                         membership =>
+                                             get_membership(ClusterIds, State0),
+                                         machine_state => MacState}),
             State = maps:remove(snapshot_phase, State1),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapIndex),
             %% it was the last snapshot chunk so we can revert back to

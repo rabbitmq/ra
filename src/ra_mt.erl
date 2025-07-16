@@ -390,6 +390,12 @@ info(#?MODULE{tid = Tid,
       size => ets:info(Tid, size),
       name => ets:info(Tid, name),
       range => range(State),
+      previous => case Prev of
+                      undefined ->
+                          undefined;
+                      _ ->
+                          info(Prev)
+                  end,
       has_previous => Prev =/= undefined
      }.
 

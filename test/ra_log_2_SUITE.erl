@@ -1362,7 +1362,6 @@ snapshot_installation_with_live_indexes(Config) ->
                                      LW = ra_log:last_written(L),
                                      {9, 2} == LW
                              end),
-
     Log2 = Log1,
 
     %% create snapshot chunk
@@ -1373,10 +1372,10 @@ snapshot_installation_with_live_indexes(Config) ->
     Machine = {machine, ?MODULE, #{}},
 
     %% write  a sparse one
+    {ok, Log2b} = ra_log:write_sparse({14, 2, <<>>}, 9, Log2),
     {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
                                                                      SnapState1),
     run_effs(AEffs),
-    {ok, Log2b} = ra_log:write_sparse({14, 2, <<>>}, 9, Log2),
     {ok, Log3, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
                                                 ra_log:set_snapshot_state(SnapState, Log2b)),
 
@@ -1388,12 +1387,20 @@ snapshot_installation_with_live_indexes(Config) ->
     %% write the next index, bearning in mind the last index the WAL saw
     %% was 14
     {ok, Log4} = ra_log:write([{16, 2, <<>>}], Log3),
-    Log = assert_log_events(Log4,
-                             fun (L) ->
-                                     LW = ra_log:last_written(L),
-                                     {16, 2} == LW
-                             end),
+    Log5 = assert_log_events(Log4,
+                            fun (L) ->
+                                    LW = ra_log:last_written(L),
+                                    {16, 2} == LW
+                            end),
+    ct:pal("o ~p", [ra_log:overview(Log5)]),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    Log = assert_log_events(Log5,
+                            fun (L) ->
+                                    #{mem_table_range := R} = ra_log:overview(L),
+                                    R == undefined
+                            end),
     ct:pal("o ~p", [ra_log:overview(Log)]),
+    flush(),
     ok.
 
 snapshot_installation(Config) ->
