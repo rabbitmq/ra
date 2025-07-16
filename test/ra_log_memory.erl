@@ -295,7 +295,7 @@ write_meta_f(_Key, _Value, State) ->
 can_write(_Log) ->
     true.
 
-overview(Log) ->
+overview(#state{} = Log) ->
     #{type => ?MODULE,
       last_index => Log#state.last_index,
       last_written => Log#state.last_written,

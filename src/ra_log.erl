@@ -732,6 +732,7 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
                              mem_table = Mt0,
                              last_written_index_term = {LWIdx0, _}} = State0) ->
     Cur = ra_snapshot:current(SnapState),
+    %% TODO: can a log recover to the right reset point? I doubt it
     case fetch_term(Idx, State0) of
         {undefined, State} when element(1, Cur) =/= Idx ->
             %% not found and Idx isn't equal to latest snapshot index
@@ -745,7 +746,7 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, Idx),
             {ok, State#?MODULE{range = ra_range:limit(Idx + 1, Range),
                                last_term = SnapTerm,
-                                mem_table = Mt,
+                               mem_table = Mt,
                                last_written_index_term = Cur}};
         {Term, State1} ->
             LWIdx = min(Idx, LWIdx0),
@@ -859,14 +860,20 @@ handle_event({segments, TidRanges, NewSegs},
           end,
     {State, [{bg_work, Fun, fun (_Err) -> ok end}]};
 handle_event({compaction_result, Result},
-             #?MODULE{reader = Reader0} = State) ->
+             #?MODULE{cfg = #cfg{log_id = LogId},
+                      reader = Reader0} = State) ->
+            ?DEBUG("~ts: compaction result ~p", [LogId, Result]),
     {Reader, Effs} = ra_log_segments:handle_compaction_result(Result, Reader0),
     {State#?MODULE{reader = Reader}, Effs};
-handle_event(major_compaction, #?MODULE{reader = Reader0,
+handle_event(major_compaction, #?MODULE{cfg = #cfg{log_id = LogId},
+                                        reader = Reader0,
                                         live_indexes = LiveIndexes,
                                         snapshot_state = SS} = State) ->
     case ra_snapshot:current(SS) of
         {SnapIdx, _} ->
+            ?DEBUG("~ts: ra_log: major_compaction requested at snapshot index ~b, "
+                   "~b live indexes",
+                   [LogId, SnapIdx, ra_seq:length(LiveIndexes)]),
             {Reader, Effs} = ra_log_segments:schedule_compaction(major, SnapIdx,
                                                                  LiveIndexes, Reader0),
             {State#?MODULE{reader = Reader}, Effs};
@@ -941,8 +948,8 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
                                    current_snapshot = Snap,
                                    snapshot_state = SnapState},
             {Reader, CompEffs} = ra_log_segments:schedule_compaction(minor, SnapIdx,
-                                                                    LiveIndexes,
-                                                                    State#?MODULE.reader),
+                                                                     LiveIndexes,
+                                                                     State#?MODULE.reader),
             Effects = CompEffs ++ Effects0,
             {State#?MODULE{reader = Reader}, Effects};
         checkpoint ->

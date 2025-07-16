@@ -181,6 +181,8 @@ start_single_peer_node(NodeId, Opts) ->
             erpc:call(NodeName, logger, set_primary_config, [level, warning]),
             erpc:call(NodeName, application, set_env, [sasl, sasl_error_logger, false]),
             erpc:call(NodeName, application, stop, [sasl]),
+            erpc:call(NodeName, application, set_env,
+                      [kernel, prevent_overlapping_partitions, false]),
             Dir = filename:join(BaseDir, NodeName),
             {ok, _} = erpc:call(NodeName, ra, start_in, [Dir]),
             % Set logger level to reduce verbosity on peer node

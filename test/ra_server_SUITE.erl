@@ -66,6 +66,7 @@ all() ->
      leader_receives_install_snapshot_rpc,
      follower_installs_snapshot,
      follower_installs_snapshot_with_pre,
+     follower_aborts_snapshot_with_pre,
      follower_ignores_installs_snapshot_with_higher_machine_version,
      follower_receives_stale_snapshot,
      follower_receives_snapshot_lower_than_last_applied,
@@ -184,6 +185,7 @@ setup_log() ->
                                       ra_log_memory:fold(A, B, C, D, E)
                               end),
     meck:expect(ra_log, release_resources, fun ra_log_memory:release_resources/3),
+    meck:expect(ra_log, overview, fun ra_log_memory:overview/1),
     meck:expect(ra_log, append_sync,
                 fun({Idx, Term, _} = E, L0) ->
                         L1 = ra_log_memory:append(E, L0),
@@ -2371,7 +2373,7 @@ follower_installs_snapshot_with_pre(_Config) ->
 
     %% now send a pre message
     ISRpcPre = ISRpcInit#install_snapshot_rpc{chunk_state = {0, pre},
-                                           data = [{2, 1, <<"e1">>}]},
+                                              data = [{2, 1, <<"e1">>}]},
     {receive_snapshot, State3, [{reply, _}]} =
         ra_server:handle_receive_snapshot(ISRpcPre, State2),
 
@@ -2396,6 +2398,42 @@ follower_installs_snapshot_with_pre(_Config) ->
                  leader_id := N1} = _State,
      [{reply, #install_snapshot_result{}}]} =
         ra_server:handle_receive_snapshot(ISRpc1, State3),
+    ok.
+
+follower_aborts_snapshot_with_pre(_Config) ->
+    N1 = ?N1, N2 = ?N2, N3 = ?N3,
+    #{N3 := {_, State = #{cluster := Config}, _}} =
+        init_servers([N1, N2, N3], {module, ra_queue, #{}}),
+    LastTerm = 1, % snapshot term
+    Term = 2, % leader term
+    Idx = 3,
+    ISRpcInit = #install_snapshot_rpc{term = Term, leader_id = N1,
+                                      meta = snap_meta(Idx, LastTerm, Config),
+                                      chunk_state = {0, init},
+                                      data = []},
+    %% the init message starts the process
+    {receive_snapshot, State1,
+     [{next_event, ISRpc}, {record_leader_msg, _}]} =
+        ra_server:handle_follower(ISRpcInit, State#{current_term => Term}),
+
+    %% actually process init message in the correct state
+    {receive_snapshot, State2, [{reply, _}]} =
+        ra_server:handle_receive_snapshot(ISRpc, State1),
+
+    %% now send a pre message
+    ISRpcPre = ISRpcInit#install_snapshot_rpc{chunk_state = {0, pre},
+                                              data = [{2, 1, <<"e1">>}]},
+    {receive_snapshot, State3, [{reply, _}]} =
+        ra_server:handle_receive_snapshot(ISRpcPre, State2),
+    ?assertMatch(#{log := #{last_index := 2}},
+                 ra_server:overview(State3)),
+
+    {follower, State3b, []} =
+        ra_server:handle_receive_snapshot(receive_snapshot_timeout, State3),
+    ?assertNot(maps:is_key(snapshot_phase, State3b)),
+    %% assert the aborted install reset the log
+    ?assertMatch(#{log := #{last_index := 0}},
+                 ra_server:overview(State3b)),
     ok.
 
 follower_ignores_installs_snapshot_with_higher_machine_version(_Config) ->
