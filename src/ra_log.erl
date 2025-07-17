@@ -732,6 +732,7 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
                              mem_table = Mt0,
                              last_written_index_term = {LWIdx0, _}} = State0) ->
     Cur = ra_snapshot:current(SnapState),
+    %% TODO: can a log recover to the right reset point? I doubt it
     case fetch_term(Idx, State0) of
         {undefined, State} when element(1, Cur) =/= Idx ->
             %% not found and Idx isn't equal to latest snapshot index
@@ -745,7 +746,7 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, Idx),
             {ok, State#?MODULE{range = ra_range:limit(Idx + 1, Range),
                                last_term = SnapTerm,
-                                mem_table = Mt,
+                               mem_table = Mt,
                                last_written_index_term = Cur}};
         {Term, State1} ->
             LWIdx = min(Idx, LWIdx0),
@@ -947,8 +948,8 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
                                    current_snapshot = Snap,
                                    snapshot_state = SnapState},
             {Reader, CompEffs} = ra_log_segments:schedule_compaction(minor, SnapIdx,
-                                                                    LiveIndexes,
-                                                                    State#?MODULE.reader),
+                                                                     LiveIndexes,
+                                                                     State#?MODULE.reader),
             Effects = CompEffs ++ Effects0,
             {State#?MODULE{reader = Reader}, Effects};
         checkpoint ->
@@ -1165,7 +1166,6 @@ assert(#?MODULE{cfg = #cfg{log_id = LogId},
                 current_snapshot = CurrSnap,
                 live_indexes = LiveIndexes
                } = State) ->
-    ra_log_segments:range/1
     %% TODO: remove this at some point?
     ?DEBUG("~ts: ra_log: asserting Range ~p Snapshot ~p",
            [LogId, Range, CurrSnap]),
