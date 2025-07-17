@@ -1236,7 +1236,8 @@ handle_follower(#append_entries_rpc{term = Term,
                                    " including ~b entries did not validate local log. "
                                    "Local last index ~b",
                                    [LogId, PLIdx, length(Entries0), LocalLastIdx]),
-                            {LVTerm, State} = fetch_term(LastValidatedIdx, State0),
+                            {LVTerm, State} = fetch_term(LastValidatedIdx,
+                                                         State0#{log => Log2}),
                             Reply = #append_entries_reply{term = CurTerm,
                                                           success = true,
                                                           next_index = LastValidatedIdx + 1,
@@ -1286,7 +1287,8 @@ handle_follower(#append_entries_rpc{term = Term,
                                    transition_to => follower}}},
              Effects};
         {term_mismatch, OtherTerm, Log0} ->
-            LastApplied = maps:get(last_applied, State00),
+            State1 = State0#{log => Log0},
+            LastApplied = maps:get(last_applied, State1),
             ?INFO("~ts: term mismatch - follower had entry at ~b with term ~b "
                   "but not with term ~b. "
                   "Asking leader ~w to resend from ~b",
@@ -1301,11 +1303,10 @@ handle_follower(#append_entries_rpc{term = Term,
             % This _may_ overwrite some valid entries but is probably the
             % simplest and most reliable way to proceed
             {Reply, State} = mismatch_append_entries_reply(Term, LastApplied,
-                                                           State0),
+                                                           State1),
             Effects = [cast_reply(Id, LeaderId, Reply) | Effects0],
             {await_condition,
-             State#{log => Log0,
-                    condition =>
+             State#{condition =>
                     #{predicate_fun => follower_catchup_cond_fun(term_mismatch),
                       % repeat reply effect on condition timeout
                       timeout => #{effects => Effects,
