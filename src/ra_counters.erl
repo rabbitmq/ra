@@ -10,6 +10,7 @@
 -export([
          init/0,
          new/2,
+         new/3,
          fetch/1,
          overview/0,
          overview/1,
@@ -31,6 +32,11 @@ init() ->
     counters:counters_ref().
 new(Name, FieldsSpec) ->
     seshat:new(ra, Name, FieldsSpec).
+
+-spec new(name(), seshat:fields_spec(), seshat:labels_map()) ->
+    counters:counters_ref().
+new(Name, FieldsSpec, MetricLabels) ->
+    seshat:new(ra, Name, FieldsSpec, MetricLabels).
 
 -spec fetch(name()) -> undefined | counters:counters_ref().
 fetch(Name) ->

@@ -403,7 +403,7 @@
           "The last index of the log."},
          {last_written_index, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, counter,
           "The last fully written and fsynced index of the log."},
-         {commit_latency, ?C_RA_SVR_METRIC_COMMIT_LATENCY, gauge,
+         {commit_latency, ?C_RA_SVR_METRIC_COMMIT_LATENCY, {gauge, time_ms},
           "Approximate time taken from an entry being written to the log until it is committed."},
          {term, ?C_RA_SVR_METRIC_TERM, counter, "The current term."},
          {checkpoint_index, ?C_RA_SVR_METRIC_CHECKPOINT_INDEX, counter,

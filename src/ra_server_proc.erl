@@ -328,9 +328,10 @@ do_init(#{id := Id,
     Key = ra_lib:ra_server_id_to_local_name(Id),
     true = ets:insert(ra_state, {Key, init, unknown}),
     process_flag(trap_exit, true),
+    MetricLabels = maps:get(metrics_labels, Config0, #{}),
     Config = #{counter := Counter,
                system_config := #{names := Names} = SysConf} =
-        maps:merge(config_defaults(Id), Config0),
+        maps:merge(config_defaults(Id, MetricLabels), Config0),
     MsgQData = maps:get(message_queue_data, SysConf, off_heap),
     MinBinVheapSize = maps:get(server_min_bin_vheap_size, SysConf,
                                ?MIN_BIN_VHEAP_SIZE),
@@ -1857,11 +1858,11 @@ gen_statem_safe_call(ServerId, Msg, Timeout) ->
 do_state_query(QueryName, #state{server_state = State}) ->
     ra_server:state_query(QueryName, State).
 
-config_defaults(ServerId) ->
+config_defaults(ServerId, MetricLabels) ->
     Counter = case ra_counters:fetch(ServerId) of
                   undefined ->
                       ra_counters:new(ServerId,
-                                      {persistent_term, ?FIELDSPEC_KEY});
+                                      {persistent_term, ?FIELDSPEC_KEY}, MetricLabels);
                   C ->
                       C
               end,
