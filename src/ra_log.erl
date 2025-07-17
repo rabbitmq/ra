@@ -229,6 +229,7 @@ init(#{uid := UId,
     % this queries the segment writer and thus blocks until any
     % segments it is currently processed have been finished
     MtRange = ra_mt:range(Mt0),
+    ok = ra_log_segments:purge_dangling_symlinks(Dir),
     SegRefs = my_segrefs(UId, SegWriter),
     SegmentMaxCount = maps:get(segment_max_entries, Conf, ?SEGMENT_MAX_ENTRIES),
     SegmentMaxSize = maps:get(segment_max_size_bytes, Conf, ?SEGMENT_MAX_SIZE_B),
@@ -838,7 +839,6 @@ handle_event({segments, TidRanges, NewSegs},
 
     %% it is theoretically possible that the segment writer flush _could_
     %% over take WAL notifications
-    %%
     FstPend = ra_seq:first(Pend0),
     Pend = case ra_mt:range(Mt) of
                {Start, _End} when Start > FstPend ->
@@ -1372,7 +1372,7 @@ release_resources(MaxOpenSegments, AccessPattern,
 %% only used by resend to wal functionality and doesn't update the mem table
 wal_rewrite(#?MODULE{cfg = #cfg{uid = UId,
                                 wal = Wal} = Cfg,
-                     last_wal_write = {_, _, _LastWalIdx}} = State,
+                     last_wal_write = {_, _, _}} = State,
             Tid, {Idx, Term, Cmd}) ->
     case ra_log_wal:write(Wal, {UId, self()}, Tid, Idx, Term, Cmd) of
         {ok, Pid} ->
