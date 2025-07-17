@@ -939,6 +939,14 @@ receive_snapshot(EventType, {aux_command, Cmd}, State0) ->
         ?HANDLE_EFFECTS(Effects, EventType,
                         State0#state{server_state = ServerState}),
     {keep_state, State, Actions};
+receive_snapshot(info, {'DOWN', MRef, process, _Pid, _Info},
+         #state{leader_monitor = MRef} = State) ->
+    %% leader is down
+    ?INFO("~ts: receive_snapshot - Leader monitor down. Aborting snapshot receive. "
+          "Entering follower state.",
+          [log_id(State)]),
+    receive_snapshot(info, receive_snapshot_timeout,
+                     State#state{leader_monitor = undefined});
 receive_snapshot(EventType, Msg, State0) ->
     case handle_receive_snapshot(Msg, State0) of
         {receive_snapshot, State1, Effects} ->

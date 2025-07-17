@@ -1381,7 +1381,6 @@ snapshot_installation_with_live_indexes(Config) ->
 
 
     run_effs(Effs4),
-    ct:pal("o ~p", [ra_log:overview(Log3)]),
     {15, _} = ra_log:last_index_term(Log3),
     {15, _} = ra_log:last_written(Log3),
     %% write the next index, bearning in mind the last index the WAL saw
@@ -1392,7 +1391,6 @@ snapshot_installation_with_live_indexes(Config) ->
                                     LW = ra_log:last_written(L),
                                     {16, 2} == LW
                             end),
-    ct:pal("o ~p", [ra_log:overview(Log5)]),
     ra_log_wal:force_roll_over(ra_log_wal),
     Log = assert_log_events(Log5,
                             fun (L) ->
@@ -1400,7 +1398,15 @@ snapshot_installation_with_live_indexes(Config) ->
                                     R == undefined
                             end),
     ct:pal("o ~p", [ra_log:overview(Log)]),
+    UId = ?config(uid, Config),
+    ?assertEqual(LiveIndexes, ra_log_snapshot_state:live_indexes(
+                                ra_log_snapshot_state, UId)),
+    ra_log:close(Log),
     flush(),
+    _LogAfter = ra_log_init(Config),
+    %% validate recovery recovers the live indexes correctly
+    ?assertEqual(LiveIndexes, ra_log_snapshot_state:live_indexes(
+                                ra_log_snapshot_state, UId)),
     ok.
 
 snapshot_installation(Config) ->

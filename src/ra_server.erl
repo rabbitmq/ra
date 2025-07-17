@@ -1569,11 +1569,8 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             %% the snapshot sending must have been interrupted and restarted
             %% during the init or pre-phase
             %% abort the snapshot, and revert to follower
-            SnapState0 = ra_log:snapshot_state(Log00),
-            SnapState = ra_snapshot:abort_accept(SnapState0),
-            Log = ra_log:set_snapshot_state(SnapState, Log00),
-            {follower, maps:remove(snapshot_phase, State0#{log => Log}),
-             [{next_event, Rpc}]};
+            State = abort_receive(State0),
+            {follower, State, [{next_event, Rpc}]};
         pre when is_list(ChunkOrEntries) ->
             [{_FstIdx, _, _} | _] = ChunkOrEntries,
             % ?DEBUG("~ts: receiving snapshot chunk pre first index ~b snap index ~b, term ~b",
@@ -1662,71 +1659,50 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
     end;
 handle_receive_snapshot(#append_entries_rpc{term = Term} = Msg,
                         #{current_term := CurTerm,
-                          cfg := #cfg{log_id = LogId},
-                          log := Log0} = State)
+                          cfg := #cfg{log_id = LogId}} = State0)
   when Term > CurTerm ->
     ?INFO("~ts: follower receiving snapshot saw append_entries_rpc from ~w for term ~b "
           "abdicates term: ~b!",
           [LogId, Msg#append_entries_rpc.leader_id,
            Term, CurTerm]),
-    SnapState0 = ra_log:snapshot_state(Log0),
-    SnapState = ra_snapshot:abort_accept(SnapState0),
-    Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, maps:remove(snapshot_phase,
-                           update_term(Term,
-                                       clear_leader_id(State#{log => Log}))),
-     [{next_event, Msg}]};
+    State = abort_receive(State0),
+    {follower, update_term(Term, State), [{next_event, Msg}]};
 handle_receive_snapshot({ra_log_event, Evt},
                         #{cfg := #cfg{log_id = _LogId},
                           log := Log0} = State) ->
-    % ?DEBUG("~ts: ~s ra_log_event received: ~w",
-    %       [LogId, ?FUNCTION_NAME, Evt]),
     % simply forward all other events to ra_log
     % whilst the snapshot is being received
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {receive_snapshot, State#{log => Log}, Effects};
 handle_receive_snapshot(receive_snapshot_timeout,
-                        #{cfg := #cfg{log_id = LogId},
-                          log := Log0} = State) ->
+                        #{cfg := #cfg{log_id = LogId}} = State0) ->
     ?INFO("~ts: ~s receive snapshot timed out.",
           [LogId, ?FUNCTION_NAME]),
-    SnapState0 = ra_log:snapshot_state(Log0),
-    SnapState = ra_snapshot:abort_accept(SnapState0),
-    Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, maps:remove(snapshot_phase, State#{log => Log}), []};
+    State = abort_receive(State0),
+    {follower, State, []};
 handle_receive_snapshot(#info_rpc{term = Term} = Msg,
                         #{current_term := CurTerm,
-                          cfg := #cfg{log_id = LogId},
-                          log := Log0} = State)
+                          cfg := #cfg{log_id = LogId}} = State0)
   when CurTerm < Term ->
     ?INFO("~ts: follower receiving snapshot saw info_rpc from ~w for term ~b "
-          "abdicates term: ~b!",
+          "current term: ~b!",
           [LogId, Msg#info_rpc.from,
            Term, CurTerm]),
-    SnapState0 = ra_log:snapshot_state(Log0),
-    SnapState = ra_snapshot:abort_accept(SnapState0),
-    Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, maps:remove(snapshot_phase,
-                           update_term(Term, clear_leader_id(State#{log => Log}))),
-     [{next_event, Msg}]};
+    State = abort_receive(State0),
+    {follower, update_term(Term, State), [{next_event, Msg}]};
 handle_receive_snapshot(#info_rpc{} = InfoRpc, State) ->
     InfoReplyEffect = empty_info_reply_effect(State, InfoRpc),
     {receive_snapshot, State, [InfoReplyEffect]};
 handle_receive_snapshot(#info_reply{term = Term} = Msg,
                         #{current_term := CurTerm,
-                          cfg := #cfg{log_id = LogId},
-                          log := Log0} = State)
+                          cfg := #cfg{log_id = LogId}} = State0)
   when CurTerm < Term ->
     ?INFO("~ts: follower receiving snapshot saw info_reply from ~w for term ~b "
           "abdicates term: ~b!",
           [LogId, Msg#info_reply.from,
            Term, CurTerm]),
-    SnapState0 = ra_log:snapshot_state(Log0),
-    SnapState = ra_snapshot:abort_accept(SnapState0),
-    Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, maps:remove(snapshot_phase,
-                           update_term(Term, clear_leader_id(State#{log => Log}))),
-     [{next_event, Msg}]};
+    State = abort_receive(State0),
+    {follower, update_term(Term, State), [{next_event, Msg}]};
 handle_receive_snapshot(#info_reply{}, State) ->
     {receive_snapshot, State, []};
 handle_receive_snapshot(Msg, State) ->
@@ -1734,6 +1710,21 @@ handle_receive_snapshot(Msg, State) ->
     %% drop all other events??
     %% TODO: work out what else to handle
     {receive_snapshot, State, [{reply, {error, {unsupported_call, Msg}}}]}.
+
+abort_receive(#{snapshot_phase := Phase,
+                last_applied := LastApplied,
+                log := Log0} = State) ->
+    SnapState0 = ra_log:snapshot_state(Log0),
+    SnapState = ra_snapshot:abort_accept(SnapState0),
+    Log1 = ra_log:set_snapshot_state(SnapState, Log0),
+    Log = case Phase of
+              pre ->
+                  {ok, Log2} = ra_log:set_last_index(LastApplied, Log1),
+                  Log2;
+              _ ->
+                  Log1
+          end,
+    clear_leader_id(maps:remove(snapshot_phase, State#{log => Log})).
 
 -spec handle_await_condition(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.

@@ -204,9 +204,18 @@ find_snapshots(#?MODULE{uid = UId,
             State;
         Current0 ->
             Current = filename:join(SnapshotsDir, Current0),
-            {ok, #{index := Idx, term := Term}} = Module:read_meta(Current),
-            %% TODO: recover live indexes and record that
-            ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, Idx+1, []),
+            {ok, #{index := Idx,
+                   term := Term}} = Module:read_meta(Current),
+            %% recover live indexes and record that
+            {ok, Indexes} = indexes(Current),
+            SmallestLiveIdx = case ra_seq:first(Indexes) of
+                                  undefined ->
+                                      Idx+1;
+                                  First ->
+                                      First
+                              end,
+            ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, SmallestLiveIdx,
+                                              Indexes),
 
             ok = delete_snapshots(SnapshotsDir, lists:delete(Current0, Snaps)),
             %% delete old snapshots if any
@@ -494,7 +503,7 @@ complete_snapshot({Idx, _} = IdxTerm, snapshot, LiveIndexes,
                       I ->
                           I
                   end,
-    %% TODO live indexes
+    %% live indexes
     ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, SmallestIdx,
                                       LiveIndexes),
     State#?MODULE{pending = undefined,
