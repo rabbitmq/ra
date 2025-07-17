@@ -48,11 +48,11 @@ delete(Name) ->
 
 -spec overview() -> #{name() => #{atom() => non_neg_integer()}}.
 overview() ->
-    seshat:overview(ra).
+    seshat:counters(ra).
 
--spec overview(name()) -> #{atom() => non_neg_integer()}.
+-spec overview(name()) -> #{atom() => non_neg_integer()} | undefined.
 overview(Name) ->
-    seshat:overview(ra, Name).
+    seshat:counters(ra, Name).
 
 -spec counters(name(), [atom()]) ->
     #{atom() => non_neg_integer()} | undefined.
