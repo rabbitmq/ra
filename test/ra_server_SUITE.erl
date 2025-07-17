@@ -2548,6 +2548,7 @@ leader_received_append_entries_reply_with_stale_last_index(_Config) ->
                uid = <<"n1">>,
                log_id = <<"n1">>,
                metrics_key = n1,
+               metrics_labels = #{},
                machine = {machine, ra_machine_simple,
                             #{simple_fun => ?MACFUN,
                               initial_state => <<>>}}, % just keep last applied value
@@ -2606,6 +2607,7 @@ leader_receives_install_snapshot_result(_Config) ->
                uid = <<"n1">>,
                log_id = <<"n1">>,
                metrics_key = n1,
+               metrics_labels = #{},
                machine = {machine, ?FUNCTION_NAME, #{}},
                machine_version = 0,
                machine_versions = [{0, 0}],
@@ -3273,6 +3275,7 @@ base_state(NumServers, MacMod) ->
                uid = <<"n1">>,
                log_id = <<"n1">>,
                metrics_key = n1,
+               metrics_labels = #{},
                machine = {machine, MacMod, #{}}, % just keep last applied value
                machine_version = 0,
                machine_versions = [{0, 0}],
