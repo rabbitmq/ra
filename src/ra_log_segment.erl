@@ -495,13 +495,13 @@ info(Filename, Live0)
   when not is_tuple(Filename) ->
     %% TODO: this can be much optimised by a specialised index parsing
     %% function
+    {ok, #file_info{type = Type,
+                    links = Links,
+                    ctime = CTime}} = prim_file:read_link_info(Filename,
+                                                               [raw, {time, posix}]),
+
     {ok, Seg} = open(Filename, #{mode => read}),
     Index = Seg#state.index,
-    {ok, #file_info{type = T,
-                    links = Links,
-                    ctime = CTime}} = file:read_link_info(Filename,
-                                                          [raw, {time, posix}]),
-
     AllIndexesSeq = ra_seq:from_list(maps:keys(Index)),
     Live = case Live0 of
                undefined ->
@@ -515,7 +515,7 @@ info(Filename, Live0)
                            end, 0, Live),
     Info = #{size => Seg#state.data_write_offset,
              index_size => Seg#state.data_start,
-             file_type => T,
+             file_type => Type,
              links => Links,
              ctime => CTime,
              max_count => max_count(Seg),

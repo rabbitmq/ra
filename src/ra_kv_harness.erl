@@ -531,6 +531,9 @@ execute_operation(State, {kill_member}) ->
 
             Pid = erpc:call(NodeName, erlang, whereis, [?CLUSTER_NAME]),
             erpc:call(NodeName, erlang, exit, [Pid, kill]),
+            %% give it a bit of time after a kill in case this member is chosen
+            %% for the next operation
+            timer:sleep(100),
             State#{operations_count => OpCount + 1,
                    successful_ops => SuccessOps + 1}
     end.

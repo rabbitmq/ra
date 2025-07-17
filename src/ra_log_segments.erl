@@ -29,6 +29,7 @@
          fetch_term/2,
          info/1,
          purge_symlinks/2,
+         purge_dangling_symlinks/1,
          compaction_conf/1
          ]).
 
@@ -394,7 +395,7 @@ purge_symlinks(Dir, OlderThanSec) ->
     Now = erlang:system_time(second),
     [begin
          Fn = filename:join(Dir, F),
-         case file:read_link_info(Fn, [raw, {time, posix}]) of
+         case prim_file:read_link_info(Fn, [raw, {time, posix}]) of
              {ok, #file_info{type = symlink,
                              ctime = Time}}
                when Now - Time > OlderThanSec ->
@@ -406,6 +407,24 @@ purge_symlinks(Dir, OlderThanSec) ->
      end || F <- list_files(Dir, ".segment")],
     ok.
 
+-spec purge_dangling_symlinks(file:filename_all()) -> ok.
+purge_dangling_symlinks(Dir) ->
+    [begin
+         Fn = filename:join(Dir, F),
+         case file:read_link_info(Fn, [raw]) of
+             {ok, #file_info{type = symlink}} ->
+                 case file:open(Fn, [raw, read, binary]) of
+                     {ok, Fd} ->
+                         ok = file:close(Fd);
+                     {error, enoent} ->
+                         %% dangling symlink
+                         ok = prim_file:delete(Fn)
+                 end;
+             _ ->
+                 ok
+         end
+     end || F <- list_files(Dir, ".segment")],
+    ok.
 %% LOCAL
 
 segment_read_plan(_SegRefs, [], Acc) ->
