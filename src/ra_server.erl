@@ -444,11 +444,11 @@ recover(#{cfg := #cfg{log_id = LogId,
     {#{log := Log0,
        cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State1, _} =
         apply_to(CommitIndex,
-                 fun({Idx, _, _} = E, S0) ->
+                 fun({_Idx, _, _} = E, S0) ->
                          %% Clear out the effects and notifies map
                          %% to avoid memory explosion
                          {Mod, LastAppl, S, MacSt, _E, _N, LastTs} = apply_with(E, S0),
-                         put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, Idx),
+                         put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, LastAppl),
                          {Mod, LastAppl, S, MacSt, [], #{}, LastTs}
                  end,
                  State0, []),
@@ -612,12 +612,12 @@ handle_leader({command, Cmd}, #{cfg := #cfg{id = Self,
             State = State0#{condition =>
                             #{predicate_fun => fun wal_down_condition/2,
                               transition_to => leader,
-                              %% TODO: make duration configurable?
                               timeout => #{duration => 5000,
                                            effects => CondEffs,
                                            transition_to => leader}}},
 
-            {await_condition, State, Effects0};
+            Effects = append_error_reply(Cmd, wal_down, Effects0),
+            {await_condition, State, Effects};
         {not_appended, Reason, State, Effects0} ->
             ?WARN("~ts command ~W NOT appended to log. Reason ~w",
                   [LogId, Cmd, 10, Reason]),
@@ -1582,10 +1582,13 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             %% are of the right term
             {LastIdx, _} = ra_log:last_index_term(Log00),
             {Log, _} = lists:foldl(
-                       fun ({I, _, _} = E, {L0, LstIdx}) ->
-                               {ok, L} = ra_log:write_sparse(E, LstIdx, L0),
-                               {L, I}
-                       end, {Log00, LastIdx}, ChunkOrEntries),
+                         fun ({I, _, _} = E, {L0, LstIdx}) when I > LastApplied ->
+                                 {ok, L} = ra_log:write_sparse(E, LstIdx, L0),
+                                 {L, I};
+                             (_, Acc) ->
+                                 %% drop any entries that are lower than last applied
+                                 Acc
+                         end, {Log00, LastIdx}, ChunkOrEntries),
             State = update_term(Term, State0#{log => Log,
                                               snapshot_phase => pre}),
             {receive_snapshot, State, [{reply, Reply}]};
