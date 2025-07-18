@@ -388,7 +388,7 @@ shrink_cluster_with_snapshot(Config) ->
     %% resume activity ok
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    Peers = start_peers([s1,s2,s3], PrivDir),
+    Peers = start_peers([s1, s2, s3], PrivDir),
     ServerIds = server_ids(ClusterName, Peers),
     [_A, _B, _C] = ServerIds,
 
@@ -409,7 +409,6 @@ shrink_cluster_with_snapshot(Config) ->
 
     exit(Pid, kill),
     {ok, _, _} = ra:remove_member(Leader1, Leader1),
-
 
     timer:sleep(500),
 
@@ -1004,15 +1003,15 @@ segment_writer_or_wal_crash_follower(Config) ->
      end || I <- lists:seq(1, 10)],
 
     %% stop and restart the follower
-    ok = ra:stop_server(Follower),
-    ok = ra:restart_server(Follower),
+    ok = ra:stop_server(?SYS, Follower),
+    ok = ra:restart_server(?SYS, Follower),
 
     await_condition(AwaitReplicated, 100),
 
     _ = ct_rpc:call(FollowerNode, ra_log_wal, force_rollover, [ra_log_wal]),
 
-    ok = ra:stop_server(Follower),
-    ok = ra:restart_server(Follower),
+    ok = ra:stop_server(?SYS, Follower),
+    ok = ra:restart_server(?SYS, Follower),
 
     await_condition(AwaitReplicated, 100),
 
@@ -1114,15 +1113,15 @@ segment_writer_or_wal_crash_leader(Config) ->
      end || I <- lists:seq(1, 10)],
 
     %% stop and restart the leader
-    ok = ra:stop_server(Leader),
-    ok = ra:restart_server(Leader),
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, Leader),
 
     await_condition(AwaitReplicated, 100),
 
     _ = ct_rpc:call(LeaderNode, ra_log_wal, force_rollover, [ra_log_wal]),
 
-    ok = ra:stop_server(Leader),
-    ok = ra:restart_server(Leader),
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, Leader),
 
     await_condition(AwaitReplicated, 100),
 
@@ -1243,7 +1242,7 @@ stopped_wal_causes_leader_change(Config, RecoverStrat) ->
                             #{term := T} = ra:key_metrics(Follower),
                             T > Term andalso
                             (begin
-                                 P = ct_rpc:call(LeaderNode, erlang, whereis, [LeaderName]),%                      [ra_log_wal]),
+                                 P = ct_rpc:call(LeaderNode, erlang, whereis, [LeaderName]),
                                  is_pid(P) andalso P =/= LeaderPid
                              end)
                     end, 200),
@@ -1432,8 +1431,6 @@ snapshot_installed(#{machine_version := _,
 
 node_setup(DataDir) ->
     ok = ra_lib:make_dir(DataDir),
-    % NodeDir = filename:join(DataDir, atom_to_list(node())),
-    % ok = ra_lib:make_dir(DataDir),
     LogFile = filename:join(DataDir, "ra.log"),
     SaslFile = filename:join(DataDir, "ra_sasl.log"),
     logger:set_primary_config(level, debug),
