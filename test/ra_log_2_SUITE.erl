@@ -1445,9 +1445,12 @@ snapshot_installation(Config) ->
     % after a snapshot we need a "truncating write" that ignores missing
     % indexes
     Log5 = write_n(16, 20, 2, Log4),
-    {[], _} = ra_log_take(1, 9, Log5),
-    {[_, _], _} = ra_log_take(16, 17, Log5),
-    Log6 = assert_log_events(Log5, fun (L) ->
+    %% check that the log can be reset to a pending write index
+    {ok, Log5b} = ra_log:set_last_index(19, Log5),
+
+    {[], _} = ra_log_take(1, 9, Log5b),
+    {[_, _], _} = ra_log_take(16, 17, Log5b),
+    Log6 = assert_log_events(Log5b, fun (L) ->
                                            {19, 2} == ra_log:last_written(L)
                                    end),
     {[], _} = ra_log_take(1, 9, Log6),

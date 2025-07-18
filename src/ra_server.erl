@@ -612,12 +612,12 @@ handle_leader({command, Cmd}, #{cfg := #cfg{id = Self,
             State = State0#{condition =>
                             #{predicate_fun => fun wal_down_condition/2,
                               transition_to => leader,
-                              %% TODO: make duration configurable?
                               timeout => #{duration => 5000,
                                            effects => CondEffs,
                                            transition_to => leader}}},
 
-            {await_condition, State, Effects0};
+            Effects = append_error_reply(Cmd, wal_down, Effects0),
+            {await_condition, State, Effects};
         {not_appended, Reason, State, Effects0} ->
             ?WARN("~ts command ~W NOT appended to log. Reason ~w",
                   [LogId, Cmd, 10, Reason]),
