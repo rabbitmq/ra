@@ -751,7 +751,13 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
                                last_written_index_term = Cur}};
         {Term, State1} ->
             LWIdx = min(Idx, LWIdx0),
-            {LWTerm, State2} = fetch_term(LWIdx, State1),
+            {LWTerm, State2} = case Cur of
+                                   {LWIdx, SnapTerm} ->
+                                       {SnapTerm, State1};
+                                   _ ->
+                                       fetch_term(LWIdx, State1)
+                               end,
+
             %% this should always be found but still assert just in case
             %% _if_ this ends up as a genuine reversal next time we try
             %% to write to the mem table it will detect this and open
