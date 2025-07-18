@@ -10,6 +10,7 @@
 -export([
          init/0,
          new/2,
+         new/3,
          fetch/1,
          overview/0,
          overview/1,
@@ -32,6 +33,9 @@ init() ->
 new(Name, FieldsSpec) ->
     seshat:new(ra, Name, FieldsSpec).
 
+new(Name, FieldsSpec, MetricLabels) ->
+    seshat:new(ra, Name, FieldsSpec, MetricLabels).
+
 -spec fetch(name()) -> undefined | counters:counters_ref().
 fetch(Name) ->
     seshat:fetch(ra, Name).
@@ -42,11 +46,11 @@ delete(Name) ->
 
 -spec overview() -> #{name() => #{atom() => non_neg_integer()}}.
 overview() ->
-    seshat:overview(ra).
+    seshat:counters(ra).
 
--spec overview(name()) -> #{atom() => non_neg_integer()}.
+-spec overview(name()) -> #{atom() => non_neg_integer()} | undefined.
 overview(Name) ->
-    seshat:overview(ra, Name).
+    seshat:counters(ra, Name).
 
 -spec counters(name(), [atom()]) ->
     #{atom() => non_neg_integer()} | undefined.

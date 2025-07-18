@@ -69,7 +69,6 @@ all_tests() ->
       [{repeat_until_fail, 50}]},
      follower_catchup,
      post_partition_liveness,
-     all_metrics_are_integers,
      transfer_leadership,
      transfer_leadership_two_node,
      new_nonvoter_knows_its_status,
@@ -691,17 +690,6 @@ consistent_query_stale(Config) ->
     {ok, {{IndexAfter, _}, _}, _} = ra:local_query(Leader, fun(S) -> S end),
     ?assertMatch(Index, IndexAfter),
     terminate_cluster(Cluster).
-
-all_metrics_are_integers(Config) ->
-    % ok = logger:set_primary_config(level, all),
-    Name = ?config(test_name, Config),
-    N1 = nth_server_name(Config, 1),
-    ok = ra:start_server(default, Name, N1, add_machine(), []),
-    ok = ra:trigger_election(N1),
-    {ok, 5, _} = ra:process_command(N1, 5, 2000),
-    [{_, M1, M2, M3, M4, M5, M6}] = ets:lookup(ra_metrics, element(1, N1)),
-    ?assert(lists:all(fun(I) -> is_integer(I) end, [M1, M2, M3, M4, M5, M6])),
-    terminate_cluster([N1]).
 
 wait_for_applied(Msg) ->
     receive {ra_event, _, {applied, Applied}} ->
