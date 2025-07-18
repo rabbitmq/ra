@@ -596,8 +596,7 @@ leader(_, tick_timeout, State0) ->
                                         cast, State1#state{server_state = ServerState}),
     %% try sending any pending applied notifications again
     State = send_applied_notifications(State2, #{}),
-    {keep_state, State,
-     set_tick_timer(State, Actions)};
+    {keep_state, State, set_tick_timer(State, Actions)};
 leader({timeout, Name}, machine_timeout, State0) ->
     % the machine timer timed out, add a timeout message
     Cmd = make_command('$usr', cast, {timeout, Name}, noreply),
