@@ -16,7 +16,7 @@
          uid :: ra_uid(),
          log_id :: unicode:chardata(),
          metrics_key :: term(),
-         metrics_labels :: map(),
+         metrics_labels :: seshat:labels_map(),
          machine :: ra_machine:machine(),
          machine_version :: ra_machine:version(),
          machine_versions :: [{ra_index(), ra_machine:version()}, ...],
