@@ -316,9 +316,10 @@ do_init(#{id := Id,
     Key = ra_lib:ra_server_id_to_local_name(Id),
     true = ets:insert(ra_state, {Key, init, unknown}),
     process_flag(trap_exit, true),
-    Config = #{counter := Counter,
-               system_config := #{names := Names} = SysConf} = maps:merge(config_defaults(Id),
-                                                      Config0),
+    MetricLabels = maps:get(metrics_labels, Config0, #{}),
+    Config = maps:merge(config_defaults(Id, MetricLabels), Config0),
+    #{counter := Counter,
+      system_config := #{names := Names} = SysConf} = Config,
     MsgQData = maps:get(message_queue_data, SysConf, off_heap),
     MinBinVheapSize = maps:get(server_min_bin_vheap_size, SysConf,
                                ?MIN_BIN_VHEAP_SIZE),
@@ -413,9 +414,8 @@ recovered(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     ok = record_cluster_change(State),
     {keep_state, State, Actions};
-recovered(internal, next, #state{server_state = ServerState} = State) ->
+recovered(internal, next, State) ->
     true = erlang:garbage_collect(),
-    _ = ets:insert(ra_metrics, ra_server:metrics(ServerState)),
     next_state(follower, State, set_tick_timer(State, [])).
 
 leader(enter, OldState, #state{low_priority_commands = Delayed0} = State0) ->
@@ -568,7 +568,7 @@ leader(_, tick_timeout, State0) ->
                                         cast, State1#state{server_state = ServerState}),
     %% try sending any pending applied notifications again
     State = send_applied_notifications(State2, #{}),
-    {keep_state, handle_tick_metrics(State),
+    {keep_state, State,
      set_tick_timer(State, Actions)};
 leader({timeout, Name}, machine_timeout, State0) ->
     % the machine timer timed out, add a timeout message
@@ -645,7 +645,7 @@ candidate(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 candidate(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
-    {keep_state, handle_tick_metrics(State), set_tick_timer(State, [])};
+    {keep_state, State, set_tick_timer(State, [])};
 candidate({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
 candidate(EventType, Msg, State0) ->
@@ -706,7 +706,7 @@ pre_vote(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
     handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
 pre_vote(_, tick_timeout, State0) ->
     State = maybe_persist_last_applied(State0),
-    {keep_state, handle_tick_metrics(State), set_tick_timer(State, [])};
+    {keep_state, State, set_tick_timer(State, [])};
 pre_vote({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
 pre_vote(EventType, Msg, State0) ->
@@ -849,8 +849,7 @@ follower(_, tick_timeout, #state{server_state = ServerState0} = State0) ->
     ServerState = ra_server:log_tick(ServerState0),
     {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast,
                                        State0#state{server_state = ServerState}),
-    {keep_state, handle_tick_metrics(State),
-     set_tick_timer(State, Actions)};
+    {keep_state, State, set_tick_timer(State, Actions)};
 follower({call, From}, {log_fold, Fun, Term}, State) ->
     fold_log(From, Fun, Term, State);
 follower(EventType, Msg, #state{conf = #conf{name = Name},
@@ -1074,7 +1073,7 @@ handle_event(_EventType, EventContent, StateName, State) ->
 
 terminate(Reason, StateName,
           #state{conf = #conf{name = Key, cluster_name = ClusterName},
-                 server_state = ServerState = #{cfg := #cfg{metrics_key = MetricsKey}}} = State) ->
+                 server_state = ServerState} = State) ->
     ?DEBUG("~ts: terminating with ~w in state ~w",
            [log_id(State), Reason, StateName]),
     #{names := #{server_sup := SrvSup,
@@ -1115,7 +1114,6 @@ terminate(Reason, StateName,
             ok
     end,
     catch ra_leaderboard:clear(ClusterName),
-    _ = ets:delete(ra_metrics, MetricsKey),
     _ = ets:delete(ra_state, Key),
     ok;
 %% This occurs if there is a crash in the init callback of the ra_machine,
@@ -1805,11 +1803,12 @@ gen_statem_safe_call(ServerId, Msg, Timeout) ->
 do_state_query(QueryName, #state{server_state = State}) ->
     ra_server:state_query(QueryName, State).
 
-config_defaults(ServerId) ->
+config_defaults(ServerId, MetricLabels) ->
     Counter = case ra_counters:fetch(ServerId) of
                   undefined ->
                       ra_counters:new(ServerId,
-                                      {persistent_term, ?FIELDSPEC_KEY});
+                                      {persistent_term, ?FIELDSPEC_KEY},
+                                      MetricLabels);
                   C ->
                       C
               end,
@@ -2005,12 +2004,6 @@ get_node({_, Node}) ->
     Node;
 get_node(Proc) when is_atom(Proc) ->
     node().
-
-handle_tick_metrics(State) ->
-    ServerState = State#state.server_state,
-    Metrics = ra_server:metrics(ServerState),
-    _ = ets:insert(ra_metrics, Metrics),
-    State.
 
 can_execute_locally(RaftState, TargetNode,
                     #state{server_state = ServerState} = State) ->

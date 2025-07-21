@@ -199,9 +199,8 @@ spawn_client(Parent, Leader, Num, DataSize, Pipe, Counter) ->
               end
       end).
 
-print_metrics(Name) ->
+print_metrics(_Name) ->
     io:format("Node: ~w~n", [node()]),
-    io:format("metrics ~p~n", [ets:lookup(ra_metrics, Name)]),
     io:format("counters ~p~n", [ra_counters:overview()]).
 
 
@@ -220,4 +219,3 @@ print_metrics(Name) ->
 %     GzFile = Base ++ ".gz.*",
 %     lg_callgrind:profile_many(GzFile, Base ++ ".out",#{}),
 %     ok.
-

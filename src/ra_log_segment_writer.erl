@@ -115,7 +115,7 @@ init([#{data_dir := DataDir,
         name := SegWriterName,
         system := System} = Conf]) ->
     process_flag(trap_exit, true),
-    CRef = ra_counters:new(SegWriterName, ?COUNTER_FIELDS),
+    CRef = ra_counters:new(SegWriterName, ?COUNTER_FIELDS, #{ra_system => System, module => ?MODULE}),
     SegmentConf = maps:get(segment_conf, Conf, #{}),
     maybe_upgrade_segment_file_names(System, DataDir),
     {ok, #state{system = System,
@@ -554,4 +554,3 @@ maybe_upgrade_segment_file_names(System, DataDir) ->
         true ->
             ok
     end.
-
