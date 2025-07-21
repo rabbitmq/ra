@@ -505,10 +505,15 @@ execute_operation(State, {kill_wal}) ->
 
             log("~s Killing WAL on member ~w...~n", [timestamp(), NodeName]),
 
-            Pid = erpc:call(NodeName, erlang, whereis, [ra_log_wal]),
-            erpc:call(NodeName, erlang, exit, [Pid, kill]),
-            State#{operations_count => OpCount + 1,
-                   successful_ops => SuccessOps + 1}
+            case erpc:call(NodeName, erlang, whereis, [ra_log_wal]) of
+                Pid when is_pid(Pid) ->
+                    erpc:call(NodeName, erlang, exit, [Pid, kill]),
+                    State#{operations_count => OpCount + 1,
+                           successful_ops => SuccessOps + 1};
+                _ ->
+                    State
+            end
+
     end;
 
 execute_operation(State, {kill_member}) ->
@@ -529,13 +534,17 @@ execute_operation(State, {kill_member}) ->
 
             log("~s Killing member ~w...~n", [timestamp(), Member]),
 
-            Pid = erpc:call(NodeName, erlang, whereis, [?CLUSTER_NAME]),
-            erpc:call(NodeName, erlang, exit, [Pid, kill]),
-            %% give it a bit of time after a kill in case this member is chosen
-            %% for the next operation
-            timer:sleep(100),
-            State#{operations_count => OpCount + 1,
-                   successful_ops => SuccessOps + 1}
+            case erpc:call(NodeName, erlang, whereis, [?CLUSTER_NAME]) of
+                Pid when is_pid(Pid) ->
+                    erpc:call(NodeName, erlang, exit, [Pid, kill]),
+                    %% give it a bit of time after a kill in case this member is chosen
+                    %% for the next operation
+                    timer:sleep(100),
+                    State#{operations_count => OpCount + 1,
+                           successful_ops => SuccessOps + 1};
+                _ ->
+                    State
+            end
     end.
 
 -spec wait_for_applied_index_convergence([ra:server_id()], non_neg_integer()) -> ok.
