@@ -1945,6 +1945,8 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                    [LogId, To, TheirMacVer, SnapMacVer]),
             ok;
         false ->
+            %% TODO: this could be stale, replace with a call into the
+            %% process insted perhaps?
             #{last_applied := LastApplied} = erpc:call(ToNode,
                                                        ra_counters,
                                                        counters,
