@@ -3,6 +3,7 @@
 -export([
          run/1,
          run/2,
+         read_all_keys/0,
          teardown_cluster/1,
          timestamp/0,
          log/2
@@ -35,6 +36,9 @@ timestamp() ->
     Millisecs = MicroSecs div 1000,
     io_lib:format("[~4..0w-~2..0w-~2..0w ~2..0w:~2..0w:~2..0w.~3..0w]",
                   [Year, Month, Day, Hour, Min, Sec, Millisecs]).
+
+milliseconds() ->
+    erlang:system_time(millisecond).
 
 -spec log(string(), list()) -> ok.
 log(Format, Args) ->
@@ -71,6 +75,12 @@ new_state() ->
 run(NumOperations) ->
     run(NumOperations, #{}).
 
+read_all_keys() ->
+        [_ = ra_kv:get({?CLUSTER_NAME,
+                        node()},
+                       <<"key_",(integer_to_binary(N))/binary>>, 1000)
+         || N <- lists:seq(1, ?MAX_KEY)].
+
 read_all_keys_loop(Members) when is_list(Members) ->
     receive
         stop ->
@@ -78,11 +88,12 @@ read_all_keys_loop(Members) when is_list(Members) ->
             ok
     after 0 ->
         Member = lists:nth(rand:uniform(length(Members)), Members),
+        NodeName = element(2, Member),
         T1 = erlang:monotonic_time(),
-        [_ = ra_kv:get(Member, <<"key_", (integer_to_binary(N))/binary>>, 1000) || N <- lists:seq(1, ?MAX_KEY)],
+        erpc:call(NodeName, ra_kv_harness, read_all_keys, []),
         T2 = erlang:monotonic_time(),
         Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
-        log("~s Read all keys from member ~p in ~bms~n", [timestamp(), Member, Diff]),
+        log("~s Read all keys on member ~p in ~bms~n", [timestamp(), Member, Diff]),
         read_all_keys_loop(Members)
     end.
 
@@ -305,10 +316,10 @@ execute_operation(State, {get, Key}) ->
     % Pick a random cluster member to send the operation to
     MembersList = maps:keys(Members),
     Member = lists:nth(rand:uniform(length(MembersList)), MembersList),
-    %NodeName = element(2, Member),
+    NodeName = element(2, Member),
     RefValue = maps:get(Key, RefMap, not_found),
 
-    case ra_kv:get(Member, Key, ?TIMEOUT) of
+    case erpc:call(NodeName, ra_kv, get, [Member, Key, ?TIMEOUT]) of
         {error, not_found} when RefValue =:= not_found ->
             State#{operations_count => OpCount + 1,
                    successful_ops => SuccessOps + 1};
@@ -340,13 +351,17 @@ execute_operation(State, {update_almost_all_keys}) ->
     Member = lists:nth(rand:uniform(length(MembersList)), MembersList),
 
     X = rand:uniform(100),
-    {T, _ } = timer:tc(fun() ->
-                     [ {ok, _} = ra_kv:put(Member, key(N), 0, ?TIMEOUT) || N <- lists:seq(1, ?MAX_KEY),
-                                         N rem X =/= 0] end), % Update every 100th key
+    {T, _} = timer:tc(fun() ->
+                               [ {ok, _} = ra_kv:put(Member,
+                                                     key(N),
+                                                     0,
+                                                     ?TIMEOUT)
+                                 || N <- lists:seq(1, ?MAX_KEY),
+                                    N rem X =/= 0] end),
     log("~s Updated roughly 99% of the ~p keys in ~bms...~n", [timestamp(), ?MAX_KEY, T div 1000]),
 
     NewRefMap = maps:merge(RefMap, #{ key(N) => 0 || N <- lists:seq(1, ?MAX_KEY),
-                                         N rem X =/= 0}), % Update every 100th key
+                                         N rem X =/= 0}),
     State#{reference_map => NewRefMap,
            operations_count => OpCount + 1,
            successful_ops => SuccessOps + 1};
@@ -520,6 +535,7 @@ execute_operation(State, {kill_member}) ->
     Members = maps:get(members, State),
     OpCount = maps:get(operations_count, State),
     SuccessOps = maps:get(successful_ops, State),
+    Kills = maps:get(kills, State, #{}),
 
     % Pick a random member to kill
     MembersList = maps:keys(Members),
@@ -532,19 +548,27 @@ execute_operation(State, {kill_member}) ->
             Member = lists:nth(rand:uniform(length(MembersList)), MembersList),
             NodeName = element(2, Member),
 
-            log("~s Killing member ~w...~n", [timestamp(), Member]),
-
-            case erpc:call(NodeName, erlang, whereis, [?CLUSTER_NAME]) of
-                Pid when is_pid(Pid) ->
-                    erpc:call(NodeName, erlang, exit, [Pid, kill]),
-                    %% give it a bit of time after a kill in case this member is chosen
-                    %% for the next operation
-                    timer:sleep(100),
-                    State#{operations_count => OpCount + 1,
-                           successful_ops => SuccessOps + 1};
-                _ ->
-                    State
+            Now = milliseconds(),
+            LastKill = maps:get(Member, Kills, Now - 10000),
+            if(Now > LastKill + 5500) ->
+                  case erpc:call(NodeName, erlang, whereis, [?CLUSTER_NAME]) of
+                      Pid when is_pid(Pid) ->
+                          log("~s Killing member ~w...~n", [timestamp(), Member]),
+                          erpc:call(NodeName, erlang, exit, [Pid, kill]),
+                          %% give it a bit of time after a kill in case this member is chosen
+                          %% for the next operation
+                          timer:sleep(100),
+                          State#{operations_count => OpCount + 1,
+                                 kills => Kills#{Member => Now},
+                                 successful_ops => SuccessOps + 1};
+                      _ ->
+                          State
+                  end;
+              true ->
+                  log("~s Not killing member ~w...~n", [timestamp(), Member]),
+                  State
             end
+
     end.
 
 -spec wait_for_applied_index_convergence([ra:server_id()], non_neg_integer()) -> ok.

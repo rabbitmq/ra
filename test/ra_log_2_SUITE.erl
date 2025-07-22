@@ -801,7 +801,7 @@ fold_after_sparse_segments(Config) ->
 
 write_sparse_re_init(Config) ->
     Log0 = ra_log_init(Config),
-    Log1 = write_n(1, 6, 1, Log0),
+    Log1 = write_and_roll(1, 6, 1, Log0),
     Pred = fun (L) ->
                    {5, 1} == ra_log:last_written(L)
            end,
@@ -816,19 +816,13 @@ write_sparse_re_init(Config) ->
     Log = deliver_all_log_events(Log4, 500),
 
     O = ra_log:overview(Log),
-    ct:pal("o ~p", [O]),
     ra_log:close(Log),
 
     ReInitLog = ra_log_init(Config),
     O2 = ra_log:overview(ReInitLog ),
-    ct:pal("o2 ~p", [O2]),
-    ?assertEqual(maps:remove(last_wal_write, O),
-                 maps:remove(last_wal_write, O2)),
-
-
-    %% server init does a fold from last applied + 1 to last index which
-    %% will fail if the log head is sparse
-
+    OO = maps:without([last_wal_write, open_segments], O),
+    OO2 = maps:without([last_wal_write, open_segments], O2),
+    ?assertEqual(OO, OO2),
     ok.
 
 write_sparse_after_index_reset(Config) ->

@@ -173,8 +173,13 @@ setup_log() ->
                 fun(Data, _Num, _Machine, {_Meta, MacSt} = State) ->
                         {State, Data ++ MacSt, [], []}
                 end),
-    meck:expect(ra_snapshot, abort_accept, fun(SS) -> SS end),
-    meck:expect(ra_snapshot, accepting, fun(_SS) -> undefined end),
+    meck:expect(ra_snapshot, abort_accept, fun(_SS) -> undefined end),
+    meck:expect(ra_snapshot, accepting, fun({Meta, _}) ->
+                                                {maps:get(index, Meta),
+                                                 maps:get(term, Meta)};
+                                           (_) ->
+                                                undefined
+                                        end),
     meck:expect(ra_log, snapshot_state, fun ra_log_memory:snapshot_state/1),
     meck:expect(ra_log, set_snapshot_state, fun ra_log_memory:set_snapshot_state/2),
     meck:expect(ra_log, install_snapshot, fun ra_log_memory:install_snapshot/4),
@@ -2359,9 +2364,9 @@ follower_installs_snapshot_with_pre(_Config) ->
     Term = 2, % leader term
     Idx = 3,
     ISRpcInit = #install_snapshot_rpc{term = Term, leader_id = N1,
-                                  meta = snap_meta(Idx, LastTerm, Config),
-                                  chunk_state = {0, init},
-                                  data = []},
+                                      meta = snap_meta(Idx, LastTerm, Config),
+                                      chunk_state = {0, init},
+                                      data = []},
     %% the init message starts the process
     {receive_snapshot, State1,
      [{next_event, ISRpc}, {record_leader_msg, _}]} =
@@ -2371,6 +2376,11 @@ follower_installs_snapshot_with_pre(_Config) ->
     {receive_snapshot, State2, [{reply, _}]} =
         ra_server:handle_receive_snapshot(ISRpc, State1),
 
+    %% check a higher snapshot index reverts to follower
+    {follower, _, [{next_event, _}]} =
+        ra_server:handle_receive_snapshot(
+          ISRpcInit#install_snapshot_rpc{meta = snap_meta(Idx + 1, LastTerm, Config)},
+          State1),
     %% now send a pre message
     ISRpcPre = ISRpcInit#install_snapshot_rpc{chunk_state = {0, pre},
                                               data = [{2, 1, <<"e1">>}]},

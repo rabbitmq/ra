@@ -238,8 +238,9 @@ init(#{uid := UId,
     Reader = ra_log_segments:init(UId, Dir, MaxOpen, AccessPattern, SegRefs,
                                   Counter, CompConf, LogId),
     SegmentRange = ra_log_segments:range(Reader),
-    %% TODO: check ra_range:add/2 actually performas the correct logic we expect
-    Range = ra_range:add(MtRange, SegmentRange),
+    %% TODO: the ranges can be sparse at this point so ra_range:add/2 does
+    %% not do the right thing here as it requires a contiguous range
+    Range = ra_range:combine(MtRange, SegmentRange),
 
     [begin
          ?DEBUG("~ts: deleting overwritten segment ~w",
@@ -846,12 +847,14 @@ handle_event({segments, TidRanges, NewSegs},
     %% it is theoretically possible that the segment writer flush _could_
     %% over take WAL notifications
     FstPend = ra_seq:first(Pend0),
-    Pend = case ra_mt:range(Mt) of
+    MtRange = ra_mt:range(Mt),
+    Pend = case MtRange  of
                {Start, _End} when Start > FstPend ->
                    ra_seq:floor(Start, Pend0);
                _ ->
                    Pend0
            end,
+    ?DEBUG("~ts: ~b segments tidranges received ", [LogId, length(TidRanges)]),
     State = State0#?MODULE{reader = Reader,
                            pending = Pend,
                            mem_table = Mt},
