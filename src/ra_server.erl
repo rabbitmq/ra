@@ -1,4 +1,3 @@
-%% This Source Code Form is subject to the terms of the Mozilla Public
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
@@ -462,13 +461,25 @@ recover(#{cfg := #cfg{log_id = LogId,
     {ToScan, _} = ra_log:last_index_term(Log0),
     ?DEBUG("~ts: scanning for cluster changes ~b:~b ", [LogId, FromScan, ToScan]),
     %% if we're recovering after a partial sparse write phase this will fail
-    %%
-    {State, Log} = ra_log:fold(FromScan, ToScan,
-                               fun cluster_scan_fun/2,
-                               State1, Log0, return),
+    {{LastScannedIdx, State2}, Log1} = ra_log:fold(FromScan, ToScan,
+                                                   fun cluster_scan_fun/2,
+                                                   {CommitIndex, State1}, Log0,
+                                                   return),
+
+    State = case LastScannedIdx < ToScan of
+                true ->
+                    ?DEBUG("~ts: scan detected sparse log last scanned ~b:~b "
+                           "resetting log to last contiguous index ~b",
+                           [LogId, LastScannedIdx, ToScan, LastScannedIdx]),
+                    %% the end of the log is sparse and needs to be reset
+                    {ok, Log} = ra_log:set_last_index(LastScannedIdx, Log1),
+                    State2#{log => Log};
+                false ->
+                    State2
+            end,
 
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
-    State#{log => Log,
+    State#{
            %% reset commit latency as recovery may calculate a very old value
            commit_latency => 0}.
 
@@ -2859,16 +2870,16 @@ append_machine_effects(AppEffs, Effs) ->
     [AppEffs | Effs].
 
 cluster_scan_fun({Idx, Term, {'$ra_cluster_change', _Meta, NewCluster, _}},
-                 State0) ->
+                 {_, State0}) ->
     ?DEBUG("~ts: ~ts: applying ra cluster change to ~w",
            [log_id(State0), ?FUNCTION_NAME, maps:keys(NewCluster)]),
     %% we are recovering and should apply the cluster change
-    State0#{cluster => NewCluster,
-            membership => get_membership(NewCluster, State0),
-            cluster_change_permitted => true,
-            cluster_index_term => {Idx, Term}};
-cluster_scan_fun(_Cmd, State) ->
-    State.
+    {Idx, State0#{cluster => NewCluster,
+                  membership => get_membership(NewCluster, State0),
+                  cluster_change_permitted => true,
+                  cluster_index_term => {Idx, Term}}};
+cluster_scan_fun({Idx, _, _}, {_, State}) ->
+    {Idx, State}.
 
 apply_with(_Cmd,
            {Mod, LastAppliedIdx,
