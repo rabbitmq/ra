@@ -23,6 +23,8 @@ all_tests() ->
      basics,
      fold,
      record_flushed,
+     record_flushed_missed,
+     record_flushed_missed_prev,
      record_flushed_after_set_first,
      record_flushed_prev,
      set_first,
@@ -114,6 +116,46 @@ record_flushed(_Config) ->
     ?assertEqual(undefined, ra_mt:range(Mt4)),
     _ = ra_mt:delete(Spec3),
     ?assertMatch(#{size := 0}, ra_mt:info(Mt4)),
+    ok.
+
+record_flushed_missed(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_mt:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 105)),
+    {Spec3, Mt4} = ra_mt:record_flushed(Tid, [{50, 100}], Mt1),
+    ?assertMatch({indexes, _, [{1, 100}]}, Spec3),
+    ?assertEqual({101, 105}, ra_mt:range(Mt4)),
+    _ = ra_mt:delete(Spec3),
+    ?assertMatch(#{size := 5}, ra_mt:info(Mt4)),
+    ok.
+
+record_flushed_missed_prev(_Config) ->
+    %% test that a prior mem table is cleared up when the current one is
+    %% recorded flushed
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_mt:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 49)),
+
+    Tid2 = ets:new(t2, [set, public]),
+    Mt2 = ra_mt:init_successor(Tid2, read_write, Mt1),
+    Mt3 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 2, <<"apple">>}, Acc))
+            end, Mt2, lists:seq(25, 105)),
+
+    {Spec3, Mt4} = ra_mt:record_flushed(Tid2, [{25, 100}], Mt3),
+    ?assertMatch({multi, [{indexes, Tid2, [{25, 100}]},
+                          {delete, Tid}]}, Spec3),
+    ct:pal("Mt4 ~p", [Mt4]),
+    ?assertEqual({101, 105}, ra_mt:range(Mt4)),
+    _ = ra_mt:delete(Spec3),
+    ?assertMatch(#{size := 5}, ra_mt:info(Mt4)),
     ok.
 
 record_flushed_after_set_first(_Config) ->
@@ -356,7 +398,11 @@ successor_below(_Config) ->
         ra_mt:record_flushed(Tid, [{100, 150}], Mt3),
     ?assertMatch({50, 75}, ra_mt:range(Mt4a)),
 
-    {{indexes, Tid2, [{50, 60}]}, Mt4b} =
+    % {{indexes, Tid2, [{50, 60}]}, Mt4b} =
+    %     ra_mt:record_flushed(Tid2, [{50, 60}], Mt3),
+    % ?assertMatch({61, 75}, ra_mt:range(Mt4b)),
+    {{multi, [{indexes, Tid2, [{50, 60}]},
+              {delete, Tid}]}, Mt4b} =
         ra_mt:record_flushed(Tid2, [{50, 60}], Mt3),
     ?assertMatch({61, 75}, ra_mt:range(Mt4b)),
 

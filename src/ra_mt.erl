@@ -67,7 +67,9 @@
 -type delete_spec() :: undefined |
                        {'<', ets:tid(), ra:index()} |
                        {delete, ets:tid()} |
-                       {indexes, ets:tid(), ra_seq:state()}.
+                       {indexes, ets:tid(), ra_seq:state()} |
+                       {multi, [delete_spec()]}.
+
 -export_type([
               state/0,
               delete_spec/0
@@ -325,9 +327,16 @@ delete({Op, Tid, Idx})
     DelSpec = [{{'$1', '_', '_'}, [{'<', '$1', Idx}], [true]}],
     ets:select_delete(Tid, DelSpec);
 delete({delete, Tid}) ->
-    Sz= ets:info(Tid, size),
+    Sz = ets:info(Tid, size),
     true = ets:delete(Tid),
-    Sz.
+    Sz;
+delete({multi, Specs}) ->
+    lists:foldl(
+      fun (Spec, Acc) ->
+              Acc + delete(Spec)
+      end, 0, Specs).
+
+
 
 -spec range_overlap(ra:range(), state()) ->
     {Overlap :: ra:range(), Remainder :: ra:range()}.
@@ -385,11 +394,13 @@ prev(#?MODULE{prev = Prev}) ->
 
 -spec info(state()) -> map().
 info(#?MODULE{tid = Tid,
+              indexes = Seq,
               prev = Prev} = State) ->
     #{tid => Tid,
       size => ets:info(Tid, size),
       name => ets:info(Tid, name),
       range => range(State),
+      local_range => ra_seq:range(Seq),
       previous => case Prev of
                       undefined ->
                           undefined;
@@ -403,16 +414,25 @@ info(#?MODULE{tid = Tid,
     {delete_spec(), state()}.
 record_flushed(TID = Tid, FlushedSeq,
                #?MODULE{tid = TID,
+
+                        prev = Prev0,
                         indexes = Seq} = State) ->
-    % HasExtraEntries = ets:info(Tid, size) > ra_seq:length(Seq),
     End = ra_seq:last(FlushedSeq),
     case ra_seq:in(End, Seq) of
-        % true when HasExtraEntries ->
-        %     {{'<', Tid, End + 1},
-        %      State#?MODULE{indexes = ra_range:truncate(End, Seq)}};
         true ->
-            {{indexes, Tid, FlushedSeq},
-             State#?MODULE{indexes = ra_seq:floor(End + 1, Seq)}};
+            %% indexes are always written in order so we can delete
+            %% the entire sequence preceeding, this will handle the case
+            %% where a segments notifications is missed
+            Spec0 = {indexes, Tid, ra_seq:limit(End, Seq)},
+            {Spec, Prev} = case prev_set_first(End + 1, Prev0, true) of
+                               {[], P} ->
+                                   {Spec0, P};
+                               {PSpecs, P} ->
+                                   {{multi, [Spec0 | PSpecs]}, P}
+                           end,
+            {Spec,
+             State#?MODULE{indexes = ra_seq:floor(End + 1, Seq),
+                           prev = Prev}};
         false ->
             {undefined, State}
     end;
@@ -434,32 +454,32 @@ record_flushed(Tid, FlushedSeq, #?MODULE{prev = Prev0} = State) ->
 set_first(Idx, #?MODULE{tid = Tid,
                         indexes = Seq,
                         prev = Prev0} = State) ->
-    {PrevSpecs, Prev} =
-        case Prev0 of
-            undefined ->
-                {[], undefined};
-            _ ->
-                case set_first(Idx, Prev0) of
-                    {[{indexes, PTID, _} | Rem],
-                     #?MODULE{tid = PTID} = P} = Res ->
-                        %% set_first/2 returned a range spec for
-                        %% prev and prev is now empty,
-                        %% upgrade to delete spec of whole tid
-                        %% also upgrade if the outer seq is truncated
-                        %% by the set_first operation
-                        % case range_shallow(P) of
-                        case Idx >= ra_seq:first(Seq) orelse
-                             range_shallow(P) == undefined of
-                            true ->
-                                {[{delete, tid(P)} | Rem],
-                                 prev(P)};
-                            _ ->
-                                Res
-                        end;
-                    Res ->
-                        Res
-                end
-        end,
+    {PrevSpecs, Prev} = prev_set_first(Idx, Prev0, Idx >= ra_seq:first(Seq)),
+        % case Prev0 of
+        %     undefined ->
+        %         {[], undefined};
+        %     _ ->
+        %         case set_first(Idx, Prev0) of
+        %             {[{indexes, PTID, _} | Rem],
+        %              #?MODULE{tid = PTID} = P} = Res ->
+        %                 %% set_first/2 returned a range spec for
+        %                 %% prev and prev is now empty,
+        %                 %% upgrade to delete spec of whole tid
+        %                 %% also upgrade if the outer seq is truncated
+        %                 %% by the set_first operation
+        %                 % case range_shallow(P) of
+        %                 case Idx >= ra_seq:first(Seq) orelse
+        %                      range_shallow(P) == undefined of
+        %                     true ->
+        %                         {[{delete, tid(P)} | Rem],
+        %                          prev(P)};
+        %                     _ ->
+        %                         Res
+        %                 end;
+        %             Res ->
+        %                 Res
+        %         end
+        % end,
     Specs = case Seq of
                 [] ->
                     PrevSpecs;
@@ -473,6 +493,28 @@ set_first(Idx, #?MODULE{tid = Tid,
 
 
 %% Internal
+
+prev_set_first(_Idx, undefined, _Force) ->
+    {[], undefined};
+prev_set_first(Idx, Prev0, Force) ->
+    case set_first(Idx, Prev0) of
+        {[{indexes, PTID, _} | Rem],
+         #?MODULE{tid = PTID} = P} = Res ->
+            %% set_first/2 returned a range spec for
+            %% prev and prev is now empty,
+            %% upgrade to delete spec of whole tid
+            %% also upgrade if the outer seq is truncated
+            %% by the set_first operation
+            case range_shallow(P) == undefined orelse
+                 Force of
+                true ->
+                    {[{delete, tid(P)} | Rem], prev(P)};
+                false ->
+                    Res
+            end;
+        Res ->
+            Res
+    end.
 
 update_ra_seq(Idx, Seq) ->
     case ra_seq:last(Seq) of
