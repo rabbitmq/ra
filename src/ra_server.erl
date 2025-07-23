@@ -1452,7 +1452,8 @@ handle_follower(#install_snapshot_rpc{term = Term,
                                       leader_id = LeaderId,
                                       chunk_state = {Num, ChunkFlag}} = Rpc,
                 #{cfg := #cfg{log_id = LogId,
-                              machine_version = MacVer}, log := Log0,
+                              machine_version = MacVer},
+                  log := Log0,
                   last_applied := LastApplied,
                   current_term := CurTerm} = State0)
   when Term >= CurTerm andalso
@@ -1483,15 +1484,16 @@ handle_follower(#install_snapshot_rpc{term = Term,
                                                  leader_id => LeaderId}),
      [{next_event, Rpc}, {record_leader_msg, LeaderId}]};
 handle_follower(#install_snapshot_rpc{term = Term,
-                                      meta = #{index := LastIndex,
+                                      meta = #{index := SnapIdx,
                                                machine_version := SnapMacVer,
                                                term := _LastTerm}},
                 #{cfg := #cfg{log_id = LogId,
                               machine_version = MacVer},
                   last_applied := LastApplied} = State0)
   when MacVer >= SnapMacVer ->
-    ?DEBUG("~ts: install_snapshot received with lower last index ~b in ~b",
-           [LogId, LastIndex, Term]),
+    ?DEBUG("~ts: install_snapshot received with snapshot index ~b,
+           in ~b, local last applied index ~b ",
+           [LogId, SnapIdx, Term, LastApplied]),
     %% follower receives a snapshot for an index lower than its last applied
     %% index, just reply with append_entries_reply to make the leader skip
     %% ahead
@@ -1570,14 +1572,20 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = SnapTerm,
                                      last_index = SnapIndex},
+    SnapState0 = ra_log:snapshot_state(Log00),
+    %% works as an assertion also
+    {AcceptingSnapIdx, _} = ra_snapshot:accepting(SnapState0),
     case ChunkFlag of
-        init when SnapPhase == init ->
+        init when SnapPhase == init andalso
+                  SnapIndex == AcceptingSnapIdx ->
             %% this is ok, just reply
+            %% need to set snapshot_phase to pre here as else a new snapshot
+            %% init could be sent without detecting this
             {receive_snapshot, State0, [{reply, Reply}]};
-        init  ->
-            ?DEBUG("~ts: receiving snapshot saw unexpected init phase at snapshot"
-                   " index term {~b, ~b}, current phase ~s restarting
-                   snapshot receive process",
+        init ->
+            ?DEBUG("~ts: receiving snapshot saw unexpected init phase at snapshot "
+                   "index term {~b, ~b}, current phase ~s restarting "
+                   "snapshot receive phase",
                    [LogId, SnapIndex, SnapTerm, SnapPhase]),
             %% the snapshot sending must have been interrupted and restarted
             %% during the init or pre-phase
@@ -1585,7 +1593,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             State = abort_receive(State0),
             {follower, State, [{next_event, Rpc}]};
         pre when is_list(ChunkOrEntries) ->
-            [{_FstIdx, _, _} | _] = ChunkOrEntries,
+            ?assert(SnapIndex == AcceptingSnapIdx),
             % ?DEBUG("~ts: receiving snapshot chunk pre first index ~b snap index ~b, term ~b",
             %        [LogId, FstIdx, SnapIndex, SnapTerm]),
             %% reset last index to last applied
@@ -1593,7 +1601,8 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             %% are of the right term
             {LastIdx, _} = ra_log:last_index_term(Log00),
             {Log, _} = lists:foldl(
-                         fun ({I, _, _} = E, {L0, LstIdx}) when I > LastApplied ->
+                         fun ({I, _, _} = E, {L0, LstIdx})
+                               when I > LastApplied ->
                                  {ok, L} = ra_log:write_sparse(E, LstIdx, L0),
                                  {L, I};
                              (_, Acc) ->
@@ -1604,18 +1613,18 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                               snapshot_phase => pre}),
             {receive_snapshot, State, [{reply, Reply}]};
         next ->
+            ?assert(SnapIndex == AcceptingSnapIdx),
             ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
                    [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
-            SnapState0 = ra_log:snapshot_state(Log00),
             SnapState = ra_snapshot:accept_chunk(ChunkOrEntries, Num, SnapState0),
             Log0 = ra_log:set_snapshot_state(SnapState, Log00),
             State = update_term(Term, State0#{log => Log0,
                                               snapshot_phase => next}),
             {receive_snapshot, State, [{reply, Reply}]};
         last ->
+            ?assert(SnapIndex == AcceptingSnapIdx),
             ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
                    [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
-            SnapState0 = ra_log:snapshot_state(Log00),
             {SnapState, MacState, LiveIndexes, Effs0} =
                 ra_snapshot:complete_accept(ChunkOrEntries, Num, Machine,
                                             SnapState0),

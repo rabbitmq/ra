@@ -12,6 +12,7 @@
 -compile({inline, [handle_raft_state/3]}).
 
 
+-include_lib("stdlib/include/assert.hrl").
 -include("ra.hrl").
 -include("ra_server.hrl").
 
@@ -1960,11 +1961,14 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                 {ok, [_|_] = Indexes0} ->
                     %% remove all indexes lower than the target's last applied
                     Indexes = ra_seq:floor(LastApplied + 1, Indexes0),
-                    ?DEBUG("~ts: sending live indexes ~w to ~w ",
-                           [LogId, ra_seq:range(Indexes), To]),
+                    ?DEBUG("~ts: sending ~b live indexes in the range ~w to ~w ",
+                           [LogId, ra_seq:length(Indexes), ra_seq:range(Indexes), To]),
                     %% first send the init phase
-                    _Res0 = gen_statem:call(To, RPC,
-                                            {dirty_timeout, InstallTimeout}),
+                    Res0 = gen_statem:call(To, RPC,
+                                           {dirty_timeout, InstallTimeout}),
+                    %% this asserts we should continue,
+                    %% anything else should crash the process
+                    ?assert(is_record(Res0, install_snapshot_result)),
                     %% there are live indexes to send before the snapshot
                     %% TODO: write ra_seq:list_chunk function to avoid expansion
                     Idxs = lists:reverse(ra_seq:expand(Indexes)),
@@ -1975,9 +1979,11 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                      Ents = [map_get(I, Ents0) || I <- Is],
                                      RPC1 = RPC#install_snapshot_rpc{chunk_state = {0, pre},
                                                                      data = Ents},
-                                     _Res1 = gen_statem:call(To, RPC1,
+                                     Res1 = gen_statem:call(To, RPC1,
                                                              {dirty_timeout, InstallTimeout}),
-                                     %% TODO: assert Res1 is successful
+                                     %% this asserts we should continue,
+                                     %% anything else should crash the process
+                                     ?assert(is_record(Res1, install_snapshot_result)),
                                      F
                              end, undefined, ra_lib:lists_chunk(16, Idxs)),
                     _ = ra_flru:evict_all(Flru),
@@ -1995,16 +2001,16 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
             %% of entries
             %% wait for response
             %% send again, etc
-            Result = read_chunks_and_send_rpc(RPC, To, ReadState, 1,
-                                              ChunkSize, InstallTimeout,
-                                              SnapState),
+            Result = send_snapshot_chunks(RPC, To, ReadState, 1,
+                                          ChunkSize, InstallTimeout,
+                                          SnapState),
             ?DEBUG("~ts: sending snapshot to ~w completed",
                    [LogId, To]),
             ok = gen_statem:cast(Id, {To, Result})
     end.
 
-read_chunks_and_send_rpc(RPC0, To, ReadState0, Num, ChunkSize,
-                         InstallTimeout, SnapState) ->
+send_snapshot_chunks(RPC0, To, ReadState0, Num, ChunkSize,
+                     InstallTimeout, SnapState) ->
     {ok, Data, ContState} = ra_snapshot:read_chunk(ReadState0, ChunkSize,
                                                    SnapState),
     ChunkFlag = case ContState of
@@ -2019,7 +2025,7 @@ read_chunks_and_send_rpc(RPC0, To, ReadState0, Num, ChunkSize,
                            {dirty_timeout, InstallTimeout}),
     case ContState of
         {next, ReadState1} ->
-            read_chunks_and_send_rpc(RPC0, To, ReadState1, Num + 1,
+            send_snapshot_chunks(RPC0, To, ReadState1, Num + 1,
                                      ChunkSize, InstallTimeout, SnapState);
         last ->
             Res1
