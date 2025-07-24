@@ -11,6 +11,7 @@
          new/1,
          new/2,
          add/2,
+         combine/2,
          in/2,
          extend/2,
          limit/2,
@@ -56,6 +57,15 @@ add({AddStart, AddEnd}, {Start, End})
     {min(AddStart, Start), max(AddEnd, End)};
 add(AddRange, _Range) ->
     %% no overlap, return add range
+    AddRange.
+
+-spec combine(AddRange :: range(), CurRange :: range()) -> range().
+combine(undefined, Range) ->
+    Range;
+combine({AddStart, AddEnd}, {Start, End}) ->
+    {min(AddStart, Start), max(AddEnd, End)};
+combine(AddRange, _Range) ->
+    %% no overlap, return combine range
     AddRange.
 
 -spec in(ra:index(), range()) -> boolean().

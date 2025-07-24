@@ -37,6 +37,9 @@ timestamp() ->
     io_lib:format("[~4..0w-~2..0w-~2..0w ~2..0w:~2..0w:~2..0w.~3..0w]",
                   [Year, Month, Day, Hour, Min, Sec, Millisecs]).
 
+milliseconds() ->
+    erlang:system_time(millisecond).
+
 -spec log(string(), list()) -> ok.
 log(Format, Args) ->
     Message = io_lib:format(Format, Args),
@@ -532,6 +535,7 @@ execute_operation(State, {kill_member}) ->
     Members = maps:get(members, State),
     OpCount = maps:get(operations_count, State),
     SuccessOps = maps:get(successful_ops, State),
+    Kills = maps:get(kills, State, #{}),
 
     % Pick a random member to kill
     MembersList = maps:keys(Members),
@@ -544,19 +548,27 @@ execute_operation(State, {kill_member}) ->
             Member = lists:nth(rand:uniform(length(MembersList)), MembersList),
             NodeName = element(2, Member),
 
-            log("~s Killing member ~w...~n", [timestamp(), Member]),
-
-            case erpc:call(NodeName, erlang, whereis, [?CLUSTER_NAME]) of
-                Pid when is_pid(Pid) ->
-                    erpc:call(NodeName, erlang, exit, [Pid, kill]),
-                    %% give it a bit of time after a kill in case this member is chosen
-                    %% for the next operation
-                    timer:sleep(100),
-                    State#{operations_count => OpCount + 1,
-                           successful_ops => SuccessOps + 1};
-                _ ->
-                    State
+            Now = milliseconds(),
+            LastKill = maps:get(Member, Kills, Now - 10000),
+            if(Now > LastKill + 5500) ->
+                  case erpc:call(NodeName, erlang, whereis, [?CLUSTER_NAME]) of
+                      Pid when is_pid(Pid) ->
+                          log("~s Killing member ~w...~n", [timestamp(), Member]),
+                          erpc:call(NodeName, erlang, exit, [Pid, kill]),
+                          %% give it a bit of time after a kill in case this member is chosen
+                          %% for the next operation
+                          timer:sleep(100),
+                          State#{operations_count => OpCount + 1,
+                                 kills => Kills#{Member => Now},
+                                 successful_ops => SuccessOps + 1};
+                      _ ->
+                          State
+                  end;
+              true ->
+                  log("~s Not killing member ~w...~n", [timestamp(), Member]),
+                  State
             end
+
     end.
 
 -spec wait_for_applied_index_convergence([ra:server_id()], non_neg_integer()) -> ok.
