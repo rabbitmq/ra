@@ -1,4 +1,3 @@
-%% This Source Code Form is subject to the terms of the Mozilla Public
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
@@ -50,8 +49,9 @@
          promote_checkpoint/2,
          checkpoint/3,
          persist_last_applied/1,
+         peers/1,
+         peer_status/2,
          update_peer/3,
-         register_external_log_reader/2,
          update_disconnected_peers/3,
          handle_down/5,
          handle_node_status/6,
@@ -98,7 +98,8 @@
       queries_waiting_heartbeats := queue:queue({non_neg_integer(),
                                                  consistent_query_ref()}),
       pending_consistent_queries := [consistent_query_ref()],
-      commit_latency => option(non_neg_integer())
+      commit_latency => option(non_neg_integer()),
+      snapshot_phase => chunk_flag()
      }.
 
 -type state() :: ra_server_state().
@@ -168,7 +169,10 @@
     {cast, ra_server_id(), term()} |
     {send_vote_requests, [{ra_server_id(),
                            #request_vote_rpc{} | #pre_vote_rpc{}}]} |
-    {send_rpc, ra_server_id(), #append_entries_rpc{}} |
+    {send_rpc, ra_server_id(),
+     #append_entries_rpc{} |
+     #heartbeat_rpc{} |
+     #info_rpc{}} |
     {send_snapshot, To :: ra_server_id(),
      {Module :: module(), Ref :: term(),
       LeaderId :: ra_server_id(), Term :: ra_term()}} |
@@ -177,7 +181,8 @@
     {notify, #{pid() => [term()]}} |
     %% used for tracking valid leader messages
     {record_leader_msg, ra_server_id()} |
-    start_election_timeout.
+    start_election_timeout |
+    {bg_work, fun(() -> ok) | mfargs(), fun()}.
 
 -type effects() :: [effect()].
 
@@ -232,7 +237,8 @@
                               counter => counters:counters_ref(),
                               membership => ra_membership(),
                               system_config => ra_system:config(),
-                              has_changed => boolean()
+                              has_changed => boolean(),
+                              parent => term() %% the supervisor
                              }.
 
 -type ra_server_info_key() :: machine_version | atom().
@@ -401,6 +407,7 @@ init(#{id := Id,
                              maps:get(membership, Config, voter)),
 
     #{cfg => Cfg,
+      leader_id => undefined,
       current_term => CurrentTerm,
       cluster => Cluster0,
       % There may be scenarios when a single server
@@ -436,11 +443,11 @@ recover(#{cfg := #cfg{log_id = LogId,
     {#{log := Log0,
        cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State1, _} =
         apply_to(CommitIndex,
-                 fun({Idx, _, _} = E, S0) ->
+                 fun({_Idx, _, _} = E, S0) ->
                          %% Clear out the effects and notifies map
                          %% to avoid memory explosion
                          {Mod, LastAppl, S, MacSt, _E, _N, LastTs} = apply_with(E, S0),
-                         put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, Idx),
+                         put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, LastAppl),
                          {Mod, LastAppl, S, MacSt, [], #{}, LastTs}
                  end,
                  State0, []),
@@ -453,12 +460,26 @@ recover(#{cfg := #cfg{log_id = LogId,
     FromScan = CommitIndex + 1,
     {ToScan, _} = ra_log:last_index_term(Log0),
     ?DEBUG("~ts: scanning for cluster changes ~b:~b ", [LogId, FromScan, ToScan]),
-    {State, Log} = ra_log:fold(FromScan, ToScan,
-                               fun cluster_scan_fun/2,
-                               State1, Log0),
+    %% if we're recovering after a partial sparse write phase this will fail
+    {{LastScannedIdx, State2}, Log1} = ra_log:fold(FromScan, ToScan,
+                                                   fun cluster_scan_fun/2,
+                                                   {CommitIndex, State1}, Log0,
+                                                   return),
+
+    State = case LastScannedIdx < ToScan of
+                true ->
+                    ?DEBUG("~ts: scan detected sparse log last scanned ~b:~b "
+                           "resetting log to last contiguous index ~b",
+                           [LogId, LastScannedIdx, ToScan, LastScannedIdx]),
+                    %% the end of the log is sparse and needs to be reset
+                    {ok, Log} = ra_log:set_last_index(LastScannedIdx, Log1),
+                    State2#{log => Log};
+                false ->
+                    State2
+            end,
 
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
-    State#{log => Log,
+    State#{
            %% reset commit latency as recovery may calculate a very old value
            commit_latency => 0}.
 
@@ -476,7 +497,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             ?WARN("~ts: saw append_entries_reply from unknown peer ~w",
                   [LogId, PeerId]),
             {leader, State0, []};
-        Peer0 = #{match_index := MI, next_index := NI} ->
+        #{match_index := MI, next_index := NI} = Peer0 ->
             Peer = Peer0#{match_index => max(MI, LastIdx),
                           next_index => max(NI, NextIdx)},
             State1 = put_peer(PeerId, Peer, State0),
@@ -602,12 +623,12 @@ handle_leader({command, Cmd}, #{cfg := #cfg{id = Self,
             State = State0#{condition =>
                             #{predicate_fun => fun wal_down_condition/2,
                               transition_to => leader,
-                              %% TODO: make duration configurable?
                               timeout => #{duration => 5000,
                                            effects => CondEffs,
                                            transition_to => leader}}},
 
-            {await_condition, State, Effects0};
+            Effects = append_error_reply(Cmd, wal_down, Effects0),
+            {await_condition, State, Effects};
         {not_appended, Reason, State, Effects0} ->
             ?WARN("~ts command ~W NOT appended to log. Reason ~w",
                   [LogId, Cmd, 10, Reason]),
@@ -929,9 +950,6 @@ handle_leader({transfer_leadership, ServerId},
                                        transition_to => leader}}},
              [{reply, ok}, {send_msg, ServerId, election_timeout, cast}]}
     end;
-handle_leader({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {leader, State#{log => Log}, Effs};
 handle_leader(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_leader(Msg, State) ->
@@ -1040,9 +1058,6 @@ handle_candidate({ra_log_event, Evt}, State = #{log := Log0}) ->
     {candidate, State#{log => Log}, Effects};
 handle_candidate(election_timeout, State) ->
     call_for_election(candidate, State);
-handle_candidate({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {candidate, State#{log => Log}, Effs};
 handle_candidate(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_candidate(#info_rpc{term = Term} = Msg,
@@ -1141,9 +1156,6 @@ handle_pre_vote({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {pre_vote, State#{log => Log}, Effects};
-handle_pre_vote({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {pre_vote, State#{log => Log}, Effs};
 handle_pre_vote(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
 handle_pre_vote(#info_rpc{term = Term} = Msg,
@@ -1343,8 +1355,8 @@ handle_follower(#heartbeat_rpc{leader_id = LeaderId,
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower({ra_log_event, Evt}, #{log := Log0,
                                        cfg := #cfg{id = Id},
-                                       leader_id := LeaderId,
                                        current_term := Term} = State0) ->
+    LeaderId = maps:get(leader_id, State0, undefined),
     % forward events to ra_log
     % if the last written changes then send an append entries reply
     LW = ra_log:last_written(Log0),
@@ -1438,35 +1450,50 @@ handle_follower(#install_snapshot_rpc{term = Term,
                                       meta = #{index := SnapIdx,
                                                machine_version := SnapMacVer} = Meta,
                                       leader_id = LeaderId,
-                                      chunk_state = {1, _ChunkFlag}} = Rpc,
+                                      chunk_state = {Num, ChunkFlag}} = Rpc,
                 #{cfg := #cfg{log_id = LogId,
-                              machine_version = MacVer}, log := Log0,
+                              machine_version = MacVer},
+                  log := Log0,
                   last_applied := LastApplied,
                   current_term := CurTerm} = State0)
   when Term >= CurTerm andalso
        SnapIdx > LastApplied andalso
        %% only install snapshot if the machine version is understood
-       MacVer >= SnapMacVer ->
+       MacVer >= SnapMacVer andalso
+       Num =< 1 andalso
+       ChunkFlag /= pre ->
     %% only begin snapshot procedure if Idx is higher than the last_applied
     %% index.
-    ?DEBUG("~ts: begin_accept snapshot at index ~b in term ~b",
-           [LogId, SnapIdx, Term]),
+    ?DEBUG("~ts: begin_accept snapshot at index ~b in term ~b, phase ~s",
+           [LogId, SnapIdx, Term, ChunkFlag]),
     SnapState0 = ra_log:snapshot_state(Log0),
     {ok, SS} = ra_snapshot:begin_accept(Meta, SnapState0),
-    Log = ra_log:set_snapshot_state(SS, Log0),
+    Log1 = ra_log:set_snapshot_state(SS, Log0),
+
+    %% if the snaphost includes pre entries (live entries) then we need
+    %% to reset the log to the last applied index to avoid issues
+    Log = case ChunkFlag of
+              init ->
+                  {ok, L} = ra_log:set_last_index(LastApplied, Log1),
+                  L;
+              _ ->
+                  Log1
+          end,
     {receive_snapshot, update_term(Term, State0#{log => Log,
+                                                 snapshot_phase => ChunkFlag,
                                                  leader_id => LeaderId}),
      [{next_event, Rpc}, {record_leader_msg, LeaderId}]};
 handle_follower(#install_snapshot_rpc{term = Term,
-                                      meta = #{index := LastIndex,
+                                      meta = #{index := SnapIdx,
                                                machine_version := SnapMacVer,
                                                term := _LastTerm}},
                 #{cfg := #cfg{log_id = LogId,
                               machine_version = MacVer},
                   last_applied := LastApplied} = State0)
   when MacVer >= SnapMacVer ->
-    ?DEBUG("~ts: install_snapshot received with lower last index ~b in ~b",
-           [LogId, LastIndex, Term]),
+    ?DEBUG("~ts: install_snapshot received with snapshot index ~b,
+           in ~b, local last applied index ~b ",
+           [LogId, SnapIdx, Term, LastApplied]),
     %% follower receives a snapshot for an index lower than its last applied
     %% index, just reply with append_entries_reply to make the leader skip
     %% ahead
@@ -1493,9 +1520,6 @@ handle_follower(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_follower(try_become_leader, State) ->
     handle_follower(election_timeout, State);
-handle_follower({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {follower, State#{log => Log}, Effs};
 handle_follower(force_member_change,
                 #{cfg := #cfg{id = Id,
                               uid = Uid,
@@ -1529,33 +1553,82 @@ handle_follower(Msg, State) ->
 handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                               meta = #{index := SnapIndex,
                                                        machine_version := SnapMacVer,
+                                                       cluster := ClusterIds,
                                                        term := SnapTerm} = SnapMeta,
                                               chunk_state = {Num, ChunkFlag},
-                                              data = Data},
+                                              data = ChunkOrEntries} = Rpc,
                         #{cfg := #cfg{id = Id,
                                       log_id = LogId,
                                       effective_machine_version = CurEffMacVer,
                                       machine_versions = MachineVersions,
                                       machine = Machine} = Cfg0,
-                          log := Log0,
+                          log := Log00,
                           cluster := Cluster,
                           current_term := CurTerm,
                           last_applied := LastApplied,
-                          machine_state := OldMacState} = State0)
+                          machine_state := OldMacState,
+                          snapshot_phase := SnapPhase} = State0)
   when Term >= CurTerm ->
-    ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
-           [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
-    SnapState0 = ra_log:snapshot_state(Log0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
-                                               SnapState0),
     Reply = #install_snapshot_result{term = CurTerm,
                                      last_term = SnapTerm,
                                      last_index = SnapIndex},
+    SnapState0 = ra_log:snapshot_state(Log00),
+    %% works as an assertion also
+    {AcceptingSnapIdx, _} = ra_snapshot:accepting(SnapState0),
     case ChunkFlag of
+        init when SnapPhase == init andalso
+                  SnapIndex == AcceptingSnapIdx ->
+            %% this is ok, just reply
+            %% need to set snapshot_phase to pre here as else a new snapshot
+            %% init could be sent without detecting this
+            {receive_snapshot, State0, [{reply, Reply}]};
+        init ->
+            ?DEBUG("~ts: receiving snapshot saw unexpected init phase at snapshot "
+                   "index term {~b, ~b}, current phase ~s restarting "
+                   "snapshot receive phase",
+                   [LogId, SnapIndex, SnapTerm, SnapPhase]),
+            %% the snapshot sending must have been interrupted and restarted
+            %% during the init or pre-phase
+            %% abort the snapshot, and revert to follower
+            State = abort_receive(State0),
+            {follower, State, [{next_event, Rpc}]};
+        pre when is_list(ChunkOrEntries) ->
+            ?assert(SnapIndex == AcceptingSnapIdx),
+            % ?DEBUG("~ts: receiving snapshot chunk pre first index ~b snap index ~b, term ~b",
+            %        [LogId, FstIdx, SnapIndex, SnapTerm]),
+            %% reset last index to last applied
+            %% as we dont know for sure indexes after last applied
+            %% are of the right term
+            {LastIdx, _} = ra_log:last_index_term(Log00),
+            {Log, _} = lists:foldl(
+                         fun ({I, _, _} = E, {L0, LstIdx})
+                               when I > LastApplied ->
+                                 {ok, L} = ra_log:write_sparse(E, LstIdx, L0),
+                                 {L, I};
+                             (_, Acc) ->
+                                 %% drop any entries that are lower than last applied
+                                 Acc
+                         end, {Log00, LastIdx}, ChunkOrEntries),
+            State = update_term(Term, State0#{log => Log,
+                                              snapshot_phase => pre}),
+            {receive_snapshot, State, [{reply, Reply}]};
+        next ->
+            ?assert(SnapIndex == AcceptingSnapIdx),
+            ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
+                   [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
+            SnapState = ra_snapshot:accept_chunk(ChunkOrEntries, Num, SnapState0),
+            Log0 = ra_log:set_snapshot_state(SnapState, Log00),
+            State = update_term(Term, State0#{log => Log0,
+                                              snapshot_phase => next}),
+            {receive_snapshot, State, [{reply, Reply}]};
         last ->
-            %% this is the last chunk so we can "install" it
-            {Log, Effs} = ra_log:install_snapshot({SnapIndex, SnapTerm},
-                                                  SnapState, Log0),
+            ?assert(SnapIndex == AcceptingSnapIdx),
+            ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
+                   [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
+            {SnapState, MacState, LiveIndexes, Effs0} =
+                ra_snapshot:complete_accept(ChunkOrEntries, Num, Machine,
+                                            SnapState0),
+            Log0 = ra_log:set_snapshot_state(SnapState, Log00),
             %% if the machine version of the snapshot is higher
             %% we also need to update the current effective machine configuration
             EffMacMod = ra_machine:which_module(Machine, SnapMacVer),
@@ -1571,9 +1644,10 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                       false ->
                           Cfg0
                   end,
-
-            {#{cluster := ClusterIds}, MacState} = ra_log:recover_snapshot(Log),
-
+            %% this is the last chunk so we can "install" it
+            {ok, Log, Effs} = ra_log:install_snapshot({SnapIndex, SnapTerm},
+                                                      EffMacMod,
+                                                      LiveIndexes, Log0),
             OldServerIds = maps:map(fun (_, V) ->
                                             maps:with([voter_status], V)
                                     end, Cluster),
@@ -1587,88 +1661,73 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                                               MacState,
                                                               OldMeta,
                                                               OldMacState),
-            State = update_term(Term,
-                                State0#{cfg => Cfg,
-                                        log => Log,
-                                        commit_index => SnapIndex,
-                                        last_applied => SnapIndex,
-                                        %% this may not be the actual cluster index
-                                        cluster_index_term => {SnapIndex,
-                                                               SnapTerm},
-                                        cluster => make_cluster(Id, ClusterIds),
-                                        membership => get_membership(ClusterIds, State0),
-                                        machine_state => MacState}),
+            State1 = update_term(Term,
+                                 State0#{cfg => Cfg,
+                                         log => Log,
+                                         commit_index => SnapIndex,
+                                         last_applied => SnapIndex,
+                                         %% this may not be the actual
+                                         %% cluster index
+                                         cluster_index_term => {SnapIndex,
+                                                                SnapTerm},
+                                         cluster => make_cluster(Id, ClusterIds),
+                                         membership =>
+                                             get_membership(ClusterIds, State0),
+                                         machine_state => MacState}),
+            State = maps:remove(snapshot_phase, State1),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapIndex),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
             {follower, persist_last_applied(State), [{reply, Reply} |
-                                                     Effs ++ SnapInstalledEffs]};
-        next ->
-            Log = ra_log:set_snapshot_state(SnapState, Log0),
-            State = update_term(Term, State0#{log => Log}),
-            {receive_snapshot, State, [{reply, Reply}]}
+                                                     Effs0 ++ Effs ++
+                                                     SnapInstalledEffs]}
     end;
 handle_receive_snapshot(#append_entries_rpc{term = Term} = Msg,
                         #{current_term := CurTerm,
-                          cfg := #cfg{log_id = LogId},
-                          log := Log0} = State)
+                          cfg := #cfg{log_id = LogId}} = State0)
   when Term > CurTerm ->
     ?INFO("~ts: follower receiving snapshot saw append_entries_rpc from ~w for term ~b "
           "abdicates term: ~b!",
           [LogId, Msg#append_entries_rpc.leader_id,
            Term, CurTerm]),
-    SnapState0 = ra_log:snapshot_state(Log0),
-    SnapState = ra_snapshot:abort_accept(SnapState0),
-    Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, update_term(Term, clear_leader_id(State#{log => Log})),
-     [{next_event, Msg}]};
+    State = abort_receive(State0),
+    {follower, update_term(Term, State), [{next_event, Msg}]};
 handle_receive_snapshot({ra_log_event, Evt},
-                        State = #{cfg := #cfg{id = _Id, log_id = LogId},
-                                  log := Log0}) ->
-    ?DEBUG("~ts: ~s ra_log_event received: ~w",
-          [LogId, ?FUNCTION_NAME, Evt]),
+                        #{cfg := #cfg{log_id = _LogId},
+                          log := Log0} = State) ->
     % simply forward all other events to ra_log
     % whilst the snapshot is being received
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {receive_snapshot, State#{log => Log}, Effects};
-handle_receive_snapshot(receive_snapshot_timeout, #{log := Log0} = State) ->
-    SnapState0 = ra_log:snapshot_state(Log0),
-    SnapState = ra_snapshot:abort_accept(SnapState0),
-    Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, State#{log => Log}, []};
-handle_receive_snapshot({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {receive_snapshot, State#{log => Log}, Effs};
+handle_receive_snapshot(receive_snapshot_timeout,
+                        #{cfg := #cfg{log_id = LogId}} = State0) ->
+    ?INFO("~ts: ~s receive snapshot timed out.",
+          [LogId, ?FUNCTION_NAME]),
+    State = abort_receive(State0),
+    {follower, State, []};
 handle_receive_snapshot(#info_rpc{term = Term} = Msg,
                         #{current_term := CurTerm,
-                          cfg := #cfg{log_id = LogId},
-                          log := Log0} = State)
+                          cfg := #cfg{log_id = LogId}} = State0)
   when CurTerm < Term ->
     ?INFO("~ts: follower receiving snapshot saw info_rpc from ~w for term ~b "
-          "abdicates term: ~b!",
+          "current term: ~b!",
           [LogId, Msg#info_rpc.from,
            Term, CurTerm]),
-    SnapState0 = ra_log:snapshot_state(Log0),
-    SnapState = ra_snapshot:abort_accept(SnapState0),
-    Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, update_term(Term, clear_leader_id(State#{log => Log})),
-     [{next_event, Msg}]};
+    State = abort_receive(State0),
+    {follower, update_term(Term, State), [{next_event, Msg}]};
 handle_receive_snapshot(#info_rpc{} = InfoRpc, State) ->
     InfoReplyEffect = empty_info_reply_effect(State, InfoRpc),
     {receive_snapshot, State, [InfoReplyEffect]};
 handle_receive_snapshot(#info_reply{term = Term} = Msg,
                         #{current_term := CurTerm,
-                          cfg := #cfg{log_id = LogId},
-                          log := Log0} = State)
+                          cfg := #cfg{log_id = LogId}} = State0)
   when CurTerm < Term ->
     ?INFO("~ts: follower receiving snapshot saw info_reply from ~w for term ~b "
           "abdicates term: ~b!",
           [LogId, Msg#info_reply.from,
            Term, CurTerm]),
-    SnapState0 = ra_log:snapshot_state(Log0),
-    SnapState = ra_snapshot:abort_accept(SnapState0),
-    Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {follower, update_term(Term, clear_leader_id(State#{log => Log})),
-     [{next_event, Msg}]};
+    State = abort_receive(State0),
+    {follower, update_term(Term, State), [{next_event, Msg}]};
 handle_receive_snapshot(#info_reply{}, State) ->
     {receive_snapshot, State, []};
 handle_receive_snapshot(Msg, State) ->
@@ -1676,6 +1735,21 @@ handle_receive_snapshot(Msg, State) ->
     %% drop all other events??
     %% TODO: work out what else to handle
     {receive_snapshot, State, [{reply, {error, {unsupported_call, Msg}}}]}.
+
+abort_receive(#{snapshot_phase := Phase,
+                last_applied := LastApplied,
+                log := Log0} = State) ->
+    SnapState0 = ra_log:snapshot_state(Log0),
+    SnapState = ra_snapshot:abort_accept(SnapState0),
+    Log1 = ra_log:set_snapshot_state(SnapState, Log0),
+    Log = case Phase of
+              pre ->
+                  {ok, Log2} = ra_log:set_last_index(LastApplied, Log1),
+                  Log2;
+              _ ->
+                  Log1
+          end,
+    clear_leader_id(maps:remove(snapshot_phase, State#{log => Log})).
 
 -spec handle_await_condition(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
@@ -1709,9 +1783,6 @@ handle_await_condition({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {await_condition, State#{log => Log}, Effects};
-handle_await_condition({register_external_log_reader, Pid}, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {await_condition, State#{log => Log}, Effs};
 handle_await_condition(Msg, #{condition := #{predicate_fun := Pred} = Cond} = State0) ->
     case Pred(Msg, State0) of
         {true, State1} ->
@@ -2185,21 +2256,26 @@ log_fold_cache(From, _To, _Cache, Acc) ->
                             term(), ra_server_state()) ->
     {ra_server_state(), effects()}.
 update_release_cursor(Index, MacState,
-                      State = #{log := Log0, cluster := Cluster}) ->
+                      #{cfg := #cfg{machine = Machine},
+                        log := Log0,
+                        cluster := Cluster} = State) ->
     MacVersion = index_machine_version(Index, State),
+    MacMod = ra_machine:which_module(Machine, MacVersion),
     % simply pass on release cursor index to log
     {Log, Effects} = ra_log:update_release_cursor(Index, Cluster,
-                                                  MacVersion,
+                                                  MacMod,
                                                   MacState, Log0),
     {State#{log => Log}, Effects}.
 
 -spec checkpoint(ra_index(), term(), ra_server_state()) ->
       {ra_server_state(), effects()}.
 checkpoint(Index, MacState,
-           State = #{log := Log0, cluster := Cluster}) ->
+           #{cfg := #cfg{machine = Machine},
+             log := Log0, cluster := Cluster} = State) ->
     MacVersion = index_machine_version(Index, State),
+    MacMod = ra_machine:which_module(Machine, MacVersion),
     {Log, Effects} = ra_log:checkpoint(Index, Cluster,
-                                       MacVersion, MacState, Log0),
+                                       MacMod, MacState, Log0),
     {State#{log => Log}, Effects}.
 
 -spec promote_checkpoint(ra_index(), ra_server_state()) ->
@@ -2234,12 +2310,6 @@ update_peer(PeerId, Update, #{cluster := Peers} = State)
   when is_map(Update) ->
     Peer = maps:merge(maps:get(PeerId, Peers), Update),
     put_peer(PeerId, Peer, State).
-
--spec register_external_log_reader(pid(), ra_server_state()) ->
-    {ra_server_state(), effects()}.
-register_external_log_reader(Pid, #{log := Log0} = State) ->
-    {Log, Effs} = ra_log:register_reader(Pid, Log0),
-    {State#{log => Log}, Effs}.
 
 -spec update_disconnected_peers(node(), nodeup | nodedown, ra_server_state()) ->
     ra_server_state().
@@ -2289,20 +2359,20 @@ handle_down(RaftState, snapshot_sender, Pid, Info,
               "~ts: Snapshot sender process ~w exited with ~W",
               [LogId, Pid, Info, 10]),
     {leader, peer_snapshot_process_exited(Pid, State), []};
-handle_down(RaftState, snapshot_writer, Pid, Info,
-            #{cfg := #cfg{log_id = LogId}, log := Log0} = State)
-  when is_pid(Pid) ->
-    case Info of
-        noproc -> ok;
-        normal -> ok;
-        _ ->
-            ?WARN("~ts: Snapshot write process ~w exited with ~w",
-                  [LogId, Pid, Info])
-    end,
-    SnapState0 = ra_log:snapshot_state(Log0),
-    SnapState = ra_snapshot:handle_down(Pid, Info, SnapState0),
-    Log = ra_log:set_snapshot_state(SnapState, Log0),
-    {RaftState, State#{log => Log}, []};
+% handle_down(RaftState, snapshot_writer, Pid, Info,
+%             #{cfg := #cfg{log_id = LogId}, log := Log0} = State)
+%   when is_pid(Pid) ->
+%     case Info of
+%         noproc -> ok;
+%         normal -> ok;
+%         _ ->
+%             ?WARN("~ts: Snapshot write process ~w exited with ~w",
+%                   [LogId, Pid, Info])
+%     end,
+%     SnapState0 = ra_log:snapshot_state(Log0),
+%     SnapState = ra_snapshot:handle_error(Pid, Info, SnapState0),
+%     Log = ra_log:set_snapshot_state(SnapState, Log0),
+%     {RaftState, State#{log => Log}, []};
 handle_down(RaftState, log, Pid, Info, #{log := Log0} = State) ->
     {Log, Effects} = ra_log:handle_event({down, Pid, Info}, Log0),
     {RaftState, State#{log => Log}, Effects};
@@ -2507,6 +2577,14 @@ new_peer_with(Map) ->
 
 peers(#{cfg := #cfg{id = Id}, cluster := Peers}) ->
     maps:remove(Id, Peers).
+
+peer_status(PeerId, #{cluster := Peers}) ->
+    case Peers of
+        #{PeerId := #{status := Status}} ->
+            Status;
+        _ ->
+            undefined
+    end.
 
 %% remove any peers that are currently receiving a snapshot
 peers_with_normal_status(State) ->
@@ -2801,16 +2879,16 @@ append_machine_effects(AppEffs, Effs) ->
     [AppEffs | Effs].
 
 cluster_scan_fun({Idx, Term, {'$ra_cluster_change', _Meta, NewCluster, _}},
-                 State0) ->
+                 {_, State0}) ->
     ?DEBUG("~ts: ~ts: applying ra cluster change to ~w",
            [log_id(State0), ?FUNCTION_NAME, maps:keys(NewCluster)]),
     %% we are recovering and should apply the cluster change
-    State0#{cluster => NewCluster,
-            membership => get_membership(NewCluster, State0),
-            cluster_change_permitted => true,
-            cluster_index_term => {Idx, Term}};
-cluster_scan_fun(_Cmd, State) ->
-    State.
+    {Idx, State0#{cluster => NewCluster,
+                  membership => get_membership(NewCluster, State0),
+                  cluster_change_permitted => true,
+                  cluster_index_term => {Idx, Term}}};
+cluster_scan_fun({Idx, _, _}, {_, State}) ->
+    {Idx, State}.
 
 apply_with(_Cmd,
            {Mod, LastAppliedIdx,
@@ -3280,7 +3358,8 @@ heartbeat_rpc_effects(Peers, Id, Term, QueryIndex) ->
                     end,
                     maps:to_list(Peers)).
 
-heartbeat_rpc_effect_for_peer(PeerId, Peer, Id, Term, QueryIndex) ->
+heartbeat_rpc_effect_for_peer(PeerId, #{status := normal} = Peer,
+                              Id, Term, QueryIndex) ->
     case maps:get(query_index, Peer, 0) < QueryIndex of
         true ->
             {true,
@@ -3290,7 +3369,9 @@ heartbeat_rpc_effect_for_peer(PeerId, Peer, Id, Term, QueryIndex) ->
                              leader_id = Id}}};
         false ->
             false
-    end.
+    end;
+heartbeat_rpc_effect_for_peer(_PeerId, _Peer, _Id, _Term, _QueryIndex) ->
+    false.
 
 heartbeat_rpc_quorum(NewQueryIndex, PeerId,
                      #{queries_waiting_heartbeats := Waiting0} = State) ->

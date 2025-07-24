@@ -57,8 +57,7 @@ init([#{data_dir := DataDir,
 
 make_wal_conf(#{data_dir := DataDir,
                 name := System,
-                names := #{wal := WalName,
-                           segment_writer := SegWriterName} = Names} = Cfg) ->
+                names := #{} = Names} = Cfg) ->
     WalDir = case Cfg of
                  #{wal_data_dir := D} -> D;
                  _ -> DataDir
@@ -69,7 +68,6 @@ make_wal_conf(#{data_dir := DataDir,
     MaxBatchSize = maps:get(wal_max_batch_size, Cfg,
                             ?WAL_DEFAULT_MAX_BATCH_SIZE),
     MaxEntries = maps:get(wal_max_entries, Cfg, undefined),
-    Strategy = maps:get(wal_write_strategy, Cfg, default),
     SyncMethod = maps:get(wal_sync_method, Cfg, datasync),
     HibAfter = maps:get(wal_hibernate_after, Cfg, undefined),
     Gc = maps:get(wal_garbage_collect, Cfg, false),
@@ -77,13 +75,10 @@ make_wal_conf(#{data_dir := DataDir,
     MinBinVheapSize = maps:get(wal_min_bin_vheap_size, Cfg,
                                ?MIN_BIN_VHEAP_SIZE),
     MinHeapSize = maps:get(wal_min_heap_size, Cfg, ?MIN_HEAP_SIZE),
-    #{name => WalName,
+    #{names => Names,
       system => System,
-      names => Names,
       dir => WalDir,
-      segment_writer => SegWriterName,
       compute_checksums => ComputeChecksums,
-      write_strategy => Strategy,
       max_size_bytes => MaxSizeBytes,
       max_entries => MaxEntries,
       sync_method => SyncMethod,

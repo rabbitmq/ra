@@ -159,7 +159,7 @@ read_chunk({Pos, Eof, Fd}, Size, _Dir) ->
             {error, unexpected_eof}
     end.
 
--spec recover(file:filename()) ->
+-spec recover(file:filename_all()) ->
     {ok, meta(), term()} |
     {error, invalid_format |
      {invalid_version, integer()} |
@@ -177,6 +177,7 @@ recover(Dir) ->
         {error, _} = Err ->
             Err
     end.
+
 
 validate(Dir) ->
     case recover(Dir) of
@@ -208,7 +209,6 @@ read_meta(Dir) ->
 -spec context() -> map().
 context() ->
     #{can_accept_full_file => true}.
-
 
 %% Internal
 
