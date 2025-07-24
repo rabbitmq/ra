@@ -21,6 +21,7 @@ LOCAL_DEPS = sasl crypto
 dep_elvis_mk = git https://github.com/inaka/elvis.mk.git master
 dep_looking_glass = git https://github.com/rabbitmq/looking-glass.git master
 dep_inet_tcp_proxy = git https://github.com/rabbitmq/inet_tcp_proxy.git
+dep_eunit_formatters = git https://github.com/seancribbs/eunit_formatters main
 
 DEP_PLUGINS = elvis_mk
 
