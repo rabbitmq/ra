@@ -854,8 +854,7 @@ handle_event({segments, TidRanges, NewSegs},
                _ ->
                    Pend0
            end,
-    ?DEBUG("~ts: segments tidranges ~w, pending ~w Mt range ~w ",
-           [LogId, TidRanges, Pend, MtRange]),
+    ?DEBUG("~ts: ~b segments tidranges received ", [LogId, length(TidRanges)]),
     State = State0#?MODULE{reader = Reader,
                            pending = Pend,
                            mem_table = Mt},
