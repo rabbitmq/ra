@@ -31,7 +31,7 @@
 
 -include("ra.hrl").
 
--define(AWAIT_TIMEOUT, 30000).
+-define(AWAIT_TIMEOUT, 60000).
 -define(SEGMENT_WRITER_RECOVERY_TIMEOUT, 30000).
 
 -define(C_MEM_TABLES, 1).
