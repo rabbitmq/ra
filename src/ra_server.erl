@@ -145,7 +145,8 @@
                   {command, command()} |
                   {commands, [command()]} |
                   ra_log:event() |
-                  {consistent_query, term(), ra:query_fun()} |
+                  {consistent_query, from(), ra:query_fun()} |
+                  {consistent_aux, from(), AuxCmd :: term()} |
                   #heartbeat_rpc{} |
                   #info_rpc{} |
                   #info_reply{} |
@@ -792,15 +793,21 @@ handle_leader(#append_entries_rpc{leader_id = LeaderId},
 handle_leader({consistent_query, From, QueryFun},
               #{commit_index := CommitIndex,
                 cluster_change_permitted := true} = State0) ->
-    QueryRef = {From, QueryFun, CommitIndex},
+    QueryRef = {query, From, QueryFun, CommitIndex},
     {State1, Effects} = make_heartbeat_rpc_effects(QueryRef, State0),
     {leader, State1, Effects};
 handle_leader({consistent_query, From, QueryFun},
               #{commit_index := CommitIndex,
                 cluster_change_permitted := false,
                 pending_consistent_queries := PQ} = State0) ->
-    QueryRef = {From, QueryFun, CommitIndex},
+    QueryRef = {query, From, QueryFun, CommitIndex},
     {leader, State0#{pending_consistent_queries => [QueryRef | PQ]}, []};
+handle_leader({consistent_aux, From, AuxCmd},
+              #{commit_index := CommitIndex,
+                cluster_change_permitted := true} = State0) ->
+    QueryRef = {aux, From, AuxCmd, CommitIndex},
+    {State1, Effects} = make_heartbeat_rpc_effects(QueryRef, State0),
+    {leader, State1, Effects};
 %% Lihtweight version of append_entries_rpc
 handle_leader(#heartbeat_rpc{term = Term} = Msg,
               #{current_term := CurTerm,
@@ -1799,9 +1806,9 @@ handle_await_condition(Msg, #{condition := #{predicate_fun := Pred} = Cond} = St
     {ra_server_state(), [from()]}.
 process_new_leader_queries(#{pending_consistent_queries := Pending,
                              queries_waiting_heartbeats := Waiting} = State0) ->
-    From0 = lists:map(fun({From, _, _}) -> From end, Pending),
+    From0 = lists:map(fun({_, From, _, _}) -> From end, Pending),
 
-    From1 = lists:map(fun({_, {From, _, _}}) -> From end,
+    From1 = lists:map(fun({_, {_, From, _, _}}) -> From end,
                       queue:to_list(Waiting)),
 
     {State0#{pending_consistent_queries => [],
@@ -1897,39 +1904,52 @@ handle_aux(RaftState, Type, _Cmd,
                       [{reply, {error, aux_handler_not_implemented}}]
               end,
     {RaftState, State0, Effects};
-handle_aux(RaftState, Type, Cmd,
+handle_aux(RaftState, Type, MaybeWrappedCmd,
            #{cfg := #cfg{effective_machine_module = MacMod,
                          effective_handle_aux_fun = {handle_aux, 5}},
              aux_state := Aux0} = State0) ->
+    {Wrap, Cmd} = case MaybeWrappedCmd of
+                      {'$wrap_reply', C} ->
+                          {true, C};
+                      C ->
+                          {false, C}
+                  end,
+
     %% NEW API
     case ra_machine:handle_aux(MacMod, RaftState, Type, Cmd, Aux0,
                                State0) of
         {reply, Reply, Aux, State} ->
             {RaftState, State#{aux_state => Aux},
-             [{reply, Reply}]};
+             [{reply, wrap_reply(Wrap, Reply)}]};
         {reply, Reply, Aux, State, Effects} ->
             {RaftState, State#{aux_state => Aux},
-             [{reply, Reply} | Effects]};
+             [{reply, wrap_reply(Wrap, Reply)} | Effects]};
         {no_reply, Aux, State} ->
             {RaftState, State#{aux_state => Aux}, []};
         {no_reply, Aux, State, Effects} ->
             {RaftState, State#{aux_state => Aux}, Effects}
     end;
-handle_aux(RaftState, Type, Cmd,
+handle_aux(RaftState, Type, MaybeWrappedCmd ,
            #{cfg := #cfg{effective_machine_module = MacMod,
                          effective_handle_aux_fun = {handle_aux, 6}},
              aux_state := Aux0,
              machine_state := MacState,
              log := Log0} = State0) ->
+    {Wrap, Cmd} = case MaybeWrappedCmd of
+                      {'$wrap_reply', C} ->
+                          {true, C};
+                      C ->
+                          {false, C}
+                  end,
     %% OLD API
     case ra_machine:handle_aux(MacMod, RaftState, Type, Cmd, Aux0,
                                Log0, MacState) of
         {reply, Reply, Aux, Log} ->
             {RaftState, State0#{log => Log, aux_state => Aux},
-             [{reply, Reply}]};
+             [{reply, wrap_reply(Wrap, Reply)}]};
         {reply, Reply, Aux, Log, Effects} ->
             {RaftState, State0#{log => Log, aux_state => Aux},
-             [{reply, Reply} | Effects]};
+             [{reply, wrap_reply(Wrap, Reply)} | Effects]};
         {no_reply, Aux, Log} ->
             {RaftState, State0#{log => Log, aux_state => Aux}, []};
         {no_reply, Aux, Log, Effects} ->
@@ -1939,6 +1959,11 @@ handle_aux(RaftState, Type, Cmd,
     end.
 
 % property helpers
+
+wrap_reply(true, Cmd) ->
+    {wrap_reply, Cmd};
+wrap_reply(false, Cmd) ->
+    Cmd.
 
 -spec id(ra_server_state()) -> ra_server_id().
 id(#{cfg := #cfg{id = Id}}) -> Id.
@@ -1977,12 +2002,9 @@ machine(#{cfg := #cfg{machine = Machine}}) ->
 machine_query(QueryFun, #{cfg := #cfg{effective_machine_module = MacMod},
                           machine_state := MacState,
                           last_applied := Last,
-                          current_term := Term
-                         }) ->
+                          current_term := Term}) ->
     Res = ra_machine:query(MacMod, QueryFun, MacState),
     {{Last, Term}, Res}.
-
-
 
 % Internal
 
@@ -3399,8 +3421,10 @@ heartbeat_rpc_quorum(NewQueryIndex, PeerId,
                               end,
                               Waiting0),
     case QueryRefs of
-        [] -> {[], State1};
-        _  -> {QueryRefs, State1#{queries_waiting_heartbeats := Waiting1}}
+        [] ->
+            {[], State1};
+        _ ->
+            {QueryRefs, State1#{queries_waiting_heartbeats := Waiting1}}
     end.
 
 update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster} = State0) ->
@@ -3441,24 +3465,21 @@ take_from_queue_while(Fun, Queue, Result) ->
             {Result, Queue}
     end.
 
--spec apply_consistent_queries_effects([consistent_query_ref()],
-                                       ra_server_state()) ->
-    effects().
 apply_consistent_queries_effects(QueryRefs,
                                  #{last_applied := LastApplied} = State) ->
-    lists:map(fun({_, _, ReadCommitIndex} = QueryRef) ->
+    lists:map(fun({_, _, _, ReadCommitIndex} = QueryRef) ->
                       true = LastApplied >= ReadCommitIndex,
-                      consistent_query_reply(QueryRef, State)
+                      process_consistent_query(QueryRef, State)
               end, QueryRefs).
 
--spec consistent_query_reply(consistent_query_ref(), ra_server_state()) -> effect().
-consistent_query_reply({From, QueryFun, _ReadCommitIndex},
-                       #{cfg := #cfg{id = Id,
-                                     machine = {machine, MacMod, _}},
-                         machine_state := MacState
-                         }) ->
+process_consistent_query({query, From, QueryFun, _ReadCommitIndex},
+                         #{cfg := #cfg{id = Id,
+                                       machine = {machine, MacMod, _}},
+                           machine_state := MacState}) ->
     Result = ra_machine:query(MacMod, QueryFun, MacState),
-    {reply, From, {ok, Result, Id}}.
+    {reply, From, {ok, Result, Id}};
+process_consistent_query({aux, From, AuxCmd, _ReadCommitIndex}, _State0) ->
+    {next_event, {call, From}, {aux_command, {'$wrap_reply', AuxCmd}}}.
 
 process_pending_consistent_queries(#{cluster_change_permitted := false} = State0,
                                    Effects0) ->

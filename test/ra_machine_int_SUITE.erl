@@ -48,6 +48,7 @@ all_tests() ->
      aux_eval,
      aux_tick,
      aux_handler_not_impl,
+     consistent_aux,
      aux_command,
      aux_command_v2,
      aux_command_v1_and_v2,
@@ -664,6 +665,50 @@ aux_handler_not_impl(Config) ->
     ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
     {ok, _, Leader} = ra:members(ServerId1),
     {error, aux_handler_not_implemented} = ra:aux_command(Leader, emit),
+    ok.
+
+consistent_aux(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+    Cluster = [ServerId1, ServerId2, ServerId3],
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
+    meck:expect(Mod, apply,
+                fun
+                    (_, Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        %% handle all
+                        {State, ok}
+                end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (RaftState, {call, _From}, emit, AuxState, Opaque) ->
+                        %% emits aux state
+                        {reply, {RaftState, AuxState}, AuxState, Opaque};
+                    (_RaftState, {call, _From}, banana, AuxState, Opaque) ->
+                        %% emits aux state
+                        {reply, banana, AuxState, Opaque};
+                    (_RaftState, cast, eval, AuxState, Opaque) ->
+                        %% replaces aux state
+                        {no_reply, AuxState, Opaque};
+                    (_RaftState, cast, NewState, _AuxState, Opaque) ->
+                        %% replaces aux state
+                        {no_reply, NewState, Opaque}
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    timer:sleep(100),
+    {ok, banana, _} = ra:consistent_aux(ServerId1, banana, 500),
+    ra:stop_server(?SYS, ServerId2),
+    {ok, banana, _} = ra:consistent_aux(ServerId1, banana, 500),
+    ra:stop_server(?SYS, ServerId3),
+    {timeout, ServerId1} = ra:consistent_aux(ServerId1, banana, 500),
+    ra:restart_server(?SYS, ServerId2),
+    ra:restart_server(?SYS, ServerId3),
+    ra:delete_cluster(Cluster),
     ok.
 
 aux_command(Config) ->

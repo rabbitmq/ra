@@ -156,13 +156,35 @@ put(ServerId, Key, Value, Timeout) ->
 -spec get(ra:server_id(), key(), non_neg_integer()) ->
     {ok, map(), value()} | {error, term()} | {timeout, ra:server_id()}.
 get(ServerId, Key, Timeout) ->
-    case ra:consistent_query(ServerId, {?MODULE, query_get,
-                                        [element(1, ServerId), Key]}, Timeout) of
+    case ra:consistent_aux(ServerId, {get, Key}, Timeout) of
         {ok, {ok, Idx, Members}, LeaderId} ->
-            case ra_server_proc:read_entries(LeaderId, [Idx],
+            %% see if there is a local member in the list of members
+            %% else query leader
+            QueryServerId =
+                case lists:search(fun ({_, N}) ->
+                                          N == node()
+                                  end, Members) of
+                    {value, {Name, _} = LocalMember} ->
+                        IsAlive = is_pid(whereis(Name)),
+                        case ra_counters:counters(LocalMember, [last_applied]) of
+                            #{last_applied := LastApplied}
+                              when IsAlive andalso
+                                   LastApplied >= Idx ->
+                                %% the local member has applied sufficient indexes
+                                LocalMember;
+                            _ ->
+                                %% fall back to leader for any other case
+                                LeaderId
+                        end;
+                    false ->
+                        LeaderId
+                end,
+
+            case ra_server_proc:read_entries(QueryServerId, [Idx],
                                              undefined, Timeout) of
                 {ok, {#{Idx := {Idx, Term,
-                                {'$usr', Meta, #put{value = Value}, _}}}, Flru}} ->
+                                {'$usr', Meta, #put{value = Value}, _}}},
+                      Flru}} ->
                     _ = ra_flru:evict_all(Flru),
                     {ok, Meta#{index => Idx,
                                members => Members,
@@ -176,11 +198,10 @@ get(ServerId, Key, Timeout) ->
             Err
     end.
 
-
 query_get(ClusterName, Key, #?STATE{keys = Keys}) ->
     Members = ra_leaderboard:lookup_members(ClusterName),
     case Keys of
-        #{Key := [Idx |_]} ->
+        #{Key := [Idx | _]} ->
             {ok, Idx, Members};
         _ ->
             {error, not_found}
@@ -223,6 +244,16 @@ handle_aux(_RaState, {call, _From}, take_snapshot, Aux, Internal) ->
     %% attempted?
     {reply, ok, Aux, Internal,
      [{release_cursor, LastAppliedIdx, MacState}]};
+handle_aux(_RaState, {call, _}, {get, Key}, Aux, Internal) ->
+    #?STATE{keys = Keys} = ra_aux:machine_state(Internal),
+    Members = maps:keys(ra_aux:members_info(Internal)),
+    Reply = case Keys of
+                #{Key := [Idx | _]} ->
+                    {ok, Idx, Members};
+                _ ->
+                    {error, not_found}
+            end,
+    {reply, Reply, Aux, Internal, []};
 handle_aux(_RaState, _, _, Aux, Internal) ->
     {no_reply, Aux, Internal}.
 
