@@ -1486,12 +1486,15 @@ overviews(Node) ->
     [ra:member_overview(P) || {_, _} = P <- Members].
 
 voters({ok, #{cluster := Peers}, _} = _Overview) ->
-    [Id || {Id, Status} <- maps:to_list(Peers), maps:get(membership, Status, voter) == voter].
+    [Id || {Id, Status} <- maps:to_list(Peers),
+           maps:get(membership, Status, voter) == voter].
 
 %% machine impl
 init(_) -> 0.
 apply(_Meta, Num, State) ->
     {Num + State, Num + State}.
+
+%% end machine impl
 
 gather_applied([], Timeout) ->
     %% have a longer timeout first
