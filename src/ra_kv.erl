@@ -24,9 +24,10 @@
 
          put/4,
          get/3,
-         query_get/3,
          take_snapshot/1
         ]).
+
+-export([read_entry/4]).
 
 
 -define(STATE, ?MODULE).
@@ -180,31 +181,34 @@ get(ServerId, Key, Timeout) ->
                         LeaderId
                 end,
 
-            case ra_server_proc:read_entries(QueryServerId, [Idx],
-                                             undefined, Timeout) of
-                {ok, {#{Idx := {Idx, Term,
-                                {'$usr', Meta, #put{value = Value}, _}}},
-                      Flru}} ->
-                    _ = ra_flru:evict_all(Flru),
-                    {ok, Meta#{index => Idx,
-                               members => Members,
-                               term => Term}, Value};
-                Err ->
-                    Err
-            end;
+            read_entry(QueryServerId, Idx, Members, Timeout);
         {ok, Err, _} ->
             Err;
         Err ->
             Err
     end.
 
-query_get(ClusterName, Key, #?STATE{keys = Keys}) ->
-    Members = ra_leaderboard:lookup_members(ClusterName),
-    case Keys of
-        #{Key := [Idx | _]} ->
-            {ok, Idx, Members};
-        _ ->
-            {error, not_found}
+read_entry({_, Node} = ServerId, Idx, Members, Timeout)
+  when Node == node() ->
+    case ra_server_proc:read_entries(ServerId, [Idx],
+                                     undefined, Timeout) of
+        {ok, {#{Idx := {Idx, Term,
+                        {'$usr', Meta, #put{value = Value}, _}}},
+              Flru}} ->
+            _ = ra_flru:evict_all(Flru),
+            {ok, Meta#{index => Idx,
+                       members => Members,
+                       term => Term}, Value};
+        Err ->
+            Err
+    end;
+read_entry({_, Node} = ServerId, Idxs, Members, Timeout) ->
+    try erpc:call(Node, ?MODULE, ?FUNCTION_NAME,
+              [ServerId, Idxs, Members, Timeout]) of
+        Res ->
+            Res
+    catch T:E:_S ->
+              {error, {T, E}}
     end.
 
 -spec take_snapshot(ra_server_id()) -> ok.

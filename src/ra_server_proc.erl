@@ -214,7 +214,8 @@ query(ServerLoc, AuxCmd, consistent_aux, _Options, Timeout) ->
                    undefined | ra_flru:state(),
                    non_neg_integer()) ->
     {ok, {map(), ra_flru:state()}} | {error, term()}.
-read_entries(ServerId, Indexes, Flru0, Timeout) ->
+read_entries({_, Node} = ServerId, Indexes, Flru0, Timeout)
+  when Node == node() ->
     case local_call(ServerId, {read_entries, Indexes}, Timeout) of
         {ok, ReadPlan} ->
             {Reads, Flru} = ra_log:execute_read_plan(ReadPlan, Flru0,
