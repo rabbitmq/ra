@@ -2895,12 +2895,13 @@ leader_heartbeat(_Config) ->
 
 leader_heartbeat_reply_node_size_5(_Config) ->
     N3 = ?N3,
+    From1 = {self(), make_ref()},
     BaseState = base_state(5, ?FUNCTION_NAME),
     #{current_term := Term,
       cfg := #cfg{id = Id},
       commit_index := CommitIndex} = BaseState,
     QueryIndex = 2,
-    QueryRef1 = {from1, fun(_) -> query_result1 end, CommitIndex},
+    QueryRef1 = {query, From1, fun(_) -> query_result1 end, CommitIndex},
     %% Increase self query index to cover more cases
     ReplyingPeerId = ?N2,
     HeartbeatReply = #heartbeat_reply{term = Term,
@@ -2913,18 +2914,20 @@ leader_heartbeat_reply_node_size_5(_Config) ->
     {leader, State, []}
         = ra_server:handle_leader({ReplyingPeerId, HeartbeatReply}, State0),
 
-    {leader, _, [{reply, from1, {ok, query_result1, Id}}]}
+    {leader, _, [{reply, From1, {ok, query_result1, Id}}]}
         = ra_server:handle_leader({N3, HeartbeatReply}, State),
     ok.
 
 leader_heartbeat_reply_same_term(_Config) ->
+    From1 = {self(), make_ref()},
+    From2 = {self(), make_ref()},
     BaseState = base_state(3, ?FUNCTION_NAME),
     #{current_term := Term,
       cfg := #cfg{id = Id},
       commit_index := CommitIndex} = BaseState,
     QueryIndex = 2,
-    QueryRef1 = {from1, fun(_) -> query_result1 end, CommitIndex},
-    QueryRef2 = {from2, fun(_) -> query_result2 end, CommitIndex - 1},
+    QueryRef1 = {query, From1, fun(_) -> query_result1 end, CommitIndex},
+    QueryRef2 = {query, From2, fun(_) -> query_result2 end, CommitIndex - 1},
     %% Increase self query index to cover more cases
     State = set_peer_query_index(BaseState#{query_index => QueryIndex + 1},
                                  Id, QueryIndex + 1),
@@ -2960,7 +2963,7 @@ leader_heartbeat_reply_same_term(_Config) ->
     %% Reply applies a query if there is a consensus
     %% A single reply in 3 node cluster is a consensus
     {leader, StateWithQueryIndexForPeer,
-     [{reply, from1, {ok, query_result1, Id}}]}
+     [{reply, From1, {ok, query_result1, Id}}]}
         = ra_server:handle_leader({ReplyingPeerId, HeartbeatReply},
                                   StateWithQuery),
 
@@ -2989,14 +2992,14 @@ leader_heartbeat_reply_same_term(_Config) ->
     StateWithSecondQuery = StateWithQueryIndexForPeer#{queries_waiting_heartbeats => WaitingQuery2},
 
     %% Apply single query out of 2 if there is a consensus for some
-    {leader, StateWithSecondQuery, [{reply, from1, {ok, query_result1, Id}}]}
+    {leader, StateWithSecondQuery, [{reply, From1, {ok, query_result1, Id}}]}
         = ra_server:handle_leader({ReplyingPeerId, HeartbeatReply}, StateWithTwoQueries),
 
     %% Apply multiple queries if there is consensus for all
     HighIndexReply = HeartbeatReply#heartbeat_reply{query_index = HighQueryIndex},
     {leader, StateWithHighQueryIndexForPeer,
-     [{reply, from2, {ok, query_result2, Id}},
-      {reply, from1, {ok, query_result1, Id}}]}
+     [{reply, From2, {ok, query_result2, Id}},
+      {reply, From1, {ok, query_result1, Id}}]}
         = ra_server:handle_leader({ReplyingPeerId, HighIndexReply}, StateWithTwoQueries),
     ok.
 
@@ -3011,17 +3014,20 @@ leader_consistent_query_delay(_Config) ->
 
     %% If cluster changes are not permitted - delay the heartbeats
     Fun = fun(_) -> query_result end,
-    StateWithPending = State#{pending_consistent_queries => [{from, Fun, CommitIndex}]},
+    From = {self(), make_ref()},
+    From2 = {self(), make_ref()},
+    StateWithPending = State#{pending_consistent_queries =>
+                              [{query, From, Fun, CommitIndex}]},
     {leader, StateWithPending, []}
-        = ra_server:handle_leader({consistent_query, from, Fun}, State),
+        = ra_server:handle_leader({consistent_query, From, Fun}, State),
 
     %% Pending stack together
     %% Order does not matter here, btw.
     StateWithMorePending =
-        State#{pending_consistent_queries => [{from1, Fun, CommitIndex},
-                                              {from, Fun, CommitIndex}]},
+        State#{pending_consistent_queries => [{query, From2, Fun, CommitIndex},
+                                              {query, From, Fun, CommitIndex}]},
     {leader, StateWithMorePending, []}
-        = ra_server:handle_leader({consistent_query, from1, Fun}, StateWithPending),
+        = ra_server:handle_leader({consistent_query, From2, Fun}, StateWithPending),
 
 
     QueryIndex1 = QueryIndex + 1,
@@ -3034,8 +3040,9 @@ leader_consistent_query_delay(_Config) ->
                                    leader_id = Id},
     %% Technically, order should not matter here.
     %% In theory these queries may have the same query index
-    WaitingQueries = queue:in({QueryIndex2, {from, Fun, CommitIndex}},
-                              queue:in({QueryIndex1, {from1, Fun, CommitIndex}}, queue:new())),
+    WaitingQueries = queue:in({QueryIndex2, {query, From, Fun, CommitIndex}},
+                              queue:in({QueryIndex1, {query, From2, Fun, CommitIndex}},
+                                       queue:new())),
 
     %% Send heartbeats as soon as cluster changes permitted
     {leader, #{cluster_change_permitted := true,
@@ -3057,10 +3064,12 @@ leader_consistent_query(_Config) ->
       query_index := QueryIndex,
       current_term := Term,
       cfg := #cfg{id = Id}} = State,
+    From1 = {self(), make_ref()},
+    From2 = {self(), make_ref()},
 
     Fun = fun(_) -> query_result end,
-    Query1 = {from1, Fun, CommitIndex},
-    Query2 = {from2, Fun, CommitIndex},
+    Query1 = {query, From1, Fun, CommitIndex},
+    Query2 = {query, From2, Fun, CommitIndex},
     QueryIndex1 = QueryIndex + 1,
     QueryIndex2 = QueryIndex1 + 1,
     WaitingQuery = queue:in({QueryIndex1, Query1}, queue:new()),
@@ -3078,13 +3087,13 @@ leader_consistent_query(_Config) ->
                queries_waiting_heartbeats := WaitingQuery} = StateWithQuery,
      [{send_rpc, N2, HeartBeatRpc1},
       {send_rpc, N3, HeartBeatRpc1}]} =
-        ra_server:handle_leader({consistent_query, from1, Fun}, State),
+        ra_server:handle_leader({consistent_query, From1, Fun}, State),
 
     {leader, #{query_index := QueryIndex2,
                queries_waiting_heartbeats := WaitingQueries},
      [{send_rpc, N2, HeartBeatRpc2},
       {send_rpc, N3, HeartBeatRpc2}]} =
-        ra_server:handle_leader({consistent_query, from2, Fun}, StateWithQuery).
+        ra_server:handle_leader({consistent_query, From2, Fun}, StateWithQuery).
 
 enable_cluster_change(State0) ->
     {leader, #{cluster_change_permitted := false} = State1, _Effects} =

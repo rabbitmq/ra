@@ -85,11 +85,18 @@
 
 -type chunk_flag() :: init | pre | next | last.
 
--type consistent_query_ref() :: {From :: term(), Query :: ra:query_fun(), ConmmitIndex :: ra_index()}.
+-type consistent_query_ref() ::
+    {query, From :: from(), Query :: ra:query_fun(), CommitIndex :: ra_index()} |
+    {aux, From :: from(), AuxCmd :: term(), CommitIndex :: ra_index()}.
 
 -type safe_call_ret(T) :: timeout | {error, noproc | nodedown | shutdown} | T.
 
--type states() :: leader | follower | candidate | await_condition.
+-type states() ::
+    leader |
+    follower |
+    candidate |
+    pre_vote |
+    await_condition.
 
 %% A member of the cluster from which replies should be sent.
 -type ra_reply_from() :: leader | local | {member, ra_server_id()}.

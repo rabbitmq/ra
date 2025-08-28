@@ -33,6 +33,7 @@
          leader_query/3,
          consistent_query/2,
          consistent_query/3,
+         consistent_aux/3,
          ping/2,
          % cluster operations
          start_cluster/2,
@@ -1010,6 +1011,20 @@ consistent_query(ServerId, QueryFun) ->
 consistent_query(ServerId, QueryFun, Timeout) ->
     ra_server_proc:query(ServerId, QueryFun, consistent, #{}, Timeout).
 
+
+%% @doc Similar to `consistent_query/3' but will process an aux command
+%% after consensus has been achieved.
+%% @param ServerId the ra server id(s) to send the query to
+%% @param QueryFun the query function to run
+%% @param Timeout the timeout to use
+%% @see consistent_query/2
+%% @end
+-spec consistent_aux(ServerId :: ra_server_id() | [ra_server_id()],
+                     AuxCmd :: term(),
+                     Timeout :: timeout()) ->
+    ra_server_proc:ra_leader_call_ret(Reply :: term()).
+consistent_aux(ServerId, AuxCmd, Timeout) ->
+    ra_server_proc:query(ServerId, AuxCmd, consistent_aux, #{}, Timeout).
 %% @doc Returns a list of cluster members
 %%
 %% Except if `{local, ServerId}' is passed, the query is sent to the specified
