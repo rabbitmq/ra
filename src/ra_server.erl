@@ -808,6 +808,12 @@ handle_leader({consistent_aux, From, AuxCmd},
     QueryRef = {aux, From, AuxCmd, CommitIndex},
     {State1, Effects} = make_heartbeat_rpc_effects(QueryRef, State0),
     {leader, State1, Effects};
+handle_leader({consistent_aux, From, AuxCmd},
+              #{commit_index := CommitIndex,
+                cluster_change_permitted := false,
+                pending_consistent_queries := PQ} = State0) ->
+    QueryRef = {aux, From, AuxCmd, CommitIndex},
+    {leader, State0#{pending_consistent_queries => [QueryRef | PQ]}, []};
 %% Lihtweight version of append_entries_rpc
 handle_leader(#heartbeat_rpc{term = Term} = Msg,
               #{current_term := CurTerm,

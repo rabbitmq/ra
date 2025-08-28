@@ -55,7 +55,8 @@ all_tests() ->
      segment_writer_or_wal_crash_leader,
      server_recovery_strategy,
      stopped_wal_causes_leader_change_registered,
-     stopped_wal_causes_leader_change_mfa
+     stopped_wal_causes_leader_change_mfa,
+     ra_kv
     ].
 
 groups() ->
@@ -1247,6 +1248,26 @@ stopped_wal_causes_leader_change(Config, RecoverStrat) ->
                              end)
                     end, 200),
     await_condition(AwaitReplicated, 100),
+    stop_peers(Peers),
+    ok.
+
+ra_kv(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
+    {ok, Started, []} = ra_kv:start_cluster(?SYS, ?FUNCTION_NAME, #{members => ServerIds}),
+    %% synchronously get leader
+    {ok, _, Leader} = ra:members(hd(Started)),
+    {ok, _} = ra_kv:put(Leader, <<"k1">>, <<"value1">>, 5000),
+
+    %% roll wall on all nodeso
+    [ok = erpc:call(N, ra_log_wal, force_roll_over, [ra_log_wal])
+     || {_, N} <- ServerIds],
+    timer:sleep(100),
+    [{ok, _, <<"value1">>} = ra_kv:get(ServerId, <<"k1">>, 5000)
+     || ServerId <- ServerIds],
+
     stop_peers(Peers),
     ok.
 

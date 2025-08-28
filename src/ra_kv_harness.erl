@@ -79,7 +79,8 @@ read_all_keys() ->
         [_ = ra_kv:get({?CLUSTER_NAME,
                         node()},
                        <<"key_",(integer_to_binary(N))/binary>>, 1000)
-         || N <- lists:seq(1, ?MAX_KEY)].
+         || N <- lists:seq(1, ?MAX_KEY)],
+        ok.
 
 read_all_keys_loop(Members) when is_list(Members) ->
     receive
@@ -89,8 +90,9 @@ read_all_keys_loop(Members) when is_list(Members) ->
     after 0 ->
         Member = lists:nth(rand:uniform(length(Members)), Members),
         NodeName = element(2, Member),
+        log("~s Begin Reading all keys on member ~p~n", [timestamp(), Member]),
         T1 = erlang:monotonic_time(),
-        erpc:call(NodeName, ra_kv_harness, read_all_keys, []),
+        ok = erpc:call(NodeName, ra_kv_harness, read_all_keys, []),
         T2 = erlang:monotonic_time(),
         Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
         log("~s Read all keys on member ~p in ~bms~n", [timestamp(), Member, Diff]),
@@ -180,6 +182,7 @@ start_single_peer_node(NodeId, Opts) ->
     NodeName = list_to_atom("ra_test_" ++ integer_to_list(NodeId) ++ "@" ++
                             inet_db:gethostname()),
 
+    log("~s Starting node ~p nodes~n", [timestamp(), NodeName]),
     % Get all code paths from current node
     CodePaths = code:get_path(),
     PaArgs = lists:flatmap(fun(Path) -> ["-pa", Path] end, CodePaths),
@@ -319,7 +322,9 @@ execute_operation(State, {get, Key}) ->
     NodeName = element(2, Member),
     RefValue = maps:get(Key, RefMap, not_found),
 
+    log("~s ra_kv:get/3 from node ~w ~n", [timestamp(), NodeName]),
     case erpc:call(NodeName, ra_kv, get, [Member, Key, ?TIMEOUT]) of
+    % case apply(ra_kv, get, [Member, Key, ?TIMEOUT]) of
         {error, not_found} when RefValue =:= not_found ->
             State#{operations_count => OpCount + 1,
                    successful_ops => SuccessOps + 1};
@@ -328,16 +333,17 @@ execute_operation(State, {get, Key}) ->
             State#{operations_count => OpCount + 1,
                    failed_ops => FailedOps + 1};
         {ok, _Meta, Value} when RefValue =:= Value ->
+            log("~s ra_kv:get/3 from node ~w ok! ~n", [timestamp(), NodeName]),
             State#{operations_count => OpCount + 1,
                    successful_ops => SuccessOps + 1};
         {ok, _Meta, Value} when RefValue =/= Value ->
             log("~s CONSISTENCY ERROR: Key ~p, Expected ~p, Got ~p~n",
-                      [timestamp(), Key, RefValue, Value]),
-            State#{operations_count => OpCount + 1,
-                   failed_ops => FailedOps + 1};
-        _ ->
+                [timestamp(), Key, RefValue, Value]),
             State#{operations_count => OpCount + 1,
                    failed_ops => FailedOps + 1}
+        % _ ->
+        %     State#{operations_count => OpCount + 1,
+        %            failed_ops => FailedOps + 1}
     end;
 
 execute_operation(State, {update_almost_all_keys}) ->
@@ -607,7 +613,8 @@ validate_consistency(State) ->
     wait_for_applied_index_convergence(MembersList, 300), % Wait up to 30 seconds
 
     % Check that all members have the same view
-    ValidationResults = [validate_member_consistency(Member, RefMap) || Member <- MembersList],
+    ValidationResults = [validate_member_consistency(Member, RefMap)
+                         || Member <- MembersList],
 
     Result1 = hd(ValidationResults),
     case lists:all(fun(Result) ->
@@ -733,7 +740,7 @@ validate_final_consistency(State) ->
 -spec validate_key_across_members(binary(), term(), [ra:server_id()]) -> ok | error.
 validate_key_across_members(Key, ExpectedValue, Members) ->
     Results = [begin
-                   case ra_kv:get(Member, Key, ?TIMEOUT) of
+                   case erpc:call(Node, ra_kv, get, [Member, Key, ?TIMEOUT]) of
                        {ok, _Meta, Value} when Value =:= ExpectedValue -> ok;
                        {ok, _Meta, Value} ->
                            log("~s Key ~p mismatch on ~p: expected ~p, got ~p~n",
@@ -746,7 +753,7 @@ validate_key_across_members(Key, ExpectedValue, Members) ->
                            log("~s Key ~p query failed on ~p: ~p~n", [timestamp(), Key, Member, Other]),
                            error
                    end
-               end || Member <- Members],
+               end || {_, Node} = Member <- Members],
 
     case lists:all(fun(R) -> R =:= ok end, Results) of
         true -> ok;
