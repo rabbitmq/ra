@@ -82,21 +82,24 @@ read_all_keys() ->
          || N <- lists:seq(1, ?MAX_KEY)],
         ok.
 
-read_all_keys_loop(Members) when is_list(Members) ->
+read_all_keys_loop(Members0) when is_list(Members0) ->
     receive
         stop ->
             log("~s Read all keys loop stopped~n", [timestamp()]),
             ok
     after 0 ->
-        Member = lists:nth(rand:uniform(length(Members)), Members),
-        NodeName = element(2, Member),
-        log("~s Begin Reading all keys on member ~p~n", [timestamp(), Member]),
-        T1 = erlang:monotonic_time(),
-        ok = erpc:call(NodeName, ra_kv_harness, read_all_keys, []),
-        T2 = erlang:monotonic_time(),
-        Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
-        log("~s Read all keys on member ~p in ~bms~n", [timestamp(), Member, Diff]),
-        read_all_keys_loop(Members)
+              %% resolve current members
+              {ok, Members, _} = ra:members(Members0),
+              Member = lists:nth(rand:uniform(length(Members)), Members),
+              NodeName = element(2, Member),
+              log("~s Begin Reading all keys on member ~p~n",
+                  [timestamp(), Member]),
+              T1 = erlang:monotonic_time(),
+              ok = erpc:call(NodeName, ra_kv_harness, read_all_keys, []),
+              T2 = erlang:monotonic_time(),
+              Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
+              log("~s Read all keys on member ~p in ~bms~n", [timestamp(), Member, Diff]),
+              read_all_keys_loop(Members)
     end.
 
 -spec run(NumOperations :: pos_integer(),
