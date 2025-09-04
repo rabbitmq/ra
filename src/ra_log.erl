@@ -238,7 +238,7 @@ init(#{uid := UId,
     Reader = ra_log_segments:init(UId, Dir, MaxOpen, AccessPattern, SegRefs,
                                   Counter, CompConf, LogId),
     SegmentRange = ra_log_segments:range(Reader),
-    %% TODO: the ranges can be sparse at this point so ra_range:add/2 does
+    %% The ranges can be sparse at this point so ra_range:add/2 does
     %% not do the right thing here as it requires a contiguous range
     Range = ra_range:combine(MtRange, SegmentRange),
 
@@ -932,7 +932,7 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
 
             %% remove all pending below smallest live index as the wal
             %% may not write them
-            %% TODO: test that a written even can still be processed if it
+            %% TODO: test that a written event can still be processed if it
             %% contains lower indexes than pending
             SmallestLiveIdx = case ra_seq:first(LiveIndexes) of
                                   undefined ->

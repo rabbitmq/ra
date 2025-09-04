@@ -188,7 +188,7 @@ cast_command(ServerId, Cmd) ->
 cast_command(ServerId, Priority, Cmd) ->
     gen_statem:cast(ServerId, {command, Priority, Cmd}).
 
--spec query(server_loc(), query_fun(),
+-spec query(server_loc(), AuxCmd :: term() | query_fun(),
             local | consistent | consistent_aux | leader,
             query_options(),
             timeout()) ->

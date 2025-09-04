@@ -18,7 +18,8 @@
          truncate/2,
          size/1,
          overlap/2,
-         subtract/2
+         subtract/2,
+         fold/3
         ]).
 
 
@@ -141,6 +142,19 @@ subtract({_SubStart, _SubEnd} = SubRange, {Start, End} = Range) ->
                                  new(OEnd + 1, End)]]
     end.
 
+-spec fold(range(), fun((ra:index(), Acc) -> Acc), Acc) ->
+    Acc when Acc :: term().
+fold(undefined, _Fun, Acc) ->
+    Acc;
+fold({S, E}, Fun, Acc) ->
+    fold0(S, E, Fun, Acc).
+
+%% internals
+
+fold0(S, S, Fun, Acc) ->
+    Fun(S, Acc);
+fold0(S, E, Fun, Acc) ->
+    fold0(S+1, E, Fun, Fun(S, Acc)).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -216,6 +230,11 @@ extend_test() ->
     ?assertEqual({1, 11}, extend(11, {1, 10})),
     ?assertError({cannot_extend, 1, {5, 10}}, extend(1, {5, 10})),
     ?assertError({cannot_extend, 12, {1, 10}}, extend(12, {1, 10})),
+    ok.
+
+fold_test() ->
+    ?assertEqual([4,3,2,1], fold({1, 4}, fun ra_lib:cons/2, [])),
+    ?assertEqual([], fold(undefined, fun ra_lib:cons/2, [])),
     ok.
 
 -endif.
