@@ -15,7 +15,7 @@
 -opaque iter() :: #i{}.
 
 -export_type([state/0,
-             iter/0]).
+              iter/0]).
 
 
 -export([
@@ -62,7 +62,7 @@ append(Idx, [Prev | _] = Seq)
 from_list(L) ->
     lists:foldl(fun append/2, [], lists:sort(L)).
 
-%% @doc This operation is O(n)
+%% @doc This operation is O(n) + a list:reverse/1
 -spec floor(ra:index(), state()) -> state().
 floor(FloorIdxIncl, Seq) when is_list(Seq) ->
     %% TODO: assert appendable
@@ -98,18 +98,14 @@ add(Add, []) ->
     Add;
 add(Add, To) ->
     Fst = first(Add),
-              % {I, _} -> I;
-              % I -> I
-          % end,
     fold(fun append/2, limit(Fst - 1, To), Add).
 
 -spec fold(fun ((ra:index(), Acc) -> Acc), Acc, state()) ->
     Acc when Acc :: term().
 fold(Fun, Acc0, Seq) ->
-    %% TODO: factor out the lists:seq/2
     lists:foldr(
-      fun ({S, E}, Acc) ->
-              lists:foldl(Fun, Acc, lists:seq(S, E));
+      fun ({_, _} = Range, Acc) ->
+              ra_range:fold(Range, Fun, Acc);
           (Idx, Acc) ->
               Fun(Idx, Acc)
       end, Acc0, Seq).
