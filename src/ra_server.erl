@@ -2280,8 +2280,7 @@ log_fold_cache(From, _To, _Cache, Acc) ->
 
 % stores the cluster config at an index such that we can later snapshot
 % at this index.
--spec update_release_cursor(ra_index(),
-                            term(), ra_server_state()) ->
+-spec update_release_cursor(ra_index(), term(), ra_server_state()) ->
     {ra_server_state(), effects()}.
 update_release_cursor(Index, MacState,
                       #{cfg := #cfg{machine = Machine},
@@ -2291,7 +2290,7 @@ update_release_cursor(Index, MacState,
     MacMod = ra_machine:which_module(Machine, MacVersion),
     % simply pass on release cursor index to log
     {Log, Effects} = ra_log:update_release_cursor(Index, Cluster,
-                                                  MacMod,
+                                                  {MacVersion, MacMod},
                                                   MacState, Log0),
     {State#{log => Log}, Effects}.
 
@@ -2303,7 +2302,8 @@ checkpoint(Index, MacState,
     MacVersion = index_machine_version(Index, State),
     MacMod = ra_machine:which_module(Machine, MacVersion),
     {Log, Effects} = ra_log:checkpoint(Index, Cluster,
-                                       MacMod, MacState, Log0),
+                                       {MacVersion, MacMod},
+                                       MacState, Log0),
     {State#{log => Log}, Effects}.
 
 -spec promote_checkpoint(ra_index(), ra_server_state()) ->
