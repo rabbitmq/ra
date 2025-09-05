@@ -38,7 +38,10 @@ all_tests() ->
      corrupted_segment,
      large_segment,
      segref,
-     versions_v1
+     info,
+     info_2,
+     versions_v1,
+     copy
     ].
 
 groups() ->
@@ -50,10 +53,6 @@ init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
     ok = ra_lib:make_dir(Dir),
-    _ = ets:new(ra_open_file_metrics,
-                [named_table, public, {write_concurrency, true}]),
-    _ = ets:new(ra_io_metrics,
-                [named_table, public, {write_concurrency, true}]),
     [{test_case, TestCase}, {data_dir, Dir} | Config].
 
 end_per_testcase(_, Config) ->
@@ -207,9 +206,42 @@ segref(Config) ->
     {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 128}),
     undefined = ra_log_segment:segref(Seg0),
     {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
-    {{1, 1}, "seg1.seg"} = ra_log_segment:segref(Seg1),
+    {<<"seg1.seg">>, {1, 1}} = ra_log_segment:segref(Seg1),
     ok.
 
+info(Config) ->
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 128}),
+    Info1 = ra_log_segment:info(Fn),
+    ?assertMatch(#{ref := undefined}, Info1),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
+    _ = ra_log_segment:flush(Seg1),
+    Info2 = ra_log_segment:info(Fn),
+    ?assertMatch(#{ref := {<<"seg1.seg">>, {1, 1}}}, Info2),
+    ok.
+
+info_2(Config) ->
+    %% passes live indexes which will result in additional info keys
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 128}),
+    Info1 = ra_log_segment:info(Fn, []),
+    ?assertMatch(#{ref := undefined,
+                   live_size := 0}, Info1),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
+    {ok, Seg2} = ra_log_segment:append(Seg1, 2, 2, <<"Adsf">>),
+    _ = ra_log_segment:flush(Seg2),
+    Info2 = ra_log_segment:info(Fn, [1]),
+    ?assertMatch(#{ref := {<<"seg1.seg">>, {1, 2}},
+                   num_entries := 2,
+                   live_size := 4}, Info2),
+    Info3 = ra_log_segment:info(Fn),
+    %% info/1 assumes all indexes are "live"
+    ?assertMatch(#{ref := {<<"seg1.seg">>, {1, 2}},
+                   num_entries := 2,
+                   live_size := 8}, Info3),
+    ok.
 
 full_file(Config) ->
     Dir = ?config(data_dir, Config),
@@ -460,6 +492,37 @@ read_sparse_append_read(Config) ->
     ra_log_segment:close(R0),
     ok.
 
+copy(Config) ->
+    Dir = ?config(data_dir, Config),
+    Indexes = lists:seq(1, 100),
+    SrcFn = filename:join(Dir, <<"SOURCE1.segment">>),
+    {ok, SrcSeg0} = ra_log_segment:open(SrcFn),
+    SrcSeg1 = lists:foldl(
+             fun (I, S0) ->
+                     {ok, S} = ra_log_segment:append(S0, I, 1, term_to_binary(I)),
+                     S
+             end, SrcSeg0, Indexes),
+    _ = ra_log_segment:close(SrcSeg1),
+
+    Fn = filename:join(Dir, <<"TARGET.segment">>),
+    {ok, Seg0} = ra_log_segment:open(Fn),
+    CopyIndexes = lists:seq(1, 100, 2),
+    {ok, Seg} = ra_log_segment:copy(Seg0, SrcFn, CopyIndexes),
+    ra_log_segment:close(Seg),
+    {ok, R} = ra_log_segment:open(Fn, #{mode => read,
+                                        access_pattern => random}),
+    %%TODO: consider makeing read_sparse tolerant to missing indexes somehow
+    %% perhaps detecting if the segment is "sparse"
+    {ok, 2, [_, _]} = ra_log_segment:read_sparse(R, [1, 3],
+                                                 fun (I, T, B, Acc) ->
+                                                         [{I, T, binary_to_term(B)} | Acc]
+                                                 end, []),
+    ra_log_segment:close(R),
+
+    ok.
+
+
+%%% Internal
 write_until_full(Idx, Term, Data, Seg0) ->
     case ra_log_segment:append(Seg0, Idx, Term, Data) of
         {ok, Seg} ->
@@ -467,9 +530,6 @@ write_until_full(Idx, Term, Data, Seg0) ->
         {error, full} ->
             Seg0
     end.
-
-
-%%% Internal
 make_data(Size) ->
     term_to_binary(crypto:strong_rand_bytes(Size)).
 

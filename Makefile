@@ -13,7 +13,7 @@ dep_aten = hex 0.6.0
 dep_seshat = hex 1.0.0
 DEPS = aten gen_batch_server seshat
 
-TEST_DEPS = proper meck eunit_formatters inet_tcp_proxy
+TEST_DEPS = proper meck inet_tcp_proxy
 
 BUILD_DEPS = elvis_mk
 

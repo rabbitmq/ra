@@ -10,6 +10,7 @@
          close/1,
          append/2,
          write/2,
+         write_sparse/3,
          take/3,
          fold/5,
          last_index_term/1,
@@ -22,7 +23,7 @@
          next_index/1,
          snapshot_state/1,
          set_snapshot_state/2,
-         install_snapshot/3,
+         install_snapshot/4,
          read_snapshot/1,
          recover_snapshot/1,
          snapshot_index_term/1,
@@ -41,6 +42,8 @@
 
 -include("src/ra.hrl").
 
+-dialyzer({nowarn_function, install_snapshot/4}).
+
 -type ra_log_memory_meta() :: #{atom() => term()}.
 
 -record(state, {last_index = 0 :: ra_index(),
@@ -50,7 +53,7 @@
                 meta = #{} :: ra_log_memory_meta(),
                 snapshot :: option({ra_snapshot:meta(), term()})}).
 
--type ra_log_memory_state() :: #state{} | ra_log:state().
+-opaque ra_log_memory_state() :: #state{} | ra_log:state().
 
 -export_type([ra_log_memory_state/0]).
 
@@ -92,7 +95,7 @@ write([{FirstIdx, _, _} | _] = Entries,
                                            {Acc#{Idx => {Term, Data}}, Idx}
                                    end, {Log1, FirstIdx}, Entries),
     {ok, State#state{last_index = LastInIdx,
-                          entries = Log}};
+                     entries = Log}};
 write([{FirstIdx, _, _} | _] = Entries,
       #state{snapshot = {#{index := SnapIdx}, _}, entries = Log0} = State)
  when SnapIdx + 1 =:= FirstIdx ->
@@ -104,6 +107,12 @@ write([{FirstIdx, _, _} | _] = Entries,
 write(_Entries, _State) ->
     {error, {integrity_error, undefined}}.
 
+write_sparse({Idx, Term, Data}, PrevIdx, #state{last_index = PrevIdx,
+                                                entries = Log0} = State) ->
+    {ok, State#state{last_index = Idx,
+                     entries = Log0#{Idx => {Term, Data}}}};
+write_sparse(_, _, _) ->
+    {error, gap_detected}.
 
 take(Start, Num, #state{last_index = LastIdx, entries = Log} = State) ->
     Entries = sparse_take(Start, Log, Num, LastIdx, []),
@@ -170,17 +179,18 @@ last_written(#state{last_written = LastWritten}) ->
 
 -spec handle_event(ra_log:event_body(), ra_log_memory_state()) ->
     {ra_log_memory_state(), list()}.
-handle_event({written, Term, {_From, Idx} = Range0}, State0) ->
+handle_event({written, Term, Seq0}, State0) when is_list(Seq0) ->
+    Idx = ra_seq:last(Seq0),
     case fetch_term(Idx, State0) of
         {Term, State} ->
             {State#state{last_written = {Idx, Term}}, []};
         _ ->
-            case ra_range:limit(Idx, Range0) of
-                undefined ->
+            case ra_seq:limit(Idx - 1, Seq0) of
+                [] ->
                     % if the term doesn't match we just ignore it
                     {State0, []};
-                Range ->
-                    handle_event({written, Term, Range}, State0)
+                Seq ->
+                    handle_event({written, Term, Seq}, State0)
             end
     end;
 handle_event(_Evt, State0) ->
@@ -210,17 +220,17 @@ fetch_term(Idx, #state{entries = Log} = State) ->
 
 flush(_Idx, Log) -> Log.
 
-install_snapshot({Index, Term}, Data, #state{entries = Log0} = State) ->
-    % Index  = maps:get(index, Meta),
-    % Term  = maps:get(term, Meta),
-    % discard log
+install_snapshot({Index, Term}, _MacMod, _LiveIndexes,
+                 #state{entries = Log0} = State0) ->
+    % discard log entries below snapshot index
     Log = maps:filter(fun (K, _) -> K > Index end, Log0),
-    {State#state{entries = Log,
-                 last_index = Index,
-                 last_written = {Index, Term},
-                 snapshot = Data}, []};
-install_snapshot(_Meta, _Data, State) ->
-    {State, []}.
+    State = State0#state{entries = Log,
+                         last_index = Index,
+                         last_written = {Index, Term}
+                         % snapshot = Data
+                        },
+    % {Meta, MacState} = Data,
+    {ok, State, []}.
 
 -spec read_snapshot(State :: ra_log_memory_state()) ->
     {ok, ra_snapshot:meta(), term()}.
@@ -274,7 +284,7 @@ write_meta_f(_Key, _Value, State) ->
 can_write(_Log) ->
     true.
 
-overview(Log) ->
+overview(#state{} = Log) ->
     #{type => ?MODULE,
       last_index => Log#state.last_index,
       last_written => Log#state.last_written,

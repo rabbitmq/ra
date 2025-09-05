@@ -49,6 +49,7 @@
          lists_shuffle/1,
          is_dir/1,
          is_file/1,
+         is_any_file/1,
          ensure_dir/1,
          consult/1,
          cons/2
@@ -344,9 +345,9 @@ retry(Func, Attempt, Sleep) ->
             ok;
         true ->
             ok;
-        _ ->
+        _Err ->
             timer:sleep(Sleep),
-            retry(Func, Attempt - 1)
+            retry(Func, Attempt - 1, Sleep)
     end.
 
 -spec write_file(file:name_all(), iodata()) ->
@@ -466,6 +467,14 @@ is_file(File) ->
             false
     end.
 
+is_any_file(File) ->
+    case prim_file:read_file_info(File) of
+        {ok, #file_info{}} ->
+            true;
+        _ ->
+            false
+    end.
+
 
 -spec consult(file:filename()) ->
     {ok, term()} | {error, term()}.
@@ -478,18 +487,10 @@ consult(Path) ->
             Err
     end.
 
+-spec cons(term(), list()) -> list().
 cons(Item, List)
   when is_list(List) ->
     [Item | List].
-
-tokens(Str) ->
-    case erl_scan:string(Str) of
-        {ok, Tokens, _EndLoc} ->
-            erl_parse:parse_term(Tokens);
-        {error, Err, _ErrLoc} ->
-            {error, Err}
-    end.
-
 
 %% raw copy of ensure_dir
 ensure_dir("/") ->
@@ -516,6 +517,15 @@ ensure_dir(F) ->
                     Err
             end
     end.
+
+tokens(Str) ->
+    case erl_scan:string(Str) of
+        {ok, Tokens, _EndLoc} ->
+            erl_parse:parse_term(Tokens);
+        {error, Err, _ErrLoc} ->
+            {error, Err}
+    end.
+
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
