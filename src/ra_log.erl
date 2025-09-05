@@ -381,7 +381,7 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
                             WalC = {append, WriterId, Tid, Prev, Idx, Term, Cmd},
                             {[WalC | WC], N+1, Idx}
                     end, {[], 0, PrevIdx}, Entries),
-    {_, LastIdx} = Range,
+    {_, LastIdx} = TxRange,
 
     case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
         {ok, Pid} ->
@@ -391,7 +391,7 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
                                last_wal_write = {Pid, now_ms(), LastIdx},
                                mem_table = Mt}};
         {error, wal_down} ->
-            %% still need to return the state here
+            %% TODO: review this -  still need to return the state here
             {error, wal_down, State#?MODULE{tx = false,
                                             mem_table = Mt}}
     end;
@@ -1104,26 +1104,29 @@ snapshot_index_term(#?MODULE{snapshot_state = SS}) ->
 
 -spec update_release_cursor(Idx :: ra_index(),
                             Cluster :: ra_cluster(),
-                            MacModule :: module(),
+                            MacCtx :: {MacVer :: ra_machine:version(), module()},
                             MacState :: term(), State :: state()) ->
     {state(), effects()}.
-update_release_cursor(Idx, Cluster, MacModule, MacState, State)
-  when is_atom(MacModule) ->
-    suggest_snapshot(snapshot, Idx, Cluster, MacModule, MacState, State).
+update_release_cursor(Idx, Cluster, {MacVersion, MacModule} = MacCtx,
+                      MacState, State)
+  when is_atom(MacModule) andalso
+       is_integer(MacVersion) ->
+    suggest_snapshot(snapshot, Idx, Cluster, MacCtx, MacState, State).
 
 -spec checkpoint(Idx :: ra_index(), Cluster :: ra_cluster(),
-                 MacModule :: module(),
+                 MacCtx :: {MacVer :: ra_machine:version(), module()},
                  MacState :: term(), State :: state()) ->
     {state(), effects()}.
-checkpoint(Idx, Cluster, MacModule, MacState, State)
-  when is_atom(MacModule) ->
-    suggest_snapshot(checkpoint, Idx, Cluster, MacModule, MacState, State).
+checkpoint(Idx, Cluster, {MacVersion, MacModule} = MacCtx, MacState, State)
+  when is_atom(MacModule) andalso
+       is_integer(MacVersion) ->
+    suggest_snapshot(checkpoint, Idx, Cluster, MacCtx, MacState, State).
 
-suggest_snapshot(SnapKind, Idx, Cluster, MacModule, MacState,
+suggest_snapshot(SnapKind, Idx, Cluster, MacCtx, MacState,
                  #?MODULE{snapshot_state = SnapshotState} = State) ->
     case ra_snapshot:pending(SnapshotState) of
         undefined ->
-            suggest_snapshot0(SnapKind, Idx, Cluster, MacModule, MacState, State);
+            suggest_snapshot0(SnapKind, Idx, Cluster, MacCtx, MacState, State);
         _ ->
             %% Only one snapshot or checkpoint may be written at a time to
             %% prevent excessive I/O usage.
@@ -1188,7 +1191,8 @@ assert(#?MODULE{cfg = #cfg{log_id = LogId},
             ra_seq:last(LiveIndexes) =< element(1, CurrSnap)),
     State.
 
-suggest_snapshot0(SnapKind, Idx, Cluster, MacModule, MacState, State0) ->
+suggest_snapshot0(SnapKind, Idx, Cluster, {MachineVersion, MacModule},
+                  MacState, State0) ->
     case should_snapshot(SnapKind, Idx, State0) of
         true ->
             % TODO: here we use the current cluster configuration in
@@ -1210,11 +1214,11 @@ suggest_snapshot0(SnapKind, Idx, Cluster, MacModule, MacState, State0) ->
                         maps:map(fun (_, V) ->
                                          maps:with([voter_status], V)
                                  end, Cluster),
-                    MachineVersion = ra_machine:version(MacModule),
                     Meta = #{index => Idx,
+                             term => Term,
                              cluster => ClusterServerIds,
                              machine_version => MachineVersion},
-                    write_snapshot(Meta#{term => Term}, MacModule, MacState,
+                    write_snapshot(Meta, MacModule, MacState,
                                    SnapKind, State)
             end;
         false ->
