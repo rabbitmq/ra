@@ -1,6 +1,6 @@
 %% This Source Code Form is subject to the terms of the Mozilla Public
 %%
-%% Copyright (c) 2017-2023 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
+%% Copyright (c) 2017-2025 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
 %%
 -module(ra_server_SUITE).
 
