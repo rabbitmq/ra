@@ -381,7 +381,7 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
                             WalC = {append, WriterId, Tid, Prev, Idx, Term, Cmd},
                             {[WalC | WC], N+1, Idx}
                     end, {[], 0, PrevIdx}, Entries),
-    {_, LastIdx} = Range,
+    {_, LastIdx} = TxRange,
 
     case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
         {ok, Pid} ->
@@ -391,7 +391,7 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
                                last_wal_write = {Pid, now_ms(), LastIdx},
                                mem_table = Mt}};
         {error, wal_down} ->
-            %% still need to return the state here
+            %% TODO: review this -  still need to return the state here
             {error, wal_down, State#?MODULE{tx = false,
                                             mem_table = Mt}}
     end;
