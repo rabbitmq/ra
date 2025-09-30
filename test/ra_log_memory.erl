@@ -148,17 +148,28 @@ last_index_term(#state{last_index = LastIdx,
 
 -spec set_last_index(ra_index(), ra_log_memory_state()) ->
     {ok, ra_log_memory_state()} | {not_found, ra_log_memory_state()}.
-set_last_index(Idx, #state{last_written = {LWIdx, _}} = State0) ->
+set_last_index(Idx, State0) ->
     case fetch_term(Idx, State0) of
         {undefined, State} ->
-            {not_found, State};
-        {Term, State1} when Idx < LWIdx ->
+            case snapshot_index_term(State) of
+                {Idx, SnapTerm} ->
+                    set_last_index0(Idx, SnapTerm, State);
+                _ ->
+                    {not_found, State}
+            end;
+        {Term, State} ->
+            set_last_index0(Idx, Term, State)
+    end.
+
+set_last_index0(Idx, Term, #state{last_written = {LWIdx, _}} = State0) ->
+    case Idx < LWIdx of
+        true ->
             %% need to revert last_written too
-            State = State1#state{last_index = Idx,
+            State = State0#state{last_index = Idx,
                                  last_written = {Idx, Term}},
             {ok, State};
-        {_, State1} ->
-            State = State1#state{last_index = Idx},
+        false ->
+            State = State0#state{last_index = Idx},
             {ok, State}
     end.
 
