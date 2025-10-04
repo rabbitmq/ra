@@ -155,10 +155,15 @@ commit(#?MODULE{tid = Tid,
                                  commit(Prev0)
                          end,
     Staged = lists:reverse(Staged0),
-    true = ets:insert(Tid, Staged),
-    %% TODO: mt: could prev contain overwritten entries?
-    {PrevStaged ++ Staged, State#?MODULE{staged = undefined,
-                                         prev = Prev}}.
+    case catch ets:insert(Tid, Staged) of
+        true ->
+            %% TODO: mt: could prev contain overwritten entries?
+            {PrevStaged ++ Staged, State#?MODULE{staged = undefined,
+                                                 prev = Prev}};
+        {'EXIT', {badarg, _}} ->
+            {[], State#?MODULE{staged = undefined,
+                               prev = Prev}}
+    end.
 
 -spec abort(state()) -> state().
 abort(#?MODULE{staged = undefined} = State) ->
