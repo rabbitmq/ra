@@ -758,8 +758,8 @@ dump_records(<<_:1/unsigned, 0:1/unsigned, _:22/unsigned,
                _EntryData:0/binary,
                _Rest/binary>>, Entries) ->
     Entries;
-dump_records(<<_:1/unsigned, 0:1/unsigned, Id2:22/unsigned,
-               IdDataLen:16/unsigned, Id:IdDataLen/binary,
+dump_records(<<_:1/unsigned, 0:1/unsigned, _Id2:22/unsigned,
+               IdDataLen:16/unsigned, _Id:IdDataLen/binary,
                Crc:32/integer,
                EntryDataLen:32/unsigned,
                Idx:64/unsigned, Term:64/unsigned,
@@ -768,11 +768,11 @@ dump_records(<<_:1/unsigned, 0:1/unsigned, Id2:22/unsigned,
     % TODO: recover writers info, i.e. last index seen
     case erlang:adler32(<<Idx:64/unsigned, Term:64/unsigned, EntryData/binary>>) of
         Crc ->
-            dump_records(Rest, [{{Id, Id2}, {Idx, Term, binary_to_term(EntryData)}} | Entries]);
+            dump_records(Rest, [{Idx, Term, binary_to_term(EntryData)} | Entries]);
         _ ->
             exit({crc_failed_for, Idx, EntryData})
     end;
-dump_records(<<_:1/unsigned, 1:1/unsigned, Id:22/unsigned,
+dump_records(<<_:1/unsigned, 1:1/unsigned, _Id:22/unsigned,
                Crc:32/integer,
                EntryDataLen:32/unsigned,
                Idx:64/unsigned, Term:64/unsigned,
@@ -780,7 +780,7 @@ dump_records(<<_:1/unsigned, 1:1/unsigned, Id:22/unsigned,
                Rest/binary>>, Entries) ->
     case erlang:adler32(<<Idx:64/unsigned, Term:64/unsigned, EntryData/binary>>) of
         Crc ->
-            dump_records(Rest, [{Id, {Idx, Term, binary_to_term(EntryData)}} | Entries]);
+            dump_records(Rest, [{Idx, Term, binary_to_term(EntryData)} | Entries]);
         _ ->
             exit({crc_failed_for, Idx, EntryData})
     end;

@@ -390,19 +390,33 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
     Sync = SnapKind =:= snapshot,
     %% create directory for this snapshot
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
-    %% TODO: really we'd like to run this in the ra worker as good potentially
-    %% be quite large and a touch expensive to compute but also we don't want
-    %% to close over both the MacState and the MacRef
-    LiveIndexes = ra_seq:from_list(ra_machine:live_indexes(MacMod, MacState)),
-    %% call prepare then write_snapshotS
     %% This needs to be called in the current process to "lock" potentially
     %% mutable machine state
     Ref = Mod:prepare(Meta, MacState),
+    PostPrepareEqualsMacState = Ref == MacState,
+    LiveIndexes0 = case PostPrepareEqualsMacState of
+                       false ->
+                           ra_seq:from_list(
+                             ra_machine:live_indexes(MacMod, MacState));
+                       true ->
+                           []
+                   end,
     %% write the snapshot in a separate process
     Self = self(),
     IdxTerm = {Idx, Term},
     BgWorkFun = fun () ->
                         ok = ra_lib:make_dir(SnapDir),
+                        %% if the Ref returned by ra_snapshot:prepare/2 is
+                        %% the same as the mac state then indexes can be
+                        %% calculated here
+                        LiveIndexes =
+                            case PostPrepareEqualsMacState of
+                                true ->
+                                    ra_seq:from_list(
+                                      ra_machine:live_indexes(MacMod, Ref));
+                                false ->
+                                    LiveIndexes0
+                            end,
                         case Mod:write(SnapDir, Meta, Ref, Sync) of
                             ok -> ok;
                             {ok, BytesWritten} ->
@@ -410,13 +424,14 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
                                              BytesWritten),
                                 ok
                         end,
-                        %% write the live indexes, if any
+
                         case LiveIndexes of
                             [] -> ok;
                             _ ->
                                 ok = write_indexes(SnapDir, LiveIndexes),
                                 ok
                         end,
+
                         Self ! {ra_log_event,
                                 {snapshot_written, IdxTerm,
                                  LiveIndexes, SnapKind}},
