@@ -609,7 +609,7 @@ leader(_, tick_timeout, State0) ->
     {State2, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects ++ [{aux, tick}],
                                         cast, State1#state{server_state = ServerState}),
     %% try sending any pending applied notifications again
-    State = send_applied_notifications(State2, #{}),
+    State = send_applied_notifications(#{}, State2),
     {keep_state, State,
      set_tick_timer(State, Actions)};
 leader({timeout, Name}, machine_timeout, State0) ->
@@ -689,6 +689,8 @@ candidate(_, tick_timeout, State0) ->
     {keep_state, State, set_tick_timer(State, [])};
 candidate({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
+candidate({call, From}, {read_entries, Indexes}, State) ->
+    read_entries0(From, Indexes, State);
 candidate(EventType, Msg, State0) ->
     case handle_candidate(Msg, State0) of
         {candidate, State1, Effects} ->
@@ -749,6 +751,8 @@ pre_vote(_, tick_timeout, State0) ->
     {keep_state, State, set_tick_timer(State, [])};
 pre_vote({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
+pre_vote({call, From}, {read_entries, Indexes}, State) ->
+    read_entries0(From, Indexes, State);
 pre_vote(EventType, Msg, State0) ->
     case handle_pre_vote(Msg, State0) of
         {pre_vote, State1, Effects} ->
@@ -1087,6 +1091,8 @@ await_condition(info, {Status, Node, InfoList}, State0)
 await_condition(_, tick_timeout, State0) ->
     {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast, State0),
     {keep_state, State, set_tick_timer(State, Actions)};
+await_condition({call, From}, {read_entries, Indexes}, State) ->
+    read_entries0(From, Indexes, State);
 await_condition(EventType, Msg, State0) ->
     case handle_await_condition(Msg, State0) of
         {follower, State1, Effects} ->
@@ -1513,7 +1519,7 @@ handle_effect(RaftState, {aux, Cmd}, EventType, State0, Actions0) ->
     {State, Actions0 ++ Actions};
 handle_effect(leader, {notify, Nots}, _, #state{} = State0, Actions) ->
     %% should only be done by leader
-    State = send_applied_notifications(State0, Nots),
+    State = send_applied_notifications(Nots, State0),
     {State, Actions};
 handle_effect(_AnyState, {cast, To, Msg}, _, State, Actions) ->
     %% TODO: handle send failure
@@ -2223,13 +2229,13 @@ update_peer(PeerId, Update,
     State0#state{server_state =
                  ra_server:update_peer(PeerId, Update, ServerState)}.
 
-send_applied_notifications(#state{pending_notifys = PendingNots} = State,
-                           Nots0) when map_size(PendingNots) > 0 ->
+send_applied_notifications(Nots0, #state{pending_notifys = PendingNots} = State)
+  when map_size(PendingNots) > 0 ->
     Nots = maps:merge_with(fun(_K, V1, V2) ->
                                    V1 ++ V2
                            end, PendingNots, Nots0),
-    send_applied_notifications(State#state{pending_notifys = #{}}, Nots);
-send_applied_notifications(#state{} = State, Nots) ->
+    send_applied_notifications(Nots, State#state{pending_notifys = #{}});
+send_applied_notifications(Nots, #state{} = State) ->
     Id = id(State),
     %% any notifications that could not be sent
     %% will be kept and retried
