@@ -27,7 +27,10 @@
                    failed_ops := non_neg_integer(),
                    next_node_id := pos_integer(),
                    remaining_ops := non_neg_integer(),
-                   consistency_failed := boolean()}.
+                   consistency_failed := boolean(),
+                   partition_state => #{partitioned_node => ra:server_id(),
+                                        heal_time => non_neg_integer(),
+                                        other_nodes => [node()]}}.
 
 -spec timestamp() -> string().
 timestamp() ->
@@ -65,7 +68,8 @@ new_state() ->
                      {kill_wal} |
                      {kill_member} |
                      {add_member} |
-                     {remove_member}.
+                     {remove_member} |
+                     {network_partition}.
 
 -spec run(NumOperations :: pos_integer()) ->
     {ok, #{successful := non_neg_integer(),
@@ -90,15 +94,14 @@ read_all_keys_loop(Members0) when is_list(Members0) ->
     after 0 ->
               %% resolve current members
               {ok, Members, _} = ra:members(Members0),
-              Member = lists:nth(rand:uniform(length(Members)), Members),
+              Member = random_non_partitioned_member(State),
               NodeName = element(2, Member),
-              log("~s Begin Reading all keys on member ~p~n",
-                  [timestamp(), Member]),
+              log("~s Begin reading all keys on member ~0p~n", [timestamp(), Member]),
               T1 = erlang:monotonic_time(),
               ok = erpc:call(NodeName, ra_kv_harness, read_all_keys, []),
               T2 = erlang:monotonic_time(),
               Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
-              log("~s Read all keys on member ~p in ~bms~n", [timestamp(), Member, Diff]),
+              log("~s Read all keys on member ~0p in ~bms~n", [timestamp(), Member, Diff]),
               read_all_keys_loop(Members)
     end.
 
@@ -191,15 +194,27 @@ start_single_peer_node(NodeId, Opts) ->
     PaArgs = lists:flatmap(fun(Path) -> ["-pa", Path] end, CodePaths),
     BufferSize = ["+zdbbl", "102400"],
 
+    % Check if inet_tcp_proxy_dist is available
+    % If yes, add -proto_dist argument at the front with its path, like erlang_node_helpers does
+    ProtoDistArgs = case code:where_is_file("inet_tcp_proxy_dist.beam") of
+        non_existing ->
+            % inet_tcp_proxy not available, don't use it
+            log("~s WARNING: inet_tcp_proxy_dist not found, starting peer without it~n", [timestamp()]),
+            [];
+        BeamPath ->
+            DistModPath = filename:dirname(BeamPath),
+            ["-pa", DistModPath, "-proto_dist", "inet_tcp_proxy",
+             "-kernel", "prevent_overlapping_partitions", "false"]
+    end,
+
     case peer:start_link(#{name => NodeName,
-                           args => PaArgs ++ BufferSize}) of
+                           args => ProtoDistArgs ++ PaArgs ++ BufferSize,
+                           connection => standard_io}) of
         {ok, PeerRef, NodeName} ->
             BaseDir = maps:get(dir, Opts, ""),
             erpc:call(NodeName, logger, set_primary_config, [level, warning]),
             erpc:call(NodeName, application, set_env, [sasl, sasl_error_logger, false]),
             erpc:call(NodeName, application, stop, [sasl]),
-            erpc:call(NodeName, application, set_env,
-                      [kernel, prevent_overlapping_partitions, false]),
             Dir = filename:join(BaseDir, NodeName),
             {ok, _} = erpc:call(NodeName, ra, start_in, [Dir]),
             % Set logger level to reduce verbosity on peer node
@@ -262,9 +277,11 @@ generate_operation() ->
             {kill_wal};
         5 -> % 1% kill member
             {kill_member};
-        N when N =< 9 -> % 4% snapshot
+        6 -> % 1% network partition
+            {network_partition};
+        N when N =< 10 -> % 4% snapshot
             {snapshot};
-        N when N =< 11 -> % 2% major compactions
+        N when N =< 12 -> % 2% major compactions
             {major_compaction};
         N when N =< 80 ->
             Key = generate_key(),
@@ -350,27 +367,44 @@ execute_operation(State, {get, Key}) ->
     end;
 
 execute_operation(State, {update_almost_all_keys}) ->
-    Members = maps:get(members, State),
     RefMap = maps:get(reference_map, State),
     OpCount = maps:get(operations_count, State),
     SuccessOps = maps:get(successful_ops, State),
 
-    % Pick a random cluster member to send the operations to
-    MembersList = maps:keys(Members),
-    Member = lists:nth(rand:uniform(length(MembersList)), MembersList),
+    Member = random_non_partitioned_member(State),
 
-    X = rand:uniform(100),
-    {T, _} = timer:tc(fun() ->
-                               [ {ok, _} = ra_kv:put(Member,
-                                                     key(N),
-                                                     0,
-                                                     ?TIMEOUT)
-                                 || N <- lists:seq(1, ?MAX_KEY),
-                                    N rem X =/= 0] end),
-    log("~s Updated roughly 99% of the ~p keys in ~bms...~n", [timestamp(), ?MAX_KEY, T div 1000]),
+    % Update a random percentage (10-90%) of keys
+    PercentToUpdate = rand:uniform(81) + 9,  % Random number between 10 and 90
+    AllKeys = lists:seq(1, ?MAX_KEY),
+    NumKeysToUpdate = (?MAX_KEY * PercentToUpdate) div 100,
+    KeysToUpdate = lists:sublist([N || {_, N} <- lists:sort([{rand:uniform(), K} || K <- AllKeys])],
+                                  NumKeysToUpdate),
 
-    NewRefMap = maps:merge(RefMap, #{ key(N) => 0 || N <- lists:seq(1, ?MAX_KEY),
-                                         N rem X =/= 0}),
+    {T, Results} = timer:tc(fun() ->
+                               [begin
+                                    case ra_kv:put(Member, key(N), OpCount, ?TIMEOUT) of
+                                        {ok, _} -> {ok, N};
+                                        {timeout, _} -> {timeout, N};
+                                        {error, _Reason} -> {error, N}
+                                    end
+                                end || N <- KeysToUpdate]
+                            end),
+
+    % Count successful and failed updates
+    SuccessfulKeys = [N || {ok, N} <- Results],
+    FailedResults = [R || R <- Results, element(1, R) =/= ok],
+
+    case FailedResults of
+        [] ->
+            log("~s Updated ~p% of the ~p keys (~p successful) in ~bms~n",
+                [timestamp(), PercentToUpdate, ?MAX_KEY, length(SuccessfulKeys), T div 1000]);
+        _ ->
+            log("~s Updated ~p/~p keys (~p% target) in ~bms (aborted due to ~p failures/timeouts)~n",
+                [timestamp(), length(SuccessfulKeys), length(KeysToUpdate), PercentToUpdate, T div 1000, length(FailedResults)])
+    end,
+
+    % Only update reference map for successfully updated keys
+    NewRefMap = maps:merge(RefMap, maps:from_list([{key(N), OpCount} || N <- SuccessfulKeys])),
     State#{reference_map => NewRefMap,
            operations_count => OpCount + 1,
            successful_ops => SuccessOps + 1};
@@ -429,23 +463,30 @@ execute_operation(#{options := Opts} = State, {add_member}) ->
     case start_new_peer_node(NextNodeId, Opts)  of
         {ok, PeerRef, NodeName} ->
             NewMember = {?CLUSTER_NAME, NodeName},
+            ExistingMember = random_non_partitioned_member(State),
 
-            % Pick a random existing member to send the add_member command to
-            MembersList = maps:keys(Members),
-            ExistingMember = lists:nth(rand:uniform(length(MembersList)),
-                                       MembersList),
-
-            try ra_kv:add_member(?SYS, NewMember, ExistingMember) of
+            case ra_kv:add_member(?SYS, NewMember, ExistingMember) of
                 ok ->
                     NewMembers = Members#{NewMember => PeerRef},
                     NewMembersList = maps:keys(NewMembers),
-                    log("~s Added member ~p. Cluster now has ~p members: ~0p~n", [timestamp(), NewMember, length(NewMembersList), NewMembersList]),
+                    log("~s Added member ~p. Cluster now has ~p members: ~0p; partitioned node: ~0p~n",
+                        [timestamp(), NewMember,
+                         length(NewMembersList),
+                         NewMembersList,
+                         partitioned_node_name(State)]),
                     State#{members => NewMembers,
                            operations_count => OpCount + 1,
                            successful_ops => SuccessOps + 1,
-                           next_node_id => NextNodeId + 1}
-            catch
-                _:Reason ->
+                           next_node_id => NextNodeId + 1};
+                {timeout, _ServerId} ->
+                    log("~s Timeout adding member ~p~n",
+                        [timestamp(), NewMember]),
+                    % Clean up the peer node since add failed
+                    catch peer:stop(PeerRef),
+                    State#{operations_count => OpCount + 1,
+                           failed_ops => FailedOps + 1,
+                           next_node_id => NextNodeId + 1};
+                {error, Reason} ->
                     log("~s Failed to add member ~p: ~p~n",
                         [timestamp(), NewMember, Reason]),
                     % Clean up the peer node since add failed
@@ -476,13 +517,12 @@ execute_operation(State, {remove_member}) ->
         false ->
             % Pick a random member to remove
             MembersList = maps:keys(Members),
-            MemberToRemove = lists:nth(rand:uniform(length(MembersList)),
-                                       MembersList),
+            MemberToRemove = random_non_partitioned_member(State),
 
             % Pick a different member to send the remove command to
             RemainingMembers = MembersList -- [MemberToRemove],
-            CommandTarget = lists:nth(rand:uniform(length(RemainingMembers)),
-                                      RemainingMembers),
+            CommandTarget = random_non_partitioned_member(RemainingMembers, State),
+
             log("~s Removing member ~w... command target ~w~n",
                 [timestamp(), MemberToRemove, CommandTarget]),
 
@@ -498,11 +538,21 @@ execute_operation(State, {remove_member}) ->
 
                     NewMembers = maps:remove(MemberToRemove, Members),
                     NewMembersList = maps:keys(NewMembers),
-                    log("~s done. Cluster now has ~p members: ~0p~n", [timestamp(), length(NewMembersList), NewMembersList]),
+                    log("~s Member ~w removed. Cluster now has ~p members: ~0p; paritioned node: ~p~n",
+                        [timestamp(),
+                         MemberToRemove,
+                         length(NewMembersList),
+                         NewMembersList,
+                         partitioned_node_name(State)]),
 
                     State#{members => NewMembers,
                            operations_count => OpCount + 1,
                            successful_ops => SuccessOps + 1};
+                {timeout, _ServerId} ->
+                    log("~s Timeout removing member ~p~n",
+                        [timestamp(), MemberToRemove]),
+                    State#{operations_count => OpCount + 1,
+                           failed_ops => FailedOps + 1};
                 {error, Reason} ->
                     log("~s Failed to remove member ~p: ~p~n",
                         [timestamp(), MemberToRemove, Reason]),
@@ -578,6 +628,97 @@ execute_operation(State, {kill_member}) ->
                   State
             end
 
+    end;
+
+execute_operation(State, {network_partition}) ->
+    Members = maps:get(members, State),
+    OpCount = maps:get(operations_count, State),
+    SuccessOps = maps:get(successful_ops, State),
+    PartitionState = maps:get(partition_state, State, #{}),
+    Now = milliseconds(),
+
+    case PartitionState of
+        #{heal_time := HealTime} when Now < HealTime ->
+            % There's an active partition already
+            State;
+        #{partitioned_node := PartitionedNode, heal_time := HealTime, other_nodes := OtherNodes} when Now >= HealTime ->
+            % Time to heal the partition
+            PartitionedNodeName = element(2, PartitionedNode),
+
+            log("~s Healing network partition; node ~w will rejoin the rest~n", [timestamp(), PartitionedNode]),
+
+            % Allow communication between partitioned node and other nodes
+            % Call allow on each node to restore bidirectional communication
+            % We use rpc:call with infinity timeout since nodes might be reconnecting
+            [begin
+                 spawn(fun() ->
+                     case rpc:call(PartitionedNodeName, inet_tcp_proxy_dist, allow, [OtherNode], 5000) of
+                         ok -> ok;
+                         Err ->
+                             log("~s rpc:call(~p, inet_tcp_proxy_dist, allow, [~p]) failed with ~p~n",
+                                 [timestamp(),
+                                  PartitionedNodeName,
+                                  OtherNode,
+                                  Err]),
+                             ok
+                     end
+                 end),
+                 spawn(fun() ->
+                     case rpc:call(OtherNode, inet_tcp_proxy_dist, allow, [PartitionedNodeName], 5000) of
+                         ok -> ok;
+                         Err ->
+                             log("~s rpc:call(~p, inet_tcp_proxy_dist, allow, [~p]) failed with ~p~n",
+                                 [timestamp(),
+                                  OtherNode,
+                                  PartitionedNodeName,
+                                  Err]),
+                             ok
+                     end
+                 end)
+             end || OtherNode <- OtherNodes],
+
+            % Give nodes time to reconnect
+            timer:sleep(5000),
+
+            State#{operations_count => OpCount + 1,
+                   successful_ops => SuccessOps + 1,
+                   partition_state => #{}};
+        _ ->
+            MembersList = maps:keys(Members),
+            case length(MembersList) < 3 of
+                true ->
+                    % Need at least 3 nodes for partition
+                    State;
+                false ->
+                    % No active partition, create a new one
+                    % Pick a random node to partition
+                    NodeToPartition = lists:nth(rand:uniform(length(MembersList)), MembersList),
+                    NodeToPartitionName = element(2, NodeToPartition),
+
+                    % Get the other nodes (excluding the one to partition)
+                    OtherNodes = [element(2, M) || M <- MembersList, M =/= NodeToPartition],
+
+                    % Choose partition duration: 3s, 15s, 55s, or 90s
+                    PartitionDurations = [3000, 15000, 55000, 90000],
+                    Duration = lists:nth(rand:uniform(length(PartitionDurations)), PartitionDurations),
+                    HealTime = Now + Duration,
+
+                    log("~s Creating network partition: isolating node ~w from ~w for ~wms~n",
+                        [timestamp(), NodeToPartitionName, OtherNodes, Duration]),
+
+                    % Block communication between partitioned node and other nodes
+                    % The harness node (current node) maintains access to all nodes
+                    [begin
+                         erpc:call(NodeToPartitionName, inet_tcp_proxy_dist, block, [OtherNode]),
+                         erpc:call(OtherNode, inet_tcp_proxy_dist, block, [NodeToPartitionName])
+                     end || OtherNode <- OtherNodes],
+
+            State#{operations_count => OpCount + 1,
+                   successful_ops => SuccessOps + 1,
+                   partition_state => #{partitioned_node => NodeToPartition,
+                                        heal_time => HealTime,
+                                        other_nodes => OtherNodes}}
+            end
     end.
 
 -spec wait_for_applied_index_convergence([ra:server_id()], non_neg_integer()) -> ok.
@@ -609,15 +750,34 @@ get_applied_indices(Members) ->
 -spec validate_consistency(state()) -> state().
 validate_consistency(State) ->
     Members = maps:get(members, State),
+    PartitionState = maps:get(partition_state, State, #{}),
+    MembersList = maps:keys(Members),
+
+    % Determine which members to validate based on active partition
+    MembersToValidate = case PartitionState of
+        #{partitioned_node := PartitionedNode} ->
+            % Active partition - exclude the partitioned node
+            log("~s Consistency check during partition; skipping validation of partitioned node ~0p~n",
+                [timestamp(), partitioned_node_name(State)]),
+            lists:delete(PartitionedNode, MembersList);
+        _ ->
+            % No active partition, validate all members
+            MembersList
+    end,
+
+    % Perform consistency check on selected members
+    perform_consistency_check(State, MembersToValidate).
+
+-spec perform_consistency_check(state(), [ra:server_id()]) -> state().
+perform_consistency_check(State, MembersToValidate) ->
     RefMap = maps:get(reference_map, State),
 
     % Wait for all nodes to converge to the same applied index
-    MembersList = maps:keys(Members),
-    wait_for_applied_index_convergence(MembersList, 300), % Wait up to 30 seconds
+    wait_for_applied_index_convergence(MembersToValidate, 300), % Wait up to 30 seconds
 
     % Check that all members have the same view
     ValidationResults = [validate_member_consistency(Member, RefMap)
-                         || Member <- MembersList],
+                         || Member <- MembersToValidate],
 
     Result1 = hd(ValidationResults),
     case lists:all(fun(Result) ->
@@ -636,13 +796,13 @@ validate_consistency(State) ->
                                                    {length(LI), LastIndex};
                                              _ -> error
                                          end} || {Member, Result} <-
-                                                 lists:zip(MembersList, ValidationResults)],
+                                                 lists:zip(MembersToValidate, ValidationResults)],
             log("~s Consistency check failed. Live indexes per node: ~p~n",
-                [timestamp(), LiveIndexesSummary ]),
+                [timestamp(), LiveIndexesSummary]),
             log("~s STOPPING: No more operations will be performed due to consistency failure~n", [timestamp()]),
 
             % Write full details to log file with difference analysis
-            LogEntry = format_consistency_failure(MembersList, ValidationResults),
+            LogEntry = format_consistency_failure(MembersToValidate, ValidationResults),
             file:write_file("ra_kv_harness.log", LogEntry, [append]),
 
             FailedOps = maps:get(failed_ops, State),
@@ -762,3 +922,22 @@ validate_key_across_members(Key, ExpectedValue, Members) ->
         true -> ok;
         false -> error
     end.
+
+partitioned_node_name(#{partitioned_state := #{partitioned_node := {_, Node}}}) ->
+    Node;
+partitioned_node_name(_State) ->
+    none.
+
+random_non_partitioned_member(MemberList, State) ->
+    PartitionState = maps:get(partition_state, State, #{}),
+    PartitionedNode = maps:get(partitioned_node, PartitionState, none),
+    MajorityMembers = lists:delete(PartitionedNode, MemberList),
+    lists:nth(rand:uniform(length(MajorityMembers)), MajorityMembers).
+
+random_non_partitioned_member(State) ->
+    Members = maps:get(members, State, #{}),
+    PartitionState = maps:get(partition_state, State, #{}),
+    PartitionedNode = maps:get(partitioned_node, PartitionState, none),
+    MajorityMembers = lists:delete(PartitionedNode, maps:keys(Members)),
+    lists:nth(rand:uniform(length(MajorityMembers)), MajorityMembers).
+
