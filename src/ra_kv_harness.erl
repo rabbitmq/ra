@@ -923,7 +923,7 @@ validate_key_across_members(Key, ExpectedValue, Members) ->
         false -> error
     end.
 
-partitioned_node_name(#{partitioned_state := #{partitioned_node := {_, Node}}}) ->
+partitioned_node_name(#{partition_state := #{partitioned_node := {_, Node}}}) ->
     Node;
 partitioned_node_name(_State) ->
     none.
