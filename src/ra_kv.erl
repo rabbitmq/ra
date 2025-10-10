@@ -76,7 +76,7 @@ start_cluster(System, ClusterName, #{members := ServerIds})
 -spec add_member(System :: atom(),
                  NewMemberId :: ra_server_id(),
                  LeaderId :: ra_server_id()) ->
-    ok | {error, term()}.
+    ok | {error, term()} | {timeout, ra_server_id()}.
 add_member(System, {Name, _} = Id, LeaderId0) ->
     {ok, Members, LeaderId1} = ra:members(LeaderId0),
     ?assert(not lists:member(Id, Members)),
@@ -105,7 +105,7 @@ add_member(System, {Name, _} = Id, LeaderId0) ->
 -spec remove_member(System :: atom(),
                     NewMemberId :: ra_server_id(),
                     LeaderId :: ra_server_id()) ->
-    ok | {error, term()}.
+    ok | {error, term()} | {timeout, ra_server_id()}.
 remove_member(System, Id, LeaderId0) ->
     {ok, Members, _} = ra:members(LeaderId0),
     RemainingMembers = lists:delete(Id, Members),
