@@ -330,7 +330,6 @@ flush_mem_table_range(ServerUId, {Tid, Seq},
                       #state{data_dir = DataDir,
                              segment_conf = SegConf} = State) ->
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
-    % StartIdx = start_index(ServerUId, StartIdx0),
     case open_file(Dir, SegConf) of
         enoent ->
             ?DEBUG("segment_writer: skipping segment as directory ~ts does "
@@ -522,13 +521,7 @@ open_file(Dir, SegConf) ->
     %% existing which could happen after server deletion
     case ra_log_segment:open(File, SegConf#{mode => append}) of
         {ok, Segment} ->
-            case ra_log_segment:segref(Segment) of
-                undefined ->
-                    Segment;
-                _ ->
-                    %% has entries, open successor
-                    open_successor_segment(Segment, SegConf)
-            end;
+            Segment;
         {error, missing_segment_header} ->
             %% a file was created by the segment header had not been
             %% synced. In this case it is typically safe to just delete
