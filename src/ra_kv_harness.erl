@@ -94,7 +94,7 @@ read_all_keys_loop(Members0) when is_list(Members0) ->
     after 0 ->
               %% resolve current members
               {ok, Members, _} = ra:members(Members0),
-              Member = random_non_partitioned_member(State),
+              Member = hd(Members),
               NodeName = element(2, Member),
               log("~s Begin reading all keys on member ~0p~n", [timestamp(), Member]),
               T1 = erlang:monotonic_time(),
