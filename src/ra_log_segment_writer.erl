@@ -218,7 +218,7 @@ handle_cast({truncate_segments, Who, {Name, _Range} = SegRef},
                             ?DEBUG("segment_writer in '~w': ~s for ~s took ~bms",
                                    [System, ?FUNCTION_NAME, Who, Diff]),
                             case open_successor_segment(Seg, SegConf) of
-                                undefined ->
+                                enoent ->
                                     %% directory must have been deleted after the pivot
                                     %% segment was opened
                                     {noreply, State0};
@@ -450,7 +450,7 @@ append_to_segment(UId, Tid, {Idx, SeqIter} = Cur, Seg0, Closed, State) ->
                 {error, full} ->
                     % close and open a new segment
                     case open_successor_segment(Seg0, State#state.segment_conf) of
-                        undefined ->
+                        enoent ->
                             %% a successor cannot be opened - this is most likely due
                             %% to the directory having been deleted.
                             undefined;
@@ -505,7 +505,7 @@ open_successor_segment(CurSeg, SegConf) ->
         {error, enoent} ->
             %% the directory has been deleted whilst segments were being
             %% written
-            undefined;
+            enoent;
         {ok, Seg} ->
             Seg
     end.
@@ -522,7 +522,13 @@ open_file(Dir, SegConf) ->
     %% existing which could happen after server deletion
     case ra_log_segment:open(File, SegConf#{mode => append}) of
         {ok, Segment} ->
-            Segment;
+            case ra_log_segment:segref(Segment) of
+                undefined ->
+                    Segment;
+                _ ->
+                    %% has entries, open successor
+                    open_successor_segment(Segment, SegConf)
+            end;
         {error, missing_segment_header} ->
             %% a file was created by the segment header had not been
             %% synced. In this case it is typically safe to just delete

@@ -2320,7 +2320,7 @@ promote_checkpoint(Index, #{log := Log0} = State) ->
 -spec persist_last_applied(ra_server_state()) -> ra_server_state().
 persist_last_applied(#{persisted_last_applied := PLA,
                        last_applied := LA} = State) when LA =< PLA ->
-    % if last applied is less than PL for some reason do nothing
+    % if last applied is less than or equal to PL do nothing
     State;
 persist_last_applied(#{last_applied := LastApplied,
                        cfg := #cfg{uid = UId} = Cfg} = State) ->
@@ -2881,7 +2881,6 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
                             erlang:system_time(millisecond) - LastTs
                     end,
     %% due to machine versioning all entries may not have been applied
-    %%
     FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, AppliedTo),
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, CommitLatency),
