@@ -83,7 +83,8 @@
          member_overview/1,
          member_overview/2,
          key_metrics/1,
-         key_metrics/2
+         key_metrics/2,
+         key_metrics/3
         ]).
 
 %% xref should pick these up
@@ -771,7 +772,7 @@ overview(System) ->
             #{node => node(),
               servers => ra_directory:overview(System),
               %% TODO:filter counter keys by system
-              counters => ra_counters:overview(),
+              counters => ra_counters:overview(System),
               wal => #{status => lists:nth(5, element(4, sys:get_status(Wal))),
                        open_mem_tables => ets:info(OpenTbls, size)
                       },
@@ -1229,15 +1230,16 @@ member_overview(ServerId, Timeout) ->
 
 %% @doc Returns a map of key metrics about a Ra member
 %%
-%% The keys and values may vary depending on what state
-%% the member is in. This function will never call into the
-%% Ra process itself so is likely to return swiftly even
-%% when the Ra process is busy (such as when it is recovering)
+%% For backwards compatibility, since key_metrics/2 can
+%% call key_metrics on a remote node during a rolling upgrade.
+%% In the past, ra_counters were all under the ra namespace
+%% and were not scoped by a Ra system name.
 %%
 %% @param ServerId the Ra server to obtain key metrics for
+%% DEPRECATED: use key_metrics/2
 %% @end
 key_metrics(ServerId) ->
-    key_metrics(ServerId, ?DEFAULT_TIMEOUT).
+    key_metrics(ra, ServerId, ?DEFAULT_TIMEOUT).
 
 %% @doc Returns a map of key metrics about a Ra member
 %%
@@ -1246,10 +1248,24 @@ key_metrics(ServerId) ->
 %% Ra process itself so is likely to return swiftly even
 %% when the Ra process is busy (such as when it is recovering)
 %%
+%% @param System the system name
+%% @param ServerId the Ra server to obtain key metrics for
+%% @end
+key_metrics(System, ServerId) ->
+    key_metrics(System, ServerId, ?DEFAULT_TIMEOUT).
+
+%% @doc Returns a map of key metrics about a Ra member
+%%
+%% The keys and values may vary depending on what state
+%% the member is in. This function will never call into the
+%% Ra process itself so is likely to return swiftly even
+%% when the Ra process is busy (such as when it is recovering)
+%%
+%% @param System the system name
 %% @param ServerId the Ra server to obtain key metrics for
 %% @param Timeout The time to wait for the server to reply
 %% @end
-key_metrics({Name, N} = ServerId, _Timeout) when N == node() ->
+key_metrics(System, {Name, N} = ServerId, _Timeout) when N == node() ->
     Fields = [last_applied,
               commit_index,
               snapshot_index,
@@ -1257,7 +1273,7 @@ key_metrics({Name, N} = ServerId, _Timeout) when N == node() ->
               last_index,
               commit_latency,
               term],
-    Counters = case ra_counters:counters(ServerId, Fields) of
+    Counters = case ra_counters:counters(System, ServerId, Fields) of
                    undefined ->
                        #{};
                    C -> C
@@ -1276,8 +1292,8 @@ key_metrics({Name, N} = ServerId, _Timeout) when N == node() ->
                               membership => Membership}
             end
     end;
-key_metrics({_, N} = ServerId, Timeout) ->
-    erpc:call(N, ?MODULE, ?FUNCTION_NAME, [ServerId], Timeout).
+key_metrics(System, {_, N} = ServerId, Timeout) ->
+    erpc:call(N, ?MODULE, ?FUNCTION_NAME, [System, ServerId], Timeout).
 
 %% internal
 

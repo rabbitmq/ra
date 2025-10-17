@@ -279,7 +279,8 @@ init(#{dir := Dir, system := System} = Conf0) ->
     process_flag(message_queue_data, off_heap),
     process_flag(min_bin_vheap_size, MinBinVheapSize),
     process_flag(min_heap_size, MinHeapSize),
-    CRef = ra_counters:new(WalName,
+    CRef = ra_counters:new(System,
+                           WalName,
                            ?COUNTER_FIELDS,
                            #{ra_system => System, module => ?MODULE}),
     Conf = #conf{dir = Dir,
@@ -292,7 +293,7 @@ init(#{dir := Dir, system := System} = Conf0) ->
                  sync_method = SyncMethod,
                  counter = CRef,
                  mem_tables_tid = ets:whereis(MemTablesName),
-                 names = Names,
+                 names = Names#{system => System},
                  explicit_gc = Gc,
                  pre_allocate = PreAllocate,
                  ra_log_snapshot_state_tid = ets:whereis(ra_log_snapshot_state)},
@@ -328,7 +329,8 @@ terminate(Reason, State) ->
 format_status(#state{conf = #conf{write_strategy = Strat,
                                   sync_method = SyncMeth,
                                   compute_checksums = Cs,
-                                  names = #{wal := WalName},
+                                  names = #{system := System,
+                                            wal := WalName},
                                   max_size_bytes = MaxSize},
                      writers = Writers,
                      wal = #wal{file_size = FSize,
@@ -340,7 +342,7 @@ format_status(#state{conf = #conf{write_strategy = Strat,
       filename => filename:basename(Fn),
       current_size => FSize,
       max_size_bytes => MaxSize,
-      counters => ra_counters:overview(WalName)
+      counters => ra_counters:overview(System, WalName)
      }.
 
 %% Internal

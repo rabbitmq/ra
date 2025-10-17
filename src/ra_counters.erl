@@ -8,51 +8,51 @@
 -include("ra.hrl").
 
 -export([
-         init/0,
-         new/2,
+         init/1,
          new/3,
-         fetch/1,
-         overview/0,
+         new/4,
+         fetch/2,
          overview/1,
-         counters/2,
-         delete/1
+         overview/2,
+         counters/3,
+         delete/2
          ]).
 
 -type name() :: term().
 
 
--spec init() -> ok.
-init() ->
+-spec init(atom()) -> ok.
+init(Group) ->
     _ = application:ensure_all_started(seshat),
-    _ = seshat:new_group(ra),
+    _ = seshat:new_group(Group),
     persistent_term:put(?FIELDSPEC_KEY, ?RA_COUNTER_FIELDS),
     ok.
 
--spec new(name(), seshat:fields_spec()) ->
+-spec new(atom(), name(), seshat:fields_spec()) ->
     counters:counters_ref().
-new(Name, FieldsSpec) ->
-    seshat:new(ra, Name, FieldsSpec).
+new(Group, Name, FieldsSpec) ->
+    seshat:new(Group, Name, FieldsSpec).
 
-new(Name, FieldsSpec, MetricLabels) ->
-    seshat:new(ra, Name, FieldsSpec, MetricLabels).
+new(Group, Name, FieldsSpec, MetricLabels) ->
+    seshat:new(Group, Name, FieldsSpec, MetricLabels).
 
--spec fetch(name()) -> undefined | counters:counters_ref().
-fetch(Name) ->
-    seshat:fetch(ra, Name).
+-spec fetch(atom(), name()) -> undefined | counters:counters_ref().
+fetch(Group, Name) ->
+    seshat:fetch(Group, Name).
 
--spec delete(term()) -> ok.
-delete(Name) ->
-    seshat:delete(ra, Name).
+-spec delete(atom(), term()) -> ok.
+delete(Group, Name) ->
+    seshat:delete(Group, Name).
 
--spec overview() -> #{name() => #{atom() => non_neg_integer()}}.
-overview() ->
-    seshat:counters(ra).
+-spec overview(atom()) -> #{name() => #{atom() => non_neg_integer()}}.
+overview(Group) ->
+    seshat:counters(Group).
 
--spec overview(name()) -> #{atom() => non_neg_integer()} | undefined.
-overview(Name) ->
-    seshat:counters(ra, Name).
+-spec overview(atom(), name()) -> #{atom() => non_neg_integer()} | undefined.
+overview(Group, Name) ->
+    seshat:counters(Group, Name).
 
--spec counters(name(), [atom()]) ->
+-spec counters(atom(), name(), [atom()]) ->
     #{atom() => non_neg_integer()} | undefined.
-counters(Name, Fields) ->
-    seshat:counters(ra, Name, Fields).
+counters(Group, Name, Fields) ->
+    seshat:counters(Group, Name, Fields).

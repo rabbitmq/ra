@@ -312,12 +312,13 @@ init(Config) ->
 
 do_init(#{id := Id,
           uid := UId,
-          cluster_name := ClusterName} = Config0) ->
+          cluster_name := ClusterName,
+          system_config := #{name := System}} = Config0) ->
     Key = ra_lib:ra_server_id_to_local_name(Id),
     true = ets:insert(ra_state, {Key, init, unknown}),
     process_flag(trap_exit, true),
     MetricLabels = maps:get(metrics_labels, Config0, #{}),
-    Config = maps:merge(config_defaults(Id, MetricLabels), Config0),
+    Config = maps:merge(config_defaults(System, Id, MetricLabels), Config0),
     #{counter := Counter,
       system_config := #{names := Names} = SysConf} = Config,
     MsgQData = maps:get(message_queue_data, SysConf, off_heap),
@@ -1076,7 +1077,8 @@ terminate(Reason, StateName,
                  server_state = ServerState} = State) ->
     ?DEBUG("~ts: terminating with ~w in state ~w",
            [log_id(State), Reason, StateName]),
-    #{names := #{server_sup := SrvSup,
+    #{name := System,
+      names := #{server_sup := SrvSup,
                  log_meta := MetaName} = Names} =
         ra_server:system_config(ServerState),
     UId = uid(State),
@@ -1093,7 +1095,7 @@ terminate(Reason, StateName,
             catch ra_directory:unregister_name(Names, UId),
             _ = ra_server:terminate(ServerState, Reason),
             catch ra_log_meta:delete_sync(MetaName, UId),
-            catch ra_counters:delete(Id),
+            catch ra_counters:delete(System, Id),
             Self = self(),
             %% we have to terminate the child spec from the supervisor as it
             %% won't do this automatically, even for transient children
@@ -1803,10 +1805,11 @@ gen_statem_safe_call(ServerId, Msg, Timeout) ->
 do_state_query(QueryName, #state{server_state = State}) ->
     ra_server:state_query(QueryName, State).
 
-config_defaults(ServerId, MetricLabels) ->
-    Counter = case ra_counters:fetch(ServerId) of
+config_defaults(System, ServerId, MetricLabels) ->
+    Counter = case ra_counters:fetch(System, ServerId) of
                   undefined ->
-                      ra_counters:new(ServerId,
+                      ra_counters:new(System,
+                                      ServerId,
                                       {persistent_term, ?FIELDSPEC_KEY},
                                       MetricLabels);
                   C ->
