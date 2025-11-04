@@ -39,8 +39,15 @@
 
 -define(SYMLINK_KEEPFOR_S, 60).
 
+%% type for configuring automatic major compaction strategies
+-type major_compaction_strategy() :: manual |
+                          {num_minors, pos_integer()}.
+
 -type compaction_conf() :: #{max_count => non_neg_integer(),
-                             max_size => non_neg_integer()}.
+                             max_size => non_neg_integer(),
+                             major_strategy => major_compaction_strategy()}.
+%% hardly every used anymore, the sequential access pattern is only activated
+%% during recovery
 -type access_pattern() :: sequential | random.
 %% holds static or rarely changing fields
 -record(cfg, {uid :: ra_uid(),
@@ -58,7 +65,7 @@
                  segment_refs :: ra_lol:state(),
                  open_segments :: ra_flru:state(),
                  compaction :: undefined | major | minor,
-                 next_compaction :: undefined | major | minor
+                 minor_compaction_count = 0 :: non_neg_integer()
                 }).
 
 -record(compaction_result,
@@ -74,7 +81,8 @@
 -export_type([
               state/0,
               read_plan/0,
-              read_plan_options/0
+              read_plan_options/0,
+              major_compaction_strategy/0
              ]).
 
 %% PUBLIC
@@ -85,7 +93,8 @@
            map(),
            unicode:chardata()) -> state().
 init(UId, Dir, MaxOpen, AccessPattern, SegRefs0, Counter, CompConf, LogId)
-  when is_binary(UId) ->
+  when is_binary(UId) andalso
+       is_map(CompConf) ->
     Cfg = #cfg{uid = UId,
                log_id = LogId,
                counter = Counter,
@@ -173,27 +182,42 @@ update_segments(NewSegmentRefs, #?STATE{open_segments = Open0,
 -spec schedule_compaction(minor | major, ra:index(),
                           ra_seq:state(), state()) ->
     {state(), [ra_server:effect()]}.
+schedule_compaction(minor, SnapIdx, LiveIndexes,
+                    #?MODULE{cfg =
+                             #cfg{compaction_conf =
+                                  #{major_strategy :=
+                                    {num_minors, NumMinors}}},
+                             minor_compaction_count = MinorCount} = State)
+  when MinorCount >= NumMinors ->
+    %% promote to major compaction
+    schedule_compaction(major, SnapIdx, LiveIndexes, State);
 schedule_compaction(Type, SnapIdx, LiveIndexes,
                     #?MODULE{cfg = #cfg{log_id = LogId,
                                         compaction_conf = CompConf,
                                         directory = Dir} = Cfg,
+                             minor_compaction_count = MinorCompCnt,
                              compaction = undefined} = State) ->
     case compactable_segrefs(SnapIdx, State) of
         [] ->
             {State, []};
         SegRefs when LiveIndexes == [] ->
+
             %% if LiveIndexes is [] we can just delete all compactable
             %% segment refs
             Unreferenced = [F || {F, _} <- SegRefs],
+            ok = incr_counter(Cfg, ?C_RA_LOG_COMPACTIONS_MINOR_COUNT, 1),
             Result = #compaction_result{unreferenced = Unreferenced},
-            {State#?MODULE{compaction = minor},
+            {State#?MODULE{compaction = minor,
+                           minor_compaction_count = MinorCompCnt + 1},
              [{next_event,
                {ra_log_event, {compaction_result, Result}}}]};
         SegRefs when Type == minor ->
-            %% TODO evaluate if minor compactions are fast enough to run
+            %% TODO: evaluate if minor compactions are fast enough to run
             %% in server process
+            ok = incr_counter(Cfg, ?C_RA_LOG_COMPACTIONS_MINOR_COUNT, 1),
             Result = minor_compaction(SegRefs, LiveIndexes),
-            {State#?MODULE{compaction = minor},
+            {State#?MODULE{compaction = minor,
+                           minor_compaction_count = MinorCompCnt + 1},
              [{next_event,
                {ra_log_event, {compaction_result, Result}}}]};
         SegRefs ->
@@ -213,7 +237,8 @@ schedule_compaction(Type, SnapIdx, LiveIndexes,
                           ok
                   end,
 
-            {State#?MODULE{compaction = major},
+            {State#?MODULE{compaction = major,
+                           minor_compaction_count = 0},
              [{bg_work, Fun,
                fun (Err) ->
                        %% send an empty compaction result to ensure the
@@ -385,9 +410,11 @@ fetch_term(Idx, #?STATE{cfg = #cfg{} = Cfg} = State0) ->
 
 -spec info(state()) -> map().
 info(#?STATE{cfg = #cfg{} = _Cfg,
+             minor_compaction_count = MinorCount,
              open_segments = Open} = State) ->
     #{max_size => ra_flru:max_size(Open),
-      num_segments => segment_ref_count(State)}.
+      num_segments => segment_ref_count(State),
+      minor_compactions_count => MinorCount}.
 
 -spec purge_symlinks(file:filename_all(),
                      OlderThanSec :: non_neg_integer()) -> ok.

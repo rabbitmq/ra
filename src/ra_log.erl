@@ -141,7 +141,9 @@
                               snapshot_module => module(),
                               counter => counters:counters_ref(),
                               initial_access_pattern => sequential | random,
-                              max_checkpoints => non_neg_integer()}.
+                              max_checkpoints => non_neg_integer(),
+                              major_compaction_strategy =>
+                                  ra_log_segments:major_compaction_strategy()}.
 
 
 -type overview() ::
@@ -233,7 +235,10 @@ init(#{uid := UId,
     SegRefs = my_segrefs(UId, SegWriter),
     SegmentMaxCount = maps:get(segment_max_entries, Conf, ?SEGMENT_MAX_ENTRIES),
     SegmentMaxSize = maps:get(segment_max_size_bytes, Conf, ?SEGMENT_MAX_SIZE_B),
+    MajorCompStrat = maps:get(major_compaction_strategy, Conf,
+                              ?DEF_MAJOR_COIMPACTION_STRAT),
     CompConf = #{max_size => SegmentMaxSize,
+                 major_strategy => MajorCompStrat,
                  max_count => SegmentMaxCount},
     Reader = ra_log_segments:init(UId, Dir, MaxOpen, AccessPattern, SegRefs,
                                   Counter, CompConf, LogId),
