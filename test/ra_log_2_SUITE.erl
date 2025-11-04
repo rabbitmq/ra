@@ -933,10 +933,6 @@ recovery(Config) ->
     {20, 3} = ra_log:last_index_term(Log5),
     Log6 = validate_fold(1, 4, 1, Log5),
     Log7 = validate_fold(5, 14, 2, Log6),
-    % debugger:start(),
-    % int:i(ra_log),
-    % int:break(ra_log, 413),
-
     Log8 = validate_fold(15, 20, 3, Log7),
     ra_log:close(Log8),
 

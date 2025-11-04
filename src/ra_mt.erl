@@ -81,10 +81,10 @@ init(Tid, Mode) ->
                 read ->
                     [];
                 read_write ->
-                    %% TODO: can this be optimised further?
-                  ra_seq:from_list(ets:foldl(fun ({I, _, _}, Acc) ->
-                                                     [I |  Acc]
-                                             end, [], Tid))
+                    %% Use ets:select for efficient projection - extracts only indexes
+                    %% without building intermediate tuples or function closures
+                    ra_seq:from_list(
+                        ets:select(Tid, [{{'$1', '_', '_'}, [], ['$1']}]))
             end,
     #?MODULE{tid = Tid,
              indexes = Seq}.

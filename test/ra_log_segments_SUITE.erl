@@ -9,6 +9,7 @@
 -compile(nowarn_export_all).
 -compile(export_all).
 
+-include("src/ra.hrl").
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("kernel/include/file.hrl").
@@ -35,7 +36,8 @@ all_tests() ->
      minor,
      overwrite,
      result_after_segments,
-     result_after_segments_overwrite
+     result_after_segments_overwrite,
+     major_strategy_num_minors
     ].
 
 groups() ->
@@ -49,6 +51,7 @@ init_per_testcase(TestCase, Config) ->
     ok = ra_lib:make_dir(Dir),
     CompConf = #{max_count => 128,
                  max_size => 128_000},
+    ra_counters:init(),
     [{uid, atom_to_binary(TestCase, utf8)},
      {comp_conf, CompConf},
      {test_case, TestCase},
@@ -609,12 +612,59 @@ major(Config) ->
               length(Files) == 5
       end}
     ],
-
     SegConf = #{max_count => 128},
     Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
     run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
 
     ok.
+
+major_strategy_num_minors(Config) ->
+    SegConf = #{max_count => 16},
+    Dir = ?config(dir, Config),
+    Entries1 = lists:seq(1, 32),
+    Entries2 = lists:seq(33, 64),
+    Entries3 = lists:seq(65, 96),
+    Live1 = ra_seq:from_list(lists:seq(1, 32, 3)),
+    Live2 = ra_seq:from_list(lists:seq(1, 64, 3)),
+    Live3 = ra_seq:from_list(lists:seq(1, 96, 3)),
+    ct:pal("Live1 ~p", [Live1]),
+    Scen =
+    [
+     {entries, 1, Entries1},
+     {assert, 1, lists:seq(1, 32)},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 2
+              end},
+     {minor, 30, Live1},
+     handle_compaction_result,
+     {assert, 1, lists:seq(1, 32, 3)},
+
+     {entries, 1, Entries2},
+     {minor, 60, Live2},
+     handle_compaction_result,
+     {entries, 1, Entries3},
+     {minor, 90, Live3},
+     handle_compaction_result
+
+    ],
+
+    Counters = ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
+    CompConf  = #{max_count => 16,
+                  max_size => 128_000,
+                  major_strategy => {num_minors, 2}},
+
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir), CompConf, Counters),
+    _Segs = run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+    ?assertMatch(#{major_compactions := 1,
+                   minor_compactions := 2},
+                 ra_counters:counters(?FUNCTION_NAME,
+                                            [minor_compactions,
+                                             major_compactions])),
+
+    ok.
+
+
 
 %% Helpers
 
@@ -766,10 +816,13 @@ with_ext(Fn, Ext) when is_binary(Fn) andalso is_list(Ext) ->
     <<(filename:rootname(Fn))/binary, (ra_lib:to_binary(Ext))/binary>>.
 
 ra_log_segments_init(Config, Dir, SegRefs) ->
-    UId = ?config(uid, Config),
     CompConf = ?config(comp_conf, Config),
+    ra_log_segments_init(Config, Dir, SegRefs, CompConf, undefined).
+
+ra_log_segments_init(Config, Dir, SegRefs, CompConf, Counters) ->
+    UId = ?config(uid, Config),
     ra_log_segments:init(UId, Dir, 1, random,
-                         SegRefs, undefined,
+                         SegRefs, Counters,
                          CompConf, "").
 
 do_compaction(Dir, CompactingFn, Live, All) ->

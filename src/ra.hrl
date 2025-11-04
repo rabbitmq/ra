@@ -223,6 +223,7 @@
 -define(SEGMENT_MAX_ENTRIES, 4096).
 -define(SEGMENT_MAX_PENDING, 1024).
 -define(SEGMENT_MAX_SIZE_B, 64_000_000). %% set an upper limit on segment sizing
+-define(DEF_MAJOR_COIMPACTION_STRAT, {num_minors, 8}).
 
 %% logging shim
 -define(DEBUG_IF(Bool, Fmt, Args),
@@ -285,6 +286,8 @@
           "Number of checkpoint bytes written"},
          {checkpoints_promoted, ?C_RA_LOG_CHECKPOINTS_PROMOTED, counter,
           "Number of checkpoints promoted to snapshots"},
+         {minor_compactions, ?C_RA_LOG_COMPACTIONS_MINOR_COUNT, counter,
+          "Number of requested minor compactions"},
          {major_compactions, ?C_RA_LOG_COMPACTIONS_MAJOR_COUNT, counter,
           "Number of requested major compactions"},
          {major_compaction_segments_written,
@@ -311,10 +314,11 @@
 -define(C_RA_LOG_CHECKPOINTS_WRITTEN, 13).
 -define(C_RA_LOG_CHECKPOINT_BYTES_WRITTEN, 14).
 -define(C_RA_LOG_CHECKPOINTS_PROMOTED, 15).
--define(C_RA_LOG_COMPACTIONS_MAJOR_COUNT, 16).
--define(C_RA_LOG_COMPACTIONS_SEGMENTS_WRITTEN, 17).
--define(C_RA_LOG_COMPACTIONS_SEGMENTS_COMPACTED, 18).
--define(C_RA_LOG_RESERVED, 19).
+-define(C_RA_LOG_COMPACTIONS_MINOR_COUNT, 16).
+-define(C_RA_LOG_COMPACTIONS_MAJOR_COUNT, 17).
+-define(C_RA_LOG_COMPACTIONS_SEGMENTS_WRITTEN, 18).
+-define(C_RA_LOG_COMPACTIONS_SEGMENTS_COMPACTED, 19).
+-define(C_RA_LOG_RESERVED, 20).
 
 -define(C_RA_SRV_AER_RECEIVED_FOLLOWER, ?C_RA_LOG_RESERVED + 1).
 -define(C_RA_SRV_AER_REPLIES_SUCCESS, ?C_RA_LOG_RESERVED + 2).

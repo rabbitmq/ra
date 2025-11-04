@@ -366,6 +366,7 @@ write_file(Name, IOData, Sync) ->
                         true ->
                             sync_and_close_fd(Fd);
                         false ->
+                            _ = file:close(Fd),
                             ok
                     end;
                 Err ->

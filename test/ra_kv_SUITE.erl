@@ -69,7 +69,7 @@ snapshot_replication_interrupted(_Config) ->
                                      #{members => Members}),
     ra:transfer_leadership(KvId, KvId),
     Data = crypto:strong_rand_bytes(100_000),
-    %% write 10k entries of the same key
+    %% write 10k entries of different keys
     [{ok, #{}} = ra_kv:put(KvId, term_to_binary(I), Data, 5000)
      || I <- lists:seq(1, 10_000)],
     ?assertMatch({ok, #{machine := #{num_keys := 10_000}}, KvId},
@@ -119,7 +119,7 @@ snapshot_replication(_Config) ->
                                      #{members => Members}),
     ra:transfer_leadership(KvId, KvId),
     {ok, #{}} = ra_kv:put(KvId, <<"k1">>, <<"k1-value01">>, 5000),
-    %% write 10k entries of the same key
+    %% write 10k entries with different keys
     [{ok, #{}} = ra_kv:put(KvId, integer_to_binary(I), I, 5000)
      || I <- lists:seq(1, 5000)],
 
