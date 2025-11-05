@@ -18,6 +18,7 @@ all() ->
      election_timeout,
      follower_aer_diverged,
      follower_aer_term_mismatch,
+     follower_aer_term_mismatch_at_snapshot,
      follower_aer_term_mismatch_snapshot,
      follower_handles_append_entries_rpc,
      candidate_handles_append_entries_rpc,
@@ -709,6 +710,62 @@ follower_aer_term_mismatch(_Config) ->
                                        last_index = 2,
                                        last_term = 3}, Reply),
                  ok.
+
+follower_aer_term_mismatch_at_snapshot(_Config) ->
+    %% case where the last correct entry in the log is the snapshot
+    State0 = (base_state(3, ?FUNCTION_NAME))#{last_applied => 3,
+                                              commit_index => 3
+                                             },
+    Log0 = maps:get(log, State0),
+    Meta = #{index => 3,
+             term => 5,
+             cluster => #{},
+             machine_version => 1},
+    Data = <<"hi3">>,
+    {Log,_} = ra_log_memory:install_snapshot({3, 5}, {Meta, Data}, Log0),
+    State = maps:put(log, Log, State0),
+
+    %% append entries from the current leader in the current term
+    AER = #append_entries_rpc{term = 5,
+                              leader_id = ?N1,
+                              prev_log_index = 3,
+                              prev_log_term = 5, % same log term
+                              leader_commit = 3,
+                              entries = [
+                                         {4, 5, usr(<<"hi4">>)},
+                                         {5, 5, usr(<<"hi4">>)},
+                                         {6, 5, usr(<<"hi4">>)}
+                                        ]},
+    {follower, State1, _} = ra_server:handle_follower(AER, State),
+    ?assertMatch(#{last_applied := 3,
+                   commit_index := 3}, State1),
+    {follower, State2,
+     [{cast, _, {_, #append_entries_reply{term = 5,
+                                          success = true,
+                                          next_index = 7}}}]}
+        = ra_server:handle_follower(written_evt(5, {4, 6}), State1),
+
+    %% a new leader deposes the old one and the uncommitted entries must be
+    %% truncated down to the snapshot index
+    AER1 = #append_entries_rpc{term = 6, % higher term
+                               leader_id = ?N2,
+                               prev_log_index = 3,
+                               prev_log_term = 5, % same log term
+                               leader_commit = 3,
+                               entries = []},
+
+    % term mismatch scenario follower has index 3 but for different term
+    % rewinds back to last_applied + 1 as next index and enters await condition
+    {follower, State3,
+     [{cast, _, {_, #append_entries_reply{term = 6,
+                                          success = true,
+                                          next_index = 4,
+                                          last_index = 3,
+                                          last_term = 5}}} | _]}
+        = ra_server:handle_follower(AER1, State2),
+    ?assertMatch(#{last_applied := 3,
+                   commit_index := 3}, State3),
+     ok.
 
 follower_aer_term_mismatch_snapshot(_Config) ->
     %% case when we have to revert all the way back to a snapshot

@@ -592,25 +592,34 @@ last_written(#?MODULE{last_written_index_term = LWTI}) ->
 %% forces the last index and last written index back to a prior index
 -spec set_last_index(ra_index(), state()) ->
     {ok, state()} | {not_found, state()}.
-set_last_index(Idx, #?MODULE{cfg = Cfg,
-                             last_written_index_term = {LWIdx0, _}} = State0) ->
+set_last_index(Idx, State0) ->
     case fetch_term(Idx, State0) of
         {undefined, State} ->
-            {not_found, State};
-        {Term, State1} ->
-            LWIdx = min(Idx, LWIdx0),
-            {LWTerm, State2} = fetch_term(LWIdx, State1),
-            %% this should always be found but still assert just in case
-            %% _if_ this ends up as a genuine reversal next time we try
-            %% to write to the mem table it will detect this and open
-            %% a new one
-            true = LWTerm =/= undefined,
-            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
-            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LWIdx),
-            {ok, State2#?MODULE{last_index = Idx,
-                                last_term = Term,
-                                last_written_index_term = {LWIdx, LWTerm}}}
+            case snapshot_index_term(State) of
+                {Idx, SnapTerm} ->
+                    set_last_index0(Idx, SnapTerm, State);
+                _ ->
+                    {not_found, State}
+            end;
+        {Term, State} ->
+            set_last_index0(Idx, Term, State)
     end.
+
+set_last_index0(Idx, Term,
+                #?MODULE{cfg = Cfg,
+                         last_written_index_term = {LWIdx0, _}} = State0) ->
+    LWIdx = min(Idx, LWIdx0),
+    {LWTerm, State1} = fetch_term(LWIdx, State0),
+    %% this should always be found but still assert just in case
+    %% _if_ this ends up as a genuine reversal next time we try
+    %% to write to the mem table it will detect this and open
+    %% a new one
+    true = LWTerm =/= undefined,
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LWIdx),
+    {ok, State1#?MODULE{last_index = Idx,
+                        last_term = Term,
+                        last_written_index_term = {LWIdx, LWTerm}}}.
 
 -spec handle_event(event_body(), state()) ->
     {state(), [effect()]}.
