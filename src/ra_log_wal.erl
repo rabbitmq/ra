@@ -382,12 +382,13 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
     AllWriters =
         [begin
              ?DEBUG("wal: recovering ~ts, Mode ~s", [F, Mode]),
-             Fd = open_at_first_record(filename:join(Dir, F)),
+             WalFile = filename:join(Dir, F),
+             Fd = open_at_first_record(WalFile),
              {Time, #recovery{ranges = Ranges,
                               writers = Writers}} =
                  timer:tc(fun () -> recover_wal_chunks(Conf, Fd, Mode) end),
 
-             ok = ra_log_segment_writer:accept_mem_tables(SegWriter, Ranges, F),
+             ok = ra_log_segment_writer:accept_mem_tables(SegWriter, Ranges, WalFile),
 
              close_existing(Fd),
              ?DEBUG("wal: recovered ~ts time taken ~bms - recovered ~b writers",
@@ -587,10 +588,9 @@ roll_over(#state{wal = Wal0, file_num = Num0,
                            ok = close_file(Wal0#wal.fd),
                            MemTables = Ranges,
                            %% TODO: only keep base name in state
-                           Basename = filename:basename(Filename),
                            ok = ra_log_segment_writer:accept_mem_tables(SegWriter,
                                                                         MemTables,
-                                                                        Basename),
+                                                                        Filename),
                            MaxBytes
                    end,
     {Conf, Wal} = open_wal(NextFile, NextMaxBytes, Conf0),
