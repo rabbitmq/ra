@@ -887,7 +887,7 @@ make_wal(Config, Name) ->
     Dir = ?config(wal_dir, Config),
     FullWalFile = filename:join(Dir, Name),
     ok = file:write_file(FullWalFile, <<"waldata">>),
-    Name.
+    FullWalFile.
 
 is_wal_file(Config, Name) ->
     Dir = ?config(wal_dir, Config),

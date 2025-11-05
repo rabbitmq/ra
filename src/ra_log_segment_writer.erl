@@ -135,8 +135,7 @@ segments_for(UId, #state{data_dir = DataDir}) ->
     Dir = filename:join(DataDir, ra_lib:to_list(UId)),
     segment_files(Dir).
 
-handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
-                                                  system = System} = State) ->
+handle_cast({mem_tables, Ranges, WalFile}, #state{system = System} = State) ->
     T1 = erlang:monotonic_time(),
     ok = counters:add(State#state.counter, ?C_MEM_TABLES, map_size(Ranges)),
     #{names := Names} = ra_system:fetch(System),
@@ -177,7 +176,7 @@ handle_cast({mem_tables, Ranges, WalFile}, #state{data_dir = Dir,
              end
          end || Tabs <- ra_lib:lists_chunk(Degree, RangesList)],
     %% delete wal file once done
-    ok = prim_file:delete(filename:join(Dir, WalFile)),
+    ok = prim_file:delete(WalFile),
     T2 = erlang:monotonic_time(),
     Diff = erlang:convert_time_unit(T2 - T1, native, millisecond),
     ?DEBUG("segment_writer in '~w': completed flush of ~b writers from wal file "

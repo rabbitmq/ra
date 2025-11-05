@@ -20,7 +20,8 @@
 
 all() ->
     [
-     {group, tests}
+     {group, tests},
+     {group, tests_with_wal_data_dir}
     ].
 
 all_tests() ->
@@ -54,14 +55,29 @@ all_tests() ->
 
 groups() ->
     [
-     {tests, [], all_tests()}
+     {tests, [], all_tests()},
+     {tests_with_wal_data_dir, [], all_tests()}
     ].
 
 init_per_suite(Config) ->
+    Config.
+
+end_per_suite(Config) ->
+    Config.
+
+init_per_group(Group, Config) ->
     PrivDir = ?config(priv_dir, Config),
     SysDir = filename:join(PrivDir, ?SYS),
-    {ok, _} = ra:start([{data_dir, PrivDir},
-                        {segment_max_entries, 128}]),
+    Params0 = [{data_dir, PrivDir},
+               {segment_max_entries, 128}],
+    Params =
+        case Group of
+            tests_with_wal_data_dir ->
+                [{wal_data_dir, filename:join(PrivDir, "wal")} | Params0];
+            _ ->
+                Params0
+        end,
+    {ok, _} = ra:start(Params),
     SysCfg = #{name => ?SYS,
                names => ra_system:derive_names(?SYS),
                segment_max_entries => 128,
@@ -82,14 +98,12 @@ init_per_suite(Config) ->
     application:ensure_all_started(lg),
     [{sys_cfg, SysCfg} | Config].
 
-end_per_suite(Config) ->
-    _ = application:stop(ra),
-    Config.
-
-init_per_group(_, Config) ->
-    Config.
-
 end_per_group(_, Config) ->
+    application:stop(ra),
+    application:unload(ra),
+    PrivDir = ?config(priv_dir, Config),
+    ok = file:del_dir_r(PrivDir),
+    ok = file:make_dir(PrivDir),
     Config.
 
 init_per_testcase(TestCase, Config) ->

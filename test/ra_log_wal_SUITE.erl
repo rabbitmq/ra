@@ -143,9 +143,11 @@ basic_log_writes(Config) ->
     {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 13, 1, "value2"),
     ok = await_written(WriterId, 1, {13, 13}),
     ra_log_wal:force_roll_over(Pid),
+    #{dir := Dir} = Conf,
+    Fn = filename:join(Dir, "0000000000000001.wal"),
     receive
         {'$gen_cast',
-         {mem_tables, #{UId := [{Tid, {12, 13}}]}, "0000000000000001.wal"}} ->
+         {mem_tables, #{UId := [{Tid, {12, 13}}]}, Fn}} ->
             ok
     after 5000 ->
               flush(),
@@ -178,7 +180,7 @@ wal_filename_upgrade(Config) ->
     {ok, Pid2} = ra_log_wal:start_link(Conf#{segment_writer => self()}),
     receive
         {'$gen_cast',
-         {mem_tables, #{UId := [{_Tid, {12, 13}}]}, "0000000000000001.wal"}} ->
+         {mem_tables, #{UId := [{_Tid, {12, 13}}]}, Fn}} ->
             ok
     after 5000 ->
               flush(),
