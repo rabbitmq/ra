@@ -101,7 +101,8 @@ all() ->
      receive_snapshot_heartbeat_dropped,
      receive_snapshot_heartbeat_reply_dropped,
 
-     handle_down
+     handle_down,
+     persist_last_applied_with_unwritten
     ].
 
 -define(MACFUN, fun (E, _) -> E end).
@@ -1752,6 +1753,7 @@ follower_install_snapshot_machine_version(_Config) ->
                              effective_machine_module = MacMod1,
                              effective_machine_version = 1},
                  last_applied := 4,
+                 persisted_last_applied := 4,
                  cluster_index_term := {4, 5},
                  machine_state := SnapData, %% old machine state
                  commit_index := 4},
@@ -3124,6 +3126,30 @@ handle_down(_config) ->
     {follower, State, []} =
         ra_server:handle_down(follower, machine, self(), noproc, State),
     ok.
+
+persist_last_applied_with_unwritten(_Config) ->
+    %% only actually persist the last applied index _if_ it is also confirmed
+    %% to be written to disk
+    N1 = ?N1,
+    Init = empty_state(3, n1),
+    AER1 = #append_entries_rpc{term = 1, leader_id = N1, prev_log_index = 0,
+                               prev_log_term = 0, leader_commit = 1,
+                               entries = [entry(1, 1, one)]},
+    {follower, #{leader_id := N1,
+                 current_term := 1,
+                 commit_index := 1,
+                 log := Log0,
+                 persisted_last_applied := 0,
+                 last_applied := 1} = State0, _} =
+        ra_server:handle_follower(AER1, Init),
+    ?assertMatch({0,_}, ra_log:last_written(Log0)),
+    #{persisted_last_applied := 0} = ra_server:persist_last_applied(State0),
+    {Log, _} = ra_log:handle_event({written, 1, {1, 1}}, Log0),
+    #{persisted_last_applied := 1} =
+        ra_server:persist_last_applied(State0#{log => Log}),
+
+    ok.
+
 
 set_peer_query_index(State, PeerId, QueryIndex) ->
     #{cluster := Cluster} = State,

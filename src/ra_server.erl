@@ -2218,10 +2218,23 @@ persist_last_applied(#{persisted_last_applied := PLA,
                        last_applied := LA} = State) when LA =< PLA ->
     % if last applied is less than PL for some reason do nothing
     State;
-persist_last_applied(#{last_applied := LastApplied,
+persist_last_applied(#{last_applied := LastApplied0,
+                       log := Log,
                        cfg := #cfg{uid = UId} = Cfg} = State) ->
-    ok = ra_log_meta:store(meta_name(Cfg), UId, last_applied, LastApplied),
-    State#{persisted_last_applied => LastApplied}.
+    {LastWrittenIdx, _} = ra_log:last_written(Log),
+    LastApplied = min(LastApplied0, LastWrittenIdx),
+
+    PersistedLastApplied = maps:get(persisted_last_applied, State, 0),
+    %% only persist the last applied if the last written has also caught up,
+    %% else it is possible that on recovery the last applied index refers to
+    %% indexes that never were durably written
+    if LastApplied > PersistedLastApplied ->
+           ok = ra_log_meta:store(meta_name(Cfg), UId, last_applied, LastApplied),
+           State#{persisted_last_applied => LastApplied};
+       true ->
+           State
+    end.
+
 
 
 -spec update_peer(ra_server_id(),
