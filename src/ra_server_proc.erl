@@ -311,8 +311,9 @@ init(Config) ->
     {ok, recover, State, [{next_event, cast, go}]}.
 
 do_init(#{id := Id,
-          uid := UId,
+          uid := UId0,
           cluster_name := ClusterName} = Config0) ->
+    UId = binary:copy(UId0),
     Key = ra_lib:ra_server_id_to_local_name(Id),
     true = ets:insert(ra_state, {Key, init, unknown}),
     process_flag(trap_exit, true),

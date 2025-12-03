@@ -809,13 +809,14 @@ recover_records(_, _Fd, <<0:1/unsigned, 0:1/unsigned, 0:22/unsigned,
 % First encounter of UId in this file
 recover_records(#conf{names = Names} = Conf, Fd,
                 <<Trunc:1/unsigned, 0:1/unsigned, IdRef:22/unsigned,
-                  IdDataLen:16/unsigned, UId:IdDataLen/binary,
+                  IdDataLen:16/unsigned, UId0:IdDataLen/binary,
                   Checksum:32/integer,
                   EntryDataLen:32/unsigned,
                   Idx:64/unsigned, Term:64/unsigned,
                   EntryData:EntryDataLen/binary,
                   Rest/binary>> = Chunk,
                 Cache0, State0) ->
+    UId = binary:copy(UId0),
     case ra_directory:is_registered_uid(Names, UId) of
         true ->
             Cache = Cache0#{IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}},
