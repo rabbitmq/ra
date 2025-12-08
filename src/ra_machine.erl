@@ -133,6 +133,7 @@
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
     {timer, term(), non_neg_integer() | infinity} |
+    {timer, term(), non_neg_integer() | infinity, {abs, boolean()}} |
     {log, [ra_index()], fun(([user_command()]) -> effects())} |
 
     %% these are either conditional on the local configuration or

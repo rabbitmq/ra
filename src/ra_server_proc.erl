@@ -1622,6 +1622,17 @@ handle_effect(_, {demonitor, _ProcOrNode, Component, PidOrNode}, _,
     {State#state{monitors = Monitors}, Actions};
 handle_effect(leader, {timer, Name, T}, _, State, Actions) ->
     {State, [{{timeout, Name}, T, machine_timeout} | Actions]};
+handle_effect(leader, {timer, Name, T0, Option}, _, State,
+              Actions) ->
+    T = case Option of
+            {abs, true} ->
+                T0 - erlang:time_offset(millisecond);
+            _ ->
+                T0
+        end,
+    %% timers assume erlang system time type of timeouts so we need
+    %% to convert the absolute case to the monitonic time range
+    {State, [{{timeout, Name}, T, machine_timeout, [Option]} | Actions]};
 handle_effect(leader, {mod_call, Mod, Fun, Args}, _,
               State, Actions) ->
     %% TODO: catch and log failures or rely on calling function never crashing

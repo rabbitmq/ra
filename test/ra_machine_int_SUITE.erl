@@ -562,9 +562,14 @@ timer_effect(Config) ->
     Self = self(),
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> the_state end),
-    meck:expect(Mod, apply, fun (_, {cmd, Name}, State) ->
+    meck:expect(Mod, apply, fun
+                                (_, {cmd, Name}, State) ->
                                     %% timer for 1s
                                     {State, ok, {timer, Name, 1000}};
+                                (#{system_time := Ts}, {cmd2, Name}, State) ->
+                                    %% timer for 1s
+                                    {State, ok, {timer, Name, Ts + 1000,
+                                                 {abs, true}}};
                                 (_, {timeout, Name}, State) ->
                                     {State, ok, {send_msg, Self, {got_timeout, Name}}}
                             end),
@@ -574,7 +579,7 @@ timer_effect(Config) ->
     T0 = os:system_time(millisecond),
     {ok, _, ServerId} = ra:process_command(ServerId, {cmd, one}),
     timer:sleep(500),
-    {ok, _, ServerId} = ra:process_command(ServerId, {cmd, two}),
+    {ok, _, ServerId} = ra:process_command(ServerId, {cmd2, two}),
     receive
         {got_timeout, one} ->
             T = os:system_time(millisecond),
