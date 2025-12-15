@@ -27,7 +27,8 @@ all_tests() ->
      subtract,
      iter,
      remove_prefix,
-     remove_prefix_2
+     remove_prefix_2,
+     from_list_with_duplicates
     ].
 
 groups() ->
@@ -148,4 +149,23 @@ remove_prefix_2(_Config) ->
     S1 = ra_seq:from_list([2, 3, 4, 5]),
     S2 = ra_seq:from_list([1, 2, 3]),
     {ok, [5, 4]} = ra_seq:remove_prefix(S2, S1),
+    ok.
+
+from_list_with_duplicates(_Config) ->
+    S1 = ra_seq:from_list([1, 2, 2, 3]),
+    [{1, 3}] = S1,
+    [3, 2, 1] = ra_seq:expand(S1),
+
+    S2 = ra_seq:from_list([5, 5, 5, 5]),
+    [5] = S2,
+    [5] = ra_seq:expand(S2),
+
+    S3 = ra_seq:from_list([3, 1, 2, 1, 3, 2]),
+    [{1, 3}] = S3,
+    [3, 2, 1] = ra_seq:expand(S3),
+
+    S4 = ra_seq:from_list([1, 2, 3, 3, 5, 6, 7, 7, 10, 11, 11]),
+    [11, 10, {5, 7}, {1, 3}] = S4,
+    [11, 10, 7, 6, 5, 3, 2, 1] = ra_seq:expand(S4),
+
     ok.
