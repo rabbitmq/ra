@@ -60,7 +60,7 @@ append(Idx, [Prev | _] = Seq)
 
 -spec from_list([ra:index()]) -> state().
 from_list(L) ->
-    lists:foldl(fun append/2, [], lists:sort(L)).
+    lists:foldl(fun append/2, [], lists:usort(L)).
 
 %% @doc This operation is O(n) + a list:reverse/1
 -spec floor(ra:index(), state()) -> state().
