@@ -405,6 +405,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
     Self = self(),
     IdxTerm = {Idx, Term},
     BgWorkFun = fun () ->
+                        StartTime = erlang:monotonic_time(),
                         ok = ra_lib:make_dir(SnapDir),
                         %% if the Ref returned by ra_snapshot:prepare/2 is
                         %% the same as the mac state then indexes can be
@@ -432,9 +433,12 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
                                 ok
                         end,
 
+                        EndTime = erlang:monotonic_time(),
+                        Duration = erlang:convert_time_unit(EndTime - StartTime,
+                                                            native, millisecond),
                         Self ! {ra_log_event,
                                 {snapshot_written, IdxTerm,
-                                 LiveIndexes, SnapKind}},
+                                 LiveIndexes, SnapKind, Duration}},
                         ok
                 end,
 
@@ -459,6 +463,7 @@ promote_checkpoint(PromotionIdx,
             Snapshot = make_snapshot_dir(SnapDir, Idx, Term),
             Self = self(),
             Fun = fun() ->
+                          StartTime = erlang:monotonic_time(),
                           %% Checkpoints are created without calling
                           %% fsync. Snapshots must be fsync'd though, so
                           %% sync the checkpoint before promoting it
@@ -472,9 +477,12 @@ promote_checkpoint(PromotionIdx,
                                         _ ->
                                          []
                                     end,
+                          EndTime = erlang:monotonic_time(),
+                          Duration = erlang:convert_time_unit(EndTime - StartTime,
+                                                              native, millisecond),
                           Self ! {ra_log_event,
                                   {snapshot_written, {Idx, Term},
-                                   Indexes, snapshot}}
+                                   Indexes, snapshot, Duration}}
                   end,
 
             State = State0#?MODULE{pending = {{Idx, Term}, snapshot},

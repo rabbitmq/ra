@@ -72,7 +72,8 @@
                       {resend_write, ra_index()} |
                       {snapshot_written, ra_idxterm(),
                        LiveIndexes :: ra_seq:state(),
-                       ra_snapshot:kind()} |
+                       ra_snapshot:kind(),
+                       Duration :: non_neg_integer()} |
                       {compaction_result, term()} |
                       major_compaction |
                       {down, pid(), term()}.
@@ -894,7 +895,7 @@ handle_event(major_compaction, #?MODULE{cfg = #cfg{log_id = LogId},
         _ ->
             {State, []}
     end;
-handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
+handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind, Duration},
              #?MODULE{cfg = #cfg{uid = UId,
                                  log_id = LogId,
                                  names = Names} = Cfg,
@@ -908,8 +909,8 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
     % ?assert(ra_snapshot:pending(SnapState0) =/= undefined),
     SnapState1 = ra_snapshot:complete_snapshot(Snap, SnapKind, LiveIndexes,
                                                SnapState0),
-    ?DEBUG("~ts: ra_log: ~s written at index ~b with ~b live indexes",
-           [LogId, SnapKind, SnapIdx, ra_seq:length(LiveIndexes)]),
+    ?DEBUG("~ts: ra_log: ~s written at index ~b with ~b live indexes in ~bms",
+           [LogId, SnapKind, SnapIdx, ra_seq:length(LiveIndexes), Duration]),
     case SnapKind of
         snapshot ->
             put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
@@ -976,7 +977,7 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind},
                         CP} || CP <- CPs],
             {State0#?MODULE{snapshot_state = SnapState}, Effects}
     end;
-handle_event({snapshot_written, {Idx, Term} = Snap, _Indexes, SnapKind},
+handle_event({snapshot_written, {Idx, Term} = Snap, _Indexes, SnapKind, _Duration},
              #?MODULE{cfg =#cfg{log_id = LogId},
                       snapshot_state = SnapState} = State0) ->
     %% if the snapshot/checkpoint is stale we just want to delete it

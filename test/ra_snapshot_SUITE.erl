@@ -105,7 +105,7 @@ take_snapshot(Config) ->
     {{55, 2}, snapshot} = ra_snapshot:pending(State1),
     receive
         {ra_log_event,
-         {snapshot_written, {55, 2} = IdxTerm, Indexes, snapshot}} ->
+         {snapshot_written, {55, 2} = IdxTerm, Indexes, snapshot, _}} ->
             State = ra_snapshot:complete_snapshot(IdxTerm, snapshot,
                                                   Indexes, State1),
             undefined = ra_snapshot:pending(State),
@@ -155,7 +155,7 @@ init_recover(Config) ->
          ra_snapshot:begin_snapshot(Meta, ?MACMOD, ?FUNCTION_NAME, snapshot, State0),
     Fun(),
     receive
-        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot}} ->
+        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
             _ = ra_snapshot:complete_snapshot(IdxTerm, snapshot,
                                               Indexes, State1),
             ok
@@ -183,7 +183,7 @@ init_recover_voter_status(Config) ->
          ra_snapshot:begin_snapshot(Meta, ?MACMOD, ?FUNCTION_NAME, snapshot, State0),
     Fun(),
     receive
-        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot}} ->
+        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
             _ = ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State1),
             ok
     after 1000 ->
@@ -213,7 +213,7 @@ init_multi(Config) ->
     %% simulate ra worker execution
     Fun(),
     receive
-        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot}} ->
+        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
             State2 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State1),
             {State3, [{bg_work, Fun2, _}]} =
                 ra_snapshot:begin_snapshot(Meta2, ?MACMOD, ?FUNCTION_NAME,
@@ -256,7 +256,7 @@ init_recover_multi_corrupt(Config) ->
                                    snapshot, State0),
     Fun(),
     receive
-        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot}} ->
+        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
             State2 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State1),
             {State3, [{bg_work, Fun2, _}]} =
                 ra_snapshot:begin_snapshot(Meta2, ?MACMOD, ?FUNCTION_NAME,
@@ -305,7 +305,7 @@ init_recover_corrupt(Config) ->
                                    snapshot, State0),
     Fun(),
     _ = receive
-                 {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot}} ->
+                 {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
                      ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State1)
              after 1000 ->
                        error(snapshot_event_timeout)
@@ -336,7 +336,7 @@ read_snapshot(Config) ->
         ra_snapshot:begin_snapshot(Meta, ?MACMOD, MacRef, snapshot, State0),
     Fun(),
     State = receive
-                {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot}} ->
+                {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
                     ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State1)
             after 1000 ->
                       error(snapshot_event_timeout)
@@ -442,7 +442,7 @@ accept_receives_snapshot_written_with_higher_index(Config) ->
 
     %% then the snapshot written event is received
     receive
-        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, Indexes, snapshot}} ->
+        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, Indexes, snapshot, _}} ->
             State4 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State3),
             undefined = ra_snapshot:pending(State4),
             {55, 2} = ra_snapshot:current(State4),
@@ -494,7 +494,7 @@ accept_receives_snapshot_written_with_higher_index_2(Config) ->
     %% then the snapshot written event is received after the higher index
     %% has been received
     receive
-        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, Indexes, snapshot}} ->
+        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, Indexes, snapshot, _}} ->
             State5 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State4),
             undefined = ra_snapshot:pending(State5),
             {165, 2} = ra_snapshot:current(State5),
