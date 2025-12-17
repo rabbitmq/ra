@@ -1184,7 +1184,7 @@ assert(#?MODULE{cfg = #cfg{log_id = LogId},
                 live_indexes = LiveIndexes
                } = State) ->
     %% TODO: remove this at some point?
-    ?DEBUG("~ts: ra_log: asserting Range ~p Snapshot ~p",
+    ?DEBUG("~ts: ra_log: asserting Range ~w Snapshot ~w",
            [LogId, Range, CurrSnap]),
     %% perform assertions to ensure log state is correct
     ?assert(CurrSnap =:= ra_snapshot:current(SnapState)),
