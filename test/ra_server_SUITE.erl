@@ -741,12 +741,7 @@ follower_aer_term_mismatch_at_snapshot(_Config) ->
                                               commit_index => 3
                                              },
     Log0 = maps:get(log, State0),
-    Meta = #{index => 3,
-             term => 5,
-             cluster => #{},
-             machine_version => 1},
-    Data = <<"hi3">>,
-    {Log,_} = ra_log_memory:install_snapshot({3, 5}, {Meta, Data}, Log0),
+    {ok, Log,_} = ra_log_memory:install_snapshot({3, 5}, ?MODULE, [], Log0),
     State = maps:put(log, Log, State0),
 
     %% append entries from the current leader in the current term
@@ -3269,7 +3264,7 @@ persist_last_applied_with_unwritten(_Config) ->
         ra_server:handle_follower(AER1, Init),
     ?assertMatch({0,_}, ra_log:last_written(Log0)),
     #{persisted_last_applied := 0} = ra_server:persist_last_applied(State0),
-    {Log, _} = ra_log:handle_event({written, 1, {1, 1}}, Log0),
+    {Log, _} = ra_log:handle_event({written, 1, [1]}, Log0),
     #{persisted_last_applied := 1} =
         ra_server:persist_last_applied(State0#{log => Log}),
 

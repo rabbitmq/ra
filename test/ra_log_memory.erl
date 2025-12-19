@@ -140,19 +140,22 @@ sparse_take(Idx, Log, Num, Max, Res) ->
 
 -spec last_index_term(ra_log_memory_state()) -> option(ra_idxterm()).
 last_index_term(#state{last_index = LastIdx,
-                       entries = Log,
-                       snapshot = Snapshot}) ->
+                       last_written = LastWritten,
+                       entries = Log
+                       % snapshot = Snapshot
+                      }) ->
     case Log of
         #{LastIdx := {LastTerm, _Data}} ->
             {LastIdx, LastTerm};
         _ ->
-            % If not found fall back on snapshot if snapshot matches last term.
-            case Snapshot of
-                {#{index := LastIdx, term := LastTerm}, _} ->
-                    {LastIdx, LastTerm};
-                _ ->
-                    undefined
-            end
+            LastWritten
+            % % If not found fall back on snapshot if snapshot matches last term.
+            % case Snapshot of
+            %     {#{index := LastIdx, term := LastTerm}, _} ->
+            %         {LastIdx, LastTerm};
+            %     _ ->
+            %         Snapshot
+            % end
     end.
 
 -spec set_last_index(ra_index(), ra_log_memory_state()) ->
@@ -237,8 +240,8 @@ install_snapshot({Index, Term}, _MacMod, _LiveIndexes,
     Log = maps:filter(fun (K, _) -> K > Index end, Log0),
     State = State0#state{entries = Log,
                          last_index = Index,
-                         last_written = {Index, Term}
-                         % snapshot = Data
+                         last_written = {Index, Term},
+                         snapshot = {Index, Term}
                         },
     % {Meta, MacState} = Data,
     {ok, State, []}.
@@ -270,9 +273,8 @@ read_meta(Key, #state{meta = Meta}) ->
     ra_idxterm().
 snapshot_index_term(#state{snapshot = undefined}) ->
     undefined;
-snapshot_index_term(#state{snapshot = {#{index := Idx,
-                                         term := Term}, _}}) ->
-    {Idx, Term}.
+snapshot_index_term(#state{snapshot = Snap}) ->
+    Snap.
 
 -spec update_release_cursor(ra_index(), ra_cluster(),
                             ra_machine:version(), term(),
