@@ -551,10 +551,8 @@ incr_batch(#batch{num_writes = Writes,
                                          tid = MT_TID,
                                          seq = Seq0} = W} ->
                       %% The Tid and term is the same so add to current batch_writer
-                      Range = ra_seq:append(Idx, Seq0),
-                      %% TODO: range nees to become a ra_seq so that we can
-                      %% capture sparse writes correctly
-                      Waiting0#{Pid => W#batch_writer{seq = Range,
+                      Seq = ra_seq:append(Idx, Seq0),
+                      Waiting0#{Pid => W#batch_writer{seq = Seq,
                                                       smallest_live_idx = SmallestLiveIdx,
                                                       term = Term}};
                   _ ->

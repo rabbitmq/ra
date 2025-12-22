@@ -296,7 +296,6 @@ handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
     {state(), [segment_ref()]}.
 update_first_index(FstIdx, #?STATE{segment_refs = SegRefs0,
                                    open_segments = OpenSegs0} = State) ->
-    %% TODO: refactor this so that ra_lol just returns plain lists on both sides?
     case ra_lol:takewhile(fun({_Fn, {_, To}}) ->
                                   To >= FstIdx
                           end, SegRefs0) of

@@ -52,9 +52,9 @@
 
 
 %%% ra_log_segment_writer
-%%% receives a set of closed mem_segments from the wal
-%%% appends to the current segment for the ra server
-%%% notifies the ra server of any new/updates segments
+%%% receives a set of closed mem_tables from the wal
+%%% flushes entries to segment files for each ra server
+%%% notifies ra servers of new/updated segments
 
 
 %%%===================================================================
@@ -265,16 +265,19 @@ get_overview(#state{data_dir = Dir,
 
 flush_mem_table_ranges({ServerUId, TidSeqs0},
                        #state{system = System} = State) ->
+    %% Get the smallest index that should be written to segments.
+    %% This is the minimum of (snapshot_index + 1) and the first live index.
     SmallestIdx = smallest_live_idx(ServerUId),
+    %% Get the sparse sequence of live indexes that must be preserved
+    %% beyond the snapshot boundary for compaction.
     LiveIndexes = live_indexes(ServerUId),
+    %% The highest live index - entries above this are part of the normal log
     LastLive = ra_seq:last(LiveIndexes),
     %% TidSeqs arrive here sorted new -> old.
 
-    %% TODO: use live indexes from ra_log_snapshot_state table to only
-    %% write live entries below the snapshot index
-
-    %% truncate and limit all seqa to create a contiguous non-overlapping
-    %% list of tid ranges to flush to disk
+    %% Truncate and limit all seqs to create a non-overlapping list of
+    %% tid ranges to flush to disk. With sparse log compaction (v3),
+    %% these ranges may include non-contiguous live indexes.
     TidSeqs = lists:foldl(
                 fun ({T, Seq0}, []) ->
                         case ra_seq:floor(SmallestIdx, Seq0) of
@@ -329,26 +332,30 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
 
 flush_mem_table_range(ServerUId, {Tid, Seq},
                       #state{data_dir = DataDir,
+                             system = System,
                              segment_conf = SegConf} = State) ->
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
     case open_file(Dir, SegConf) of
         enoent ->
             ?DEBUG("segment_writer: skipping segment as directory ~ts does "
                    "not exist", [Dir]),
-            %% TODO: delete mem table
-            %% clean up the tables for this process
+            %% Directory gone (server deleted), clean up the memtable
+            #{names := Names} = ra_system:fetch(System),
+            ok = ra_log_ets:delete_mem_tables(Names, ServerUId),
             [];
         Segment0 ->
             case append_to_segment(ServerUId, Tid, Seq, Segment0, State) of
                 undefined ->
-                    ?WARN("segment_writer: skipping segments for ~w as
-                           directory ~ts disappeared whilst writing",
-                           [ServerUId, Dir]),
+                    %% Directory disappeared during write - close segment handle
+                    _ = ra_log_segment:close(Segment0),
+                    ?WARN("segment_writer: skipping segments for ~w as "
+                          "directory ~ts disappeared whilst writing",
+                          [ServerUId, Dir]),
                     [];
                 {Segment, Closed0} ->
-                    % notify writerid of new segment update
-                    % includes the full range of the segment
-                    % filter out any undefined segrefs
+                    %% Notify the ra server of new segment refs.
+                    %% Each segref contains the filename and index range.
+                    %% Filter out any undefined segrefs (empty segments).
                     ClosedSegRefs = [ra_log_segment:segref(S)
                                      || S <- Closed0,
                                         %% ensure we don't send undefined seg refs
@@ -374,6 +381,9 @@ smallest_live_idx(ServerUId) ->
 live_indexes(ServerUId) ->
     ra_log_snapshot_state:live_indexes(ra_log_snapshot_state, ServerUId).
 
+%% @doc Sends segment update notification to the Ra server.
+%% If the server is not running, cleans up the memtable entries
+%% using ra_mt:delete/1 which supports sparse ra_seq deletion.
 send_segments(System, ServerUId, TidRanges, SegRefs) ->
     case ra_directory:pid_of(System, ServerUId) of
         undefined ->
@@ -381,13 +391,11 @@ send_segments(System, ServerUId, TidRanges, SegRefs) ->
                    "ra_log_event to: "
                    "~ts. Reason: ~s",
                    [ServerUId, "No Pid"]),
-            %% delete from the memtable on the non-running server's behalf
-            _ = [begin
-                     %% TODO: HACK: this is a hack to get a full range out of a
-                     %% sequent, ideally the mt should take the ra_seq and
-                     %% delete from that
-                     _  = catch ra_mt:delete({indexes, Tid, Seq})
-                 end || {Tid, Seq} <- TidRanges],
+            %% Delete from the memtable on the non-running server's behalf.
+            %% ra_mt:delete/1 supports {indexes, Tid, Seq} format for
+            %% sparse sequence deletion.
+            _ = [_ = catch ra_mt:delete({indexes, Tid, Seq})
+                 || {Tid, Seq} <- TidRanges],
             ok;
         Pid ->
             Pid ! {ra_log_event, {segments, TidRanges, SegRefs}},
@@ -402,7 +410,9 @@ append_to_segment(UId, Tid, Seq0, Seg, State) ->
                        Fst
                end,
     StartIdx = start_index(UId, FirstIdx),
-    %% TODO combine flor and iterator into one operation
+    %% Floor the sequence to start at StartIdx, then create an iterator.
+    %% TODO: Combine into ra_seq:iterator_from(StartIdx, Seq0) to avoid
+    %% intermediate allocation.
     Seq = ra_seq:floor(StartIdx, Seq0),
     SeqIter = ra_seq:iterator(Seq),
     append_to_segment(UId, Tid, ra_seq:next(SeqIter), Seg, [], State).
@@ -524,7 +534,7 @@ open_file(Dir, SegConf) ->
         {ok, Segment} ->
             Segment;
         {error, missing_segment_header} ->
-            %% a file was created by the segment header had not been
+            %% A file was created but the segment header had not been
             %% synced. In this case it is typically safe to just delete
             %% and retry.
             ?WARN("segment_writer: missing header in segment file ~ts "
