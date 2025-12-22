@@ -1804,7 +1804,6 @@ handle_await_condition(Msg, #{condition := #{predicate_fun := Pred} = Cond} = St
             {TransitionTo, State, [{next_event, Msg}]};
         {false, State} ->
             %% do not log unhandled messages as they are often expected
-            % log_unhandled_msg(await_condition, Msg, State),
             {await_condition, State, []}
     end.
 
@@ -2400,20 +2399,6 @@ handle_down(RaftState, snapshot_sender, Pid, Info,
               "~ts: Snapshot sender process ~w exited with ~W",
               [LogId, Pid, Info, 10]),
     {leader, peer_snapshot_process_exited(Pid, State), []};
-% handle_down(RaftState, snapshot_writer, Pid, Info,
-%             #{cfg := #cfg{log_id = LogId}, log := Log0} = State)
-%   when is_pid(Pid) ->
-%     case Info of
-%         noproc -> ok;
-%         normal -> ok;
-%         _ ->
-%             ?WARN("~ts: Snapshot write process ~w exited with ~w",
-%                   [LogId, Pid, Info])
-%     end,
-%     SnapState0 = ra_log:snapshot_state(Log0),
-%     SnapState = ra_snapshot:handle_error(Pid, Info, SnapState0),
-%     Log = ra_log:set_snapshot_state(SnapState, Log0),
-%     {RaftState, State#{log => Log}, []};
 handle_down(RaftState, log, Pid, Info, #{log := Log0} = State) ->
     {Log, Effects} = ra_log:handle_event({down, Pid, Info}, Log0),
     {RaftState, State#{log => Log}, Effects};

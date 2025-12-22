@@ -8,8 +8,6 @@
 -export([
          init/1,
          apply/3,
-         % state_enter/2,
-         % tick/2,
          init_aux/1,
          handle_aux/5,
          live_indexes/1,
@@ -121,7 +119,6 @@ remove_member(System, Id, LeaderId0) ->
         {ok, _, _} ?= ra:local_query(LeaderId, {ra_lib, ignore, []},
                                     #{timeout => 30_000,
                                       condition => {applied, IdxTerm}}),
-        % ok ?= ra:stop_server(System, Id),
         ok ?= ra:force_delete_server(System, Id),
         ok
     end.

@@ -1620,20 +1620,3 @@ exec_mem_table_delete(#{} = Names, UId, Specs)
     [ra_log_ets:execute_delete(Names, UId, Spec)
      || Spec <- Specs],
     ok.
-
-%%%% TESTS
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-
-% pick_range_test() ->
-%     Ranges1 = [{76, 90}, {50, 75}, {1, 100}],
-%     {1, 90} = pick_range(Ranges1, undefined),
-
-%     Ranges2 = [{76, 110}, {50, 75}, {1, 49}],
-%     {1, 110} = pick_range(Ranges2, undefined),
-
-%     Ranges3 = [{25, 30}, {25, 35}, {1, 50}],
-%     {1, 30} = pick_range(Ranges3, undefined),
-%     ok.
--endif.

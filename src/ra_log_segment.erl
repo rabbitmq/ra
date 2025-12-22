@@ -601,11 +601,7 @@ dump_index(File) ->
     IndexSize = MaxCount * index_record_size(Version),
     case file:pread(Fd, ?HEADER_SIZE, IndexSize) of
         {ok, Data} ->
-            D = [begin
-                     % {ok, _} = file:position(Fd, O),
-                     % {ok, B} = file:read(Fd, N),
-                     {I, T, O}
-                 end || {I, T, O, _N} <- dump_index_data(Data, [])],
+            D = [{I, T, O} || {I, T, O, _N} <- dump_index_data(Data, [])],
             _ = file:close(Fd),
             D;
         eof ->

@@ -648,14 +648,6 @@ decr_counter(#cfg{counter = undefined}, _, _) ->
 segment_files(Dir, Fun) ->
     list_files(Dir, ".segment", Fun).
 
-% delete_files(Dir, Ext) ->
-%     case list_files(Dir, Ext, fun (_) -> true end) of
-%         [] ->
-%             ok;
-%         Files ->
-%             [prim_file:delete(filename:join(Dir, F)) || F <- Files]
-%     end.
-
 list_files(Dir, Ext) ->
     list_files(Dir, Ext, fun (_) -> true end).
 

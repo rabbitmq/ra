@@ -37,19 +37,6 @@
 
 -define(MAX_MEMTBL_ENTRIES, 1_000_000).
 
-% -define(IN_RANGE(Idx, Range),
-%         (is_tuple(Range) andalso
-%          Idx >= element(1, Range) andalso
-%          Idx =< element(2, Range))).
-
-% -define(IS_BEFORE_RANGE(Idx, Range),
-%         (is_tuple(Range) andalso
-%          Idx < element(1, Range))).
-
-% -define(IS_AFTER_RANGE(Idx, Range),
-%         (is_tuple(Range) andalso
-%          Idx > element(2, Range))).
-
 -define(IS_NEXT_IDX(Idx, Seq),
         (Seq == [] orelse
          (is_integer(hd(Seq)) andalso hd(Seq) + 1 == Idx) orelse
@@ -305,7 +292,6 @@ delete({indexes, Tid, Seq}) ->
     NumToDelete = ra_seq:length(Seq),
     Start = ra_seq:first(Seq),
     End = ra_seq:last(Seq),
-    % NumToDelete = End - Start + 1,
     Limit = ets:info(Tid, size) div 2,
     %% check if there is an entry below the start of the deletion range,
     %% if there is we've missed a segment event at some point and need
@@ -455,31 +441,6 @@ set_first(Idx, #?MODULE{tid = Tid,
                         indexes = Seq,
                         prev = Prev0} = State) ->
     {PrevSpecs, Prev} = prev_set_first(Idx, Prev0, Idx >= ra_seq:first(Seq)),
-        % case Prev0 of
-        %     undefined ->
-        %         {[], undefined};
-        %     _ ->
-        %         case set_first(Idx, Prev0) of
-        %             {[{indexes, PTID, _} | Rem],
-        %              #?MODULE{tid = PTID} = P} = Res ->
-        %                 %% set_first/2 returned a range spec for
-        %                 %% prev and prev is now empty,
-        %                 %% upgrade to delete spec of whole tid
-        %                 %% also upgrade if the outer seq is truncated
-        %                 %% by the set_first operation
-        %                 % case range_shallow(P) of
-        %                 case Idx >= ra_seq:first(Seq) orelse
-        %                      range_shallow(P) == undefined of
-        %                     true ->
-        %                         {[{delete, tid(P)} | Rem],
-        %                          prev(P)};
-        %                     _ ->
-        %                         Res
-        %                 end;
-        %             Res ->
-        %                 Res
-        %         end
-        % end,
     Specs = case Seq of
                 [] ->
                     PrevSpecs;

@@ -344,7 +344,6 @@ execute_operation(State, {get, Key}) ->
 
     log("~s ra_kv:get/3 from node ~w ~n", [timestamp(), NodeName]),
     case erpc:call(NodeName, ra_kv, get, [Member, Key, ?TIMEOUT]) of
-    % case apply(ra_kv, get, [Member, Key, ?TIMEOUT]) of
         {error, not_found} when RefValue =:= not_found ->
             State#{operations_count => OpCount + 1,
                    successful_ops => SuccessOps + 1};
@@ -361,9 +360,6 @@ execute_operation(State, {get, Key}) ->
                 [timestamp(), Key, RefValue, Value]),
             State#{operations_count => OpCount + 1,
                    failed_ops => FailedOps + 1}
-        % _ ->
-        %     State#{operations_count => OpCount + 1,
-        %            failed_ops => FailedOps + 1}
     end;
 
 execute_operation(State, {update_almost_all_keys}) ->

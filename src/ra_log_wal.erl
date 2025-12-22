@@ -821,16 +821,7 @@ recover_records(#conf{names = Names} = Conf, Fd,
                             recover_records(Conf, Fd, Chunk, Cache, State)
                     end;
                 ok ->
-                    %% best the the snapshot index as the last
-                    %% writer index
-                    % Writers = case State0#recovery.writers of
-                    %               #{UId := {in_seq, SmallestIdx}} = W ->
-                    %                   W;
-                    %               W ->
-                    %                   W#{UId => {in_seq, SmallestIdx}}
-                    %           end,
                     Writers = State0#recovery.writers,
-                    % Writers =  W#{UId => {in_seq, SmallestIdx - 1}},
                     recover_records(Conf, Fd, Rest, Cache,
                                     State0#recovery{writers =
                                                         maps:remove(UId, Writers)});
@@ -985,9 +976,6 @@ smallest_live_index(#conf{ra_log_snapshot_state_tid = Tid}, ServerUId) ->
 update_ranges(Ranges, UId, MtTid, _SmallestIdx, AddSeq) ->
     case Ranges of
         #{UId := [{MtTid, Seq0} | Seqs]} ->
-            %% SmallestIdx might have moved to we truncate the old range first
-            %% before extending
-            % Seq1 = ra_seq:floor(SmallestIdx, Seq0),
             %% limit the old range by the add end start as in some resend
             %% cases we may have got back before the prior range.
             Seq = ra_seq:add(AddSeq, Seq0),
