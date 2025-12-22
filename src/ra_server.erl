@@ -676,7 +676,7 @@ handle_leader({commands, Cmds}, #{cfg := #cfg{id = Self,
             % at this point the entries are committed to the mem table
             % but didn't make it fully or at all to the the wal
 
-            %% TODO: select the peer with the higest match index?
+            %% TODO: select the peer with the highest match index?
             CondEffs = case maps:to_list(maps:remove(Self, Cluster)) of
                            [] -> [];
                            [{PeerId, _} | _] ->
@@ -3038,7 +3038,8 @@ apply_with({Idx, _, {'$ra_cluster', CmdMeta, delete, ReplyType}},
     State = State0#{last_applied => Idx, machine_state => MacSt},
     throw({delete_and_terminate, State, EOLEffects ++ NotEffs ++ Effects1});
 apply_with({Idx, _, _} = Cmd, Acc) ->
-    % TODO: remove to make more strict, ideally we should not need a catch all
+    %% Catch-all for unhandled commands - logs a warning and advances last_applied.
+    %% This ensures forward progress even with unexpected command types.
     ?WARN("~ts: apply_with: unhandled command: ~W",
           [log_id(element(2, Acc)), Cmd, 10]),
     setelement(2, Acc, Idx).

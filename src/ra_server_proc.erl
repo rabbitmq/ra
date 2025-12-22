@@ -1958,7 +1958,7 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
     {ok, #{machine_version := SnapMacVer} = Meta, ReadState} =
         ra_snapshot:begin_read(SnapState, Context),
 
-    %% TODO: consolidate getting the context, machinve version and last
+    %% TODO: consolidate getting the context, machine version and last
     %% applied index in one rpc, and handle errors
     TheirMacVer = erpc:call(ToNode, ra_machine, version, [Machine]),
 

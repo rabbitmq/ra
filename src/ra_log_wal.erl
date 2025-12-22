@@ -220,14 +220,11 @@ force_roll_over(Wal) ->
 %% to trade-off latency for throughput.
 %%
 %% Entries are written to the .wal file as well as a per-writer mem table (ETS).
-%% In order for writers to locate an entry by an index a lookup ETS table
-%% (ra_log_open_mem_tables) keeps the current range of indexes
-%% a mem_table as well
-%% as the mem_table tid(). This lookup table is updated on every write.
+%% The mem table state is managed by ra_mt and tracked via the open_mem_tbls
+%% ETS table (see ra_log_ets). Each writer maintains its own mem table chain
+%% that allows entries to be read while older tables are being flushed to disk.
 %%
-%% Once the current .wal file is full a new one is closed. All the entries in
-%% ra_log_open_mem_tables are moved to ra_log_closed_mem_tables so that writers
-%% can still locate the tables whilst they are being flushed to disk. The
+%% Once the current .wal file is full a new one is opened. The
 %% ra_log_segment_writer is notified of all the mem tables written to during
 %% the lifetime of the .wal file and will begin writing these to on-disk segment
 %% files. Once it has finished the current set of mem_tables it will delete the
@@ -364,7 +361,7 @@ recover_wal(Dir, #conf{system = System,
     % ensure configured directory exists
     ok = ra_lib:make_dir(Dir),
 
-    %% TODO: provede a proper ra_log_ets API to discover recovery mode
+    %% TODO: provide a proper ra_log_ets API to discover recovery mode
     Mode = case ets:info(MemTblsTid, size) of
                0 ->
                    %% there are no mem tables

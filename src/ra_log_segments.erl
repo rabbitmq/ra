@@ -46,7 +46,7 @@
 -type compaction_conf() :: #{max_count => non_neg_integer(),
                              max_size => non_neg_integer(),
                              major_strategy => major_compaction_strategy()}.
-%% hardly every used anymore, the sequential access pattern is only activated
+%% hardly ever used anymore, the sequential access pattern is only activated
 %% during recovery
 -type access_pattern() :: sequential | random.
 %% holds static or rarely changing fields
@@ -761,7 +761,7 @@ minor_compaction(SegRefs, LiveIndexes) ->
     #compaction_result{unreferenced = Delete}.
 
 compactable_segrefs(SnapIdx, State) ->
-    %% TODO: provide a ra_lol:foldr API to avoid creatinga  segref list
+    %% TODO: provide a ra_lol:foldr API to avoid creating a segref list
     %% then filtering that
     case segment_refs(State) of
         [] ->

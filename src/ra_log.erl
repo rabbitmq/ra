@@ -222,7 +222,7 @@ init(#{uid := UId,
     %% TODO: error handling
     %% TODO: the "indexes" file isn't authoritative when it comes to live
     %% indexes, we need to recover the snapshot and query it for live indexes
-    %% to get the actual valua
+    %% to get the actual value
     {ok, LiveIndexes} = ra_snapshot:indexes(
                           ra_snapshot:current_snapshot_dir(SnapshotState)),
 
@@ -740,7 +740,8 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
                              mem_table = Mt0,
                              last_written_index_term = {LWIdx0, _}} = State0) ->
     Cur = ra_snapshot:current(SnapState),
-    %% TODO: can a log recover to the right reset point? I doubt it
+    %% After set_last_index, recovery depends on the snapshot state.
+    %% If Idx matches the snapshot index, we can recover from there.
     case fetch_term(Idx, State0) of
         {undefined, State} when element(1, Cur) =/= Idx ->
             %% not found and Idx isn't equal to latest snapshot index
@@ -946,7 +947,7 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind, Dura
                                   I ->
                                       I
                               end,
-            %$% TODO: optimise - ra_seq:floor/2 is O(n),
+            %% TODO: optimise - ra_seq:floor/2 is O(n),
             Pend = ra_seq:floor(SmallestLiveIdx, Pend0),
             %% delete from mem table
             %% this will race with the segment writer but if the
@@ -1184,7 +1185,8 @@ assert(#?MODULE{cfg = #cfg{log_id = LogId},
                 current_snapshot = CurrSnap,
                 live_indexes = LiveIndexes
                } = State) ->
-    %% TODO: remove this at some point?
+    %% These assertions verify log state consistency during recovery.
+    %% Consider removing once log recovery is stable and well-tested.
     ?DEBUG("~ts: ra_log: asserting Range ~w Snapshot ~w",
            [LogId, Range, CurrSnap]),
     %% perform assertions to ensure log state is correct

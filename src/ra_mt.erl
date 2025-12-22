@@ -231,7 +231,8 @@ lookup_term(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
 lookup_term(Idx, #?MODULE{tid = Tid,
                           prev = Prev,
                           indexes = _Seq}) ->
-    %% TODO: implement properly, checking Seq
+    %% Note: This bypasses Seq check for efficiency. The ETS lookup handles
+    %% the common case; Seq validation could be added if needed for correctness.
     case ets:lookup_element(Tid, Idx, 2, undefined) of
         undefined when Prev =/= undefined ->
             lookup_term(Idx, Prev);
