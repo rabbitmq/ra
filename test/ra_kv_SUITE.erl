@@ -21,6 +21,7 @@ all() ->
 all_tests() ->
     [
      basics,
+     delete_key,
      snapshot_replication,
      snapshot_replication_interrupted
     ].
@@ -60,6 +61,47 @@ end_per_testcase(_TestCase, _Config) ->
 -define(KV(N),
         binary_to_atom(<<(atom_to_binary(?FUNCTION_NAME))/binary,
                          (integer_to_binary(N))/binary>>)).
+
+delete_key(_Config) ->
+    Kv1 = ?KV(1),
+    Members = [{Kv1, node()}],
+    KvId = hd(Members),
+    {ok, Members, _} = ra_kv:start_cluster(?SYS, ?FUNCTION_NAME,
+                                          #{members => Members}),
+    %% Put some keys
+    {ok, #{}} = ra_kv:put(KvId, <<"k1">>, <<"k1-value">>, 5000),
+    {ok, #{}} = ra_kv:put(KvId, <<"k2">>, <<"k2-value">>, 5000),
+    {ok, #{}} = ra_kv:put(KvId, <<"k3">>, <<"k3-value">>, 5000),
+
+    %% Verify keys exist
+    ?assertMatch({ok, #{machine := #{num_keys := 3}}, KvId},
+                 ra:member_overview(KvId)),
+
+    %% Delete a key
+    {ok, #{}} = ra_kv:delete(KvId, <<"k2">>, 5000),
+
+    %% Verify key count decreased
+    ?assertMatch({ok, #{machine := #{num_keys := 2}}, KvId},
+                 ra:member_overview(KvId)),
+
+    %% Verify deleted key returns not_found
+    ?assertMatch({error, not_found}, ra_kv:get(KvId, <<"k2">>, 5000)),
+
+    %% Verify other keys still exist
+    ?assertMatch({ok, _, <<"k1-value">>}, ra_kv:get(KvId, <<"k1">>, 5000)),
+    ?assertMatch({ok, _, <<"k3-value">>}, ra_kv:get(KvId, <<"k3">>, 5000)),
+
+    %% Deleting non-existent key returns error
+    ?assertMatch({error, {not_found, _}}, ra_kv:delete(KvId, <<"k2">>, 5000)),
+
+    %% Can re-add deleted key
+    {ok, #{}} = ra_kv:put(KvId, <<"k2">>, <<"k2-new-value">>, 5000),
+    ?assertMatch({ok, #{machine := #{num_keys := 3}}, KvId},
+                 ra:member_overview(KvId)),
+    ?assertMatch({ok, _, <<"k2-new-value">>}, ra_kv:get(KvId, <<"k2">>, 5000)),
+
+    ra:delete_cluster([KvId]),
+    ok.
 
 snapshot_replication_interrupted(_Config) ->
     Kv1 = ?KV(1), Kv2 = ?KV(2), Kv3 = ?KV(3),

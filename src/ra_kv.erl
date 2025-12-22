@@ -24,6 +24,7 @@
 
          put/4,
          get/3,
+         delete/3,
          take_snapshot/1
         ]).
 
@@ -45,7 +46,9 @@
               meta :: #{size := non_neg_integer(),
                         hash := integer()}}).
 
--type command() :: #put{}.
+-record(delete, {key :: key()}).
+
+-type command() :: #put{} | #delete{}.
 -opaque state() :: #?STATE{}.
 
 -export_type([state/0,
@@ -211,6 +214,19 @@ read_entry({_, Node} = ServerId, Idxs, Members, Timeout) ->
               {error, {T, E}}
     end.
 
+-spec delete(ra:server_id(), key(), non_neg_integer()) ->
+    {ok, map()} | {error, not_found} | {error, term()} | {timeout, ra:server_id()}.
+delete(ServerId, Key, Timeout) ->
+    Delete = #delete{key = Key},
+    case ra:process_command(ServerId, Delete, Timeout) of
+        {ok, {ok, Meta}, LeaderId} ->
+            {ok, Meta#{leader => LeaderId}};
+        {ok, {error, not_found}, LeaderId} ->
+            {error, {not_found, LeaderId}};
+        Err ->
+            Err
+    end.
+
 -spec take_snapshot(ra_server_id()) -> ok.
 take_snapshot(ServerId) ->
     ra:aux_command(ServerId, take_snapshot).
@@ -228,7 +244,17 @@ apply(#{index := Idx} = Meta,
            meta = #{hash := Hash}},
       #?STATE{keys = Keys} = State0) ->
     State = State0#?STATE{keys = Keys#{Key => ?TUPLE(Idx, Hash)}},
-    {State, {ok, Meta}, []}.
+    {State, {ok, Meta}, []};
+apply(Meta,
+      #delete{key = Key},
+      #?STATE{keys = Keys} = State0) ->
+    case maps:is_key(Key, Keys) of
+        true ->
+            State = State0#?STATE{keys = maps:remove(Key, Keys)},
+            {State, {ok, Meta}, []};
+        false ->
+            {State0, {error, not_found}, []}
+    end.
 
 live_indexes(#?STATE{keys = Keys}) ->
     maps:fold(fun (_K, [Idx | _], Acc) ->
