@@ -51,7 +51,8 @@
                 entries = #{0 => {0, undefined}} ::
                     #{ra_index() => {ra_term(), term()}},
                 meta = #{} :: ra_log_memory_meta(),
-                snapshot :: option({ra_snapshot:meta(), term()})}).
+                snapshot :: option(ra_idxterm()), 
+                snapshot_data :: option(tuple())}).
 
 -opaque ra_log_memory_state() :: #state{} | ra_log:state().
 
@@ -97,7 +98,7 @@ write([{FirstIdx, _, _} | _] = Entries,
     {ok, State#state{last_index = LastInIdx,
                      entries = Log}};
 write([{FirstIdx, _, _} | _] = Entries,
-      #state{snapshot = {#{index := SnapIdx}, _}, entries = Log0} = State)
+      #state{snapshot = {SnapIdx, _}, entries = Log0} = State)
  when SnapIdx + 1 =:= FirstIdx ->
     {Log, LastInIdx} = lists:foldl(fun ({Idx, Term, Data}, {Acc, _}) ->
                                            {Acc#{Idx => {Term, Data}}, Idx}
@@ -140,15 +141,14 @@ sparse_take(Idx, Log, Num, Max, Res) ->
 
 -spec last_index_term(ra_log_memory_state()) -> option(ra_idxterm()).
 last_index_term(#state{last_index = LastIdx,
-                       last_written = LastWritten,
-                       entries = Log
-                       % snapshot = Snapshot
+                       entries = Log,
+                       snapshot = Snapshot
                       }) ->
     case Log of
         #{LastIdx := {LastTerm, _Data}} ->
             {LastIdx, LastTerm};
         _ ->
-            LastWritten
+            Snapshot
             % % If not found fall back on snapshot if snapshot matches last term.
             % case Snapshot of
             %     {#{index := LastIdx, term := LastTerm}, _} ->
@@ -234,6 +234,9 @@ fetch_term(Idx, #state{entries = Log} = State) ->
 
 flush(_Idx, Log) -> Log.
 
+-spec install_snapshot(ra_idxterm(), module(), list(),
+                       State :: ra_log_memory_state()) ->
+    {ok, term(), list()}.
 install_snapshot({Index, Term}, _MacMod, _LiveIndexes,
                  #state{entries = Log0} = State0) ->
     % discard log entries below snapshot index
@@ -247,19 +250,17 @@ install_snapshot({Index, Term}, _MacMod, _LiveIndexes,
     {ok, State, []}.
 
 -spec read_snapshot(State :: ra_log_memory_state()) ->
-    {ok, ra_snapshot:meta(), term()}.
+    {ok, ra_index(), ra_term()}.
 read_snapshot(#state{snapshot = {Meta, Data}}) ->
     {ok, Meta, Data}.
 
 -spec recover_snapshot(State :: ra_log_memory_state()) ->
     undefined | {ok, ra_snapshot:meta(), term()}.
-recover_snapshot(#state{snapshot = undefined}) ->
-    undefined;
-recover_snapshot(#state{snapshot = {Meta, MacState}}) ->
-    {Meta, MacState}.
+recover_snapshot(State) ->
+    State#state.snapshot_data.
 
 set_snapshot_state(SnapState, State) ->
-    State#state{snapshot = SnapState}.
+    State#state{snapshot_data = SnapState}.
 
 snapshot_state(State) ->
     State#state.snapshot.
@@ -270,7 +271,7 @@ read_meta(Key, #state{meta = Meta}) ->
     maps:get(Key, Meta, undefined).
 
 -spec snapshot_index_term(State :: ra_log_memory_state()) ->
-    ra_idxterm().
+    option(ra_idxterm()).
 snapshot_index_term(#state{snapshot = undefined}) ->
     undefined;
 snapshot_index_term(#state{snapshot = Snap}) ->

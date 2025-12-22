@@ -15,7 +15,8 @@
 -dialyzer({nowarn_function,
            [init_test/1,
             higher_term_detected/1,
-            follower_aer_term_mismatch_snapshot/1]}).
+            follower_aer_term_mismatch_snapshot/1,
+            follower_aer_term_mismatch_at_snapshot/1]}).
 
 all() ->
     [
@@ -793,14 +794,15 @@ follower_aer_term_mismatch_snapshot(_Config) ->
                                              },
 
     Log0 = maps:get(log, State0),
-    Meta = #{index => 3,
-             term => 5,
-             cluster => #{},
-             machine_version => 1},
-    Data = <<"hi3">>,
+    % Meta = #{index => 3,
+    %          term => 5,
+    %          cluster => #{},
+    %          machine_version => 1},
+    % Data = <<"hi3">>,
 
     {ok, Log1, _} = ra_log_memory:install_snapshot({3, 5}, ?MODULE, [], Log0),
-    Log = ra_log_memory:set_snapshot_state({Meta, Data}, Log1),
+    % Log = ra_log_memory:set_snapshot_state({Meta, Data}, Log1),
+    Log = Log1,
     State = maps:put(log, Log, State0),
 
     AE = #append_entries_rpc{term = 6,
@@ -1768,6 +1770,7 @@ follower_install_snapshot_machine_version(_Config) ->
      _Effects0} = ra_server:handle_follower(ISR, State00),
 
     meck:expect(ra_log, recover_snapshot, fun (_) -> {SnapMeta, SnapData} end),
+    meck:expect(ra_snapshot, accepting, fun (_) -> {4, 3} end),
     meck:expect(ra_snapshot, complete_accept,
                 fun (_, _, _, S) ->
                         {S, SnapData, [], []}
@@ -2340,6 +2343,7 @@ follower_installs_snapshot(_Config) ->
                 fun (_, _, _, S) ->
                         {S, [], [], []}
                 end),
+    meck:expect(ra_snapshot, accepting, fun (_) -> {Idx, Term} end),
     {follower, #{current_term := Term,
                  commit_index := Idx,
                  last_applied := Idx,
@@ -2358,6 +2362,7 @@ follower_installs_snapshot_with_pre(_Config) ->
     LastTerm = 1, % snapshot term
     Term = 2, % leader term
     Idx = 3,
+    meck:expect(ra_snapshot, accepting, fun (_) -> {Idx, Term} end),
     ISRpcInit = #install_snapshot_rpc{term = Term, leader_id = N1,
                                       meta = snap_meta(Idx, LastTerm, Config),
                                       chunk_state = {0, init},
@@ -2412,6 +2417,7 @@ follower_aborts_snapshot_with_pre(_Config) ->
     LastTerm = 1, % snapshot term
     Term = 2, % leader term
     Idx = 3,
+    meck:expect(ra_snapshot, accepting, fun (_) -> {Idx, Term} end),
     ISRpcInit = #install_snapshot_rpc{term = Term, leader_id = N1,
                                       meta = snap_meta(Idx, LastTerm, Config),
                                       chunk_state = {0, init},
@@ -2574,7 +2580,12 @@ snapshotted_follower_received_append_entries(_Config) ->
 
     meck:expect(ra_log, last_index_term,
                 fun (_) -> {Idx, Term} end),
+    meck:expect(ra_snapshot, complete_accept,
+                fun (_, _, _, S) ->
+                        {S, [], [], []}
+                end),
     {receive_snapshot, FState0, _} = ra_server:handle_follower(ISRpc, FState00),
+    meck:expect(ra_snapshot, accepting, fun (_) -> {Idx, Term} end),
     {follower, FState1, _} = ra_server:handle_receive_snapshot(ISRpc, FState0),
 
     meck:expect(ra_log, snapshot_index_term,
