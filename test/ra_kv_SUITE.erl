@@ -23,7 +23,8 @@ all_tests() ->
      basics,
      delete_key,
      snapshot_replication,
-     snapshot_replication_interrupted
+     snapshot_replication_interrupted,
+     snapshot_replication_with_many_live_indexes
     ].
 
 groups() ->
@@ -302,4 +303,75 @@ basics(_Config) ->
     ok = ra_kv:remove_member(?SYS, KvId2, KvId),
     ct:pal("members ~p", [ra:members(KvId)]),
     ra:delete_cluster([KvId]),
+    ok.
+
+%% Test that exercises the pipelined async read path during snapshot sending.
+%% This requires more than 16 unique keys (live indexes) to trigger multiple
+%% read chunks in send_pre_snapshot_entries.
+snapshot_replication_with_many_live_indexes(_Config) ->
+    Kv1 = ?KV(1), Kv2 = ?KV(2), Kv3 = ?KV(3),
+    Members = [{Kv1, node()}, {Kv2, node()}],
+    KvId = hd(Members),
+    {ok, _, _} = ra_kv:start_cluster(?SYS, ?FUNCTION_NAME,
+                                     #{members => Members}),
+    ra:transfer_leadership(KvId, KvId),
+
+    %% Write 50 unique keys to create 50 live indexes.
+    %% This will require 4 chunks (50 / 16 = 3.125, rounded up to 4)
+    %% which exercises the pipelining code path.
+    NumKeys = 50,
+    [begin
+         Key = <<"key_", (integer_to_binary(I))/binary>>,
+         {ok, #{}} = ra_kv:put(KvId, Key, I, 5000)
+     end || I <- lists:seq(1, NumKeys)],
+
+    ?assertMatch({ok, #{machine := #{num_keys := NumKeys}}, KvId},
+                 ra:member_overview(KvId)),
+
+    %% Force WAL rollover and wait for segments
+    ra_log_wal:force_roll_over(ra_log_wal),
+    ra_log_wal:last_writer_seq(ra_log_wal, <<>>),
+    ra_log_segment_writer:await(ra_log_segment_writer),
+
+    %% Take a snapshot - this will include all 50 live indexes
+    ok = ra:aux_command(KvId, take_snapshot),
+    ok = ra_lib:retry(
+           fun () ->
+                   {ok, #{log := #{snapshot_index := SnapIdx,
+                                   last_index := LastIdx}}, _} =
+                       ra:member_overview(KvId),
+                   SnapIdx == LastIdx
+           end, 100, 100),
+
+    %% Verify we have the expected number of live indexes
+    {ok, #{machine := #{live_indexes := LiveIndexes}}, _} = ra:member_overview(KvId),
+    ?assertEqual(NumKeys, length(LiveIndexes)),
+
+    %% Add a new member - this triggers snapshot replication
+    %% The leader will send the snapshot with all 50 live indexes,
+    %% which will be chunked into 4 batches of 16, 16, 16, 2 entries.
+    %% This exercises the pipelined async read path in send_pre_snapshot_entries.
+    KvId3 = {Kv3, node()},
+    ok = ra_kv:add_member(?SYS, KvId3, KvId),
+    KvId3Pid = whereis(Kv3),
+    ?assert(is_pid(KvId3Pid)),
+
+    %% Wait for the new member to catch up
+    {ok, #{log := #{last_index := Kv1LastIndex}}, _} = ra:member_overview(KvId),
+    ok = ra_lib:retry(
+           fun () ->
+                   {ok, #{log := #{last_index := LastIdx}}, _} =
+                       ra:member_overview(KvId3),
+                   Kv1LastIndex == LastIdx
+           end, 100, 100),
+
+    %% Verify the new member received all the live indexes
+    {ok, {Reads, _}} = ra_server_proc:read_entries(KvId3, LiveIndexes,
+                                                    undefined, 5000),
+    ?assertEqual(NumKeys, map_size(Reads)),
+
+    %% Verify the new member didn't crash during snapshot replication
+    ?assertEqual(KvId3Pid, whereis(Kv3)),
+
+    ra:delete_cluster([KvId, {Kv2, node()}, KvId3]),
     ok.
