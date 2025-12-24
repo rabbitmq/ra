@@ -68,6 +68,7 @@ all() ->
      follower_installs_snapshot,
      follower_installs_snapshot_with_pre,
      follower_aborts_snapshot_with_pre,
+     follower_restarts_snapshot_during_pre_phase,
      follower_ignores_installs_snapshot_with_higher_machine_version,
      follower_receives_stale_snapshot,
      follower_receives_snapshot_lower_than_last_applied,
@@ -2445,6 +2446,91 @@ follower_aborts_snapshot_with_pre(_Config) ->
     %% assert the aborted install reset the log
     ?assertMatch(#{log := #{last_index := 0}},
                  ra_server:overview(State3b)),
+    ok.
+
+%% @doc Test snapshot receive restart during pre-phase with different snapshot.
+%% When a new snapshot init is received while receiving pre-phase data for
+%% a different snapshot, the old snapshot should be aborted and the new one started.
+follower_restarts_snapshot_during_pre_phase(_Config) ->
+    N1 = ?N1, N2 = ?N2, N3 = ?N3,
+    #{N3 := {_, State = #{cluster := Config}, _}} =
+        init_servers([N1, N2, N3], {module, ra_queue, #{}}),
+    LastTermA = 1, % snapshot A term
+    TermA = 2, % leader term for snapshot A
+    IdxA = 3,
+    meck:expect(ra_snapshot, accepting, fun (_) -> {IdxA, TermA} end),
+
+    %% Start receiving snapshot A
+    ISRpcInitA = #install_snapshot_rpc{term = TermA, leader_id = N1,
+                                       meta = snap_meta(IdxA, LastTermA, Config),
+                                       chunk_state = {0, init},
+                                       data = []},
+    {receive_snapshot, State1,
+     [{next_event, ISRpcA}, {record_leader_msg, _}]} =
+        ra_server:handle_follower(ISRpcInitA, State#{current_term => TermA}),
+
+    %% Actually process init message in the correct state
+    {receive_snapshot, State2, [{reply, _}]} =
+        ra_server:handle_receive_snapshot(ISRpcA, State1),
+
+    %% Send pre-phase data for snapshot A
+    ISRpcPreA = ISRpcInitA#install_snapshot_rpc{chunk_state = {0, pre},
+                                                data = [{2, 1, <<"dataA1">>}]},
+    {receive_snapshot, State3, [{reply, _}]} =
+        ra_server:handle_receive_snapshot(ISRpcPreA, State2),
+    %% Verify pre-phase data was written
+    ?assertMatch(#{log := #{last_index := 2}},
+                 ra_server:overview(State3)),
+
+    %% Now receive init for snapshot B (different snapshot, higher term)
+    LastTermB = 2, % snapshot B term
+    TermB = 3, % leader term for snapshot B
+    IdxB = 5,
+    meck:expect(ra_snapshot, accepting, fun (_) -> {IdxB, TermB} end),
+
+    ISRpcInitB = #install_snapshot_rpc{term = TermB, leader_id = N1,
+                                       meta = snap_meta(IdxB, LastTermB, Config),
+                                       chunk_state = {0, init},
+                                       data = []},
+
+    %% This should abort snapshot A and revert to follower for retry
+    {follower, State4, [{next_event, ISRpcInitB}]} =
+        ra_server:handle_receive_snapshot(ISRpcInitB, State3),
+    ?assertNot(maps:is_key(snapshot_phase, State4)),
+    %% Log should be reset (snapshot A's sparse entries cleaned up)
+    ?assertMatch(#{log := #{last_index := 0}},
+                 ra_server:overview(State4)),
+
+    %% Now start snapshot B properly
+    {receive_snapshot, State5,
+     [{next_event, ISRpcB}, {record_leader_msg, _}]} =
+        ra_server:handle_follower(ISRpcInitB, State4),
+
+    {receive_snapshot, State6, [{reply, _}]} =
+        ra_server:handle_receive_snapshot(ISRpcB, State5),
+
+    %% Send pre-phase data for snapshot B
+    ISRpcPreB = ISRpcInitB#install_snapshot_rpc{chunk_state = {0, pre},
+                                                data = [{4, 2, <<"dataB1">>}]},
+    {receive_snapshot, State7, [{reply, _}]} =
+        ra_server:handle_receive_snapshot(ISRpcPreB, State6),
+    %% Verify only snapshot B's pre-phase data is present
+    ?assertMatch(#{log := #{last_index := 4}},
+                 ra_server:overview(State7)),
+
+    %% Complete snapshot B
+    meck:expect(ra_snapshot, complete_accept,
+                fun (Mac, _, _, S) ->
+                        {S, Mac, [], []}
+                end),
+    ISRpcLastB = ISRpcInitB#install_snapshot_rpc{chunk_state = {1, last},
+                                                 data = [data_b]},
+    {follower, #{current_term := TermB,
+                 commit_index := IdxB,
+                 last_applied := IdxB,
+                 machine_state := [data_b],
+                 leader_id := N1}, [{reply, #install_snapshot_result{}}]} =
+        ra_server:handle_receive_snapshot(ISRpcLastB, State7),
     ok.
 
 follower_ignores_installs_snapshot_with_higher_machine_version(_Config) ->
