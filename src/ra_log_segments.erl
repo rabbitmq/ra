@@ -30,7 +30,8 @@
          info/1,
          purge_symlinks/2,
          purge_dangling_symlinks/1,
-         compaction_conf/1
+         compaction_conf/1,
+         compaction/1
          ]).
 
 -include("ra.hrl").
@@ -41,7 +42,7 @@
 
 %% type for configuring automatic major compaction strategies
 -type major_compaction_strategy() :: manual |
-                          {num_minors, pos_integer()}.
+                                     {num_minors, pos_integer()}.
 
 -type compaction_conf() :: #{max_count => non_neg_integer(),
                              max_size => non_neg_integer(),
@@ -64,12 +65,13 @@
                  range :: ra_range:range(),
                  segment_refs :: ra_lol:state(),
                  open_segments :: ra_flru:state(),
-                 compaction :: undefined | major | minor,
+                 compaction :: undefined | {major | minor, SnapIdx :: ra:index()},
                  minor_compaction_count = 0 :: non_neg_integer()
                 }).
 
 -record(compaction_result,
-        {unreferenced = [] :: [file:filename_all()],
+        {type = minor :: major | minor,
+         unreferenced = [] :: [file:filename_all()],
          linked = [] :: [file:filename_all()],
          compacted = [] :: [segment_ref()]}).
 
@@ -201,13 +203,12 @@ schedule_compaction(Type, SnapIdx, LiveIndexes,
         [] ->
             {State, []};
         SegRefs when LiveIndexes == [] ->
-
             %% if LiveIndexes is [] we can just delete all compactable
             %% segment refs
             Unreferenced = [F || {F, _} <- SegRefs],
             ok = incr_counter(Cfg, ?C_RA_LOG_COMPACTIONS_MINOR_COUNT, 1),
             Result = #compaction_result{unreferenced = Unreferenced},
-            {State#?MODULE{compaction = minor,
+            {State#?MODULE{compaction = {minor, SnapIdx},
                            minor_compaction_count = MinorCompCnt + 1},
              [{next_event,
                {ra_log_event, {compaction_result, Result}}}]};
@@ -216,7 +217,7 @@ schedule_compaction(Type, SnapIdx, LiveIndexes,
             %% in server process
             ok = incr_counter(Cfg, ?C_RA_LOG_COMPACTIONS_MINOR_COUNT, 1),
             Result = minor_compaction(SegRefs, LiveIndexes),
-            {State#?MODULE{compaction = minor,
+            {State#?MODULE{compaction = {minor, SnapIdx},
                            minor_compaction_count = MinorCompCnt + 1},
              [{next_event,
                {ra_log_event, {compaction_result, Result}}}]};
@@ -237,12 +238,12 @@ schedule_compaction(Type, SnapIdx, LiveIndexes,
                           ok
                   end,
 
-            {State#?MODULE{compaction = major,
+            {State#?MODULE{compaction = {major, SnapIdx},
                            minor_compaction_count = 0},
              [{bg_work, Fun,
                fun (Err) ->
                        %% send an empty compaction result to ensure the
-                       %% a future compaction can be performed (TODO:)
+                       %% a future compaction can be performed
                        Self ! {ra_log_event,
                                {compaction_result, #compaction_result{}}},
                        ?WARN("~ts: Major compaction failed with ~p",
@@ -251,9 +252,10 @@ schedule_compaction(Type, SnapIdx, LiveIndexes,
     end;
 schedule_compaction(Type, SnapIdx, _LiveIndexes,
                     #?MODULE{cfg = #cfg{log_id = LogId},
-                             compaction = Comp} = State) ->
-    ?DEBUG("~ts: ~s compaction requested at ~b but ~s compaction already in progress",
-           [LogId, Type, SnapIdx, Comp]),
+                             compaction = {Comp, CurSnapIdx}} = State) ->
+    ?DEBUG("~ts: ~s compaction requested at ~b but ~s compaction"
+           " already in progress for snapshot index ~b",
+           [LogId, Type, SnapIdx, Comp, CurSnapIdx]),
     {State, []}.
 
 
@@ -334,6 +336,10 @@ range(#?STATE{range = Range}) ->
 
 -spec compaction_conf(state()) -> map().
 compaction_conf(#?STATE{cfg = #cfg{compaction_conf = Conf}}) ->
+    Conf.
+
+-spec compaction(state()) -> undefined | {major | minor, ra:index()}.
+compaction(#?STATE{compaction = Conf}) ->
     Conf.
 
 -spec num_open_segments(state()) -> non_neg_integer().
@@ -742,7 +748,8 @@ major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
 
     {Compacted, AddDelete} = lists:unzip(Compacted0),
 
-    #compaction_result{unreferenced = Delete,
+    #compaction_result{type = major,
+                       unreferenced = Delete,
                        linked = lists:append(AddDelete),
                        compacted = Compacted}.
 
@@ -903,7 +910,8 @@ recover_compaction(Dir) ->
                             end,
                             ok = prim_file:delete(CompactionGroupFn),
                             Compacted = [ra_log_segment:segref(Target)],
-                            #compaction_result{compacted = Compacted,
+                            #compaction_result{type = major,
+                                               compacted = Compacted,
                                                linked = LinkTargets};
                         {error, enoent} ->
                             %% segment does not exist indicates what exactly?

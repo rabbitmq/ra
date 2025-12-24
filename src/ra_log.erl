@@ -877,10 +877,25 @@ handle_event({segments, TidRanges, NewSegs},
     {State, [{bg_work, Fun, fun (_Err) -> ok end}]};
 handle_event({compaction_result, Result},
              #?MODULE{cfg = #cfg{log_id = LogId},
-                      reader = Reader0} = State) ->
-            ?DEBUG("~ts: compaction result ~p", [LogId, Result]),
-    {Reader, Effs} = ra_log_segments:handle_compaction_result(Result, Reader0),
-    {State#?MODULE{reader = Reader}, Effs};
+                      current_snapshot = {CurSnapIdx, _},
+                      live_indexes = LiveIndexes,
+                      reader = Segments0} = State) ->
+    ?DEBUG("~ts: compaction result ~p", [LogId, Result]),
+    Compaction = ra_log_segments:compaction(Segments0),
+    {Segments1, Effs} = ra_log_segments:handle_compaction_result(Result,
+                                                                 Segments0),
+    case Compaction of
+        {_Type, SnapIdx} when CurSnapIdx > SnapIdx ->
+            %% snapshot has moved whilst compacting, need to perform another
+            %% minor at least
+            {Segments, Effs2} = ra_log_segments:schedule_compaction(minor,
+                                                                    CurSnapIdx,
+                                                                    LiveIndexes,
+                                                                    Segments1),
+            {State#?MODULE{reader = Segments}, Effs ++ Effs2};
+        _ ->
+            {State#?MODULE{reader = Segments1}, Effs}
+    end;
 handle_event(major_compaction, #?MODULE{cfg = #cfg{log_id = LogId},
                                         reader = Reader0,
                                         live_indexes = LiveIndexes,

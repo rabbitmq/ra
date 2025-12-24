@@ -76,6 +76,7 @@ all_tests() ->
      sparse_write,
      overwritten_segment_is_cleared,
      overwritten_segment_is_cleared_on_init,
+     concurrent_snapshot_install_and_compaction,
      snapshot_installation_with_live_indexes
     ].
 
@@ -1356,7 +1357,7 @@ snapshot_installation_with_live_indexes(Config) ->
 
     %% create snapshot chunk
     Meta = meta(15, 2, [?N1]),
-    Chunk = create_snapshot_chunk(Config, Meta, [2, 9, 14], #{}),
+    Chunk = create_snapshot_chunk(Config, Meta, [2, 9, 14], [2, 9, 14], #{}),
     SnapState0 = ra_log:snapshot_state(Log2),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     Machine = {machine, ?MODULE, #{}},
@@ -1505,7 +1506,7 @@ release_cursor_after_snapshot_installation(Config) ->
 
     %% create snapshot chunk
     Meta = meta(15, 2, [?N1]),
-    Chunk = create_snapshot_chunk(Config, Meta, [1, 5, 10], #{}),
+    Chunk = create_snapshot_chunk(Config, Meta, [1, 5, 10], [1, 5, 10], #{}),
     SnapState0 = ra_log:snapshot_state(Log2),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     Machine = {machine, ?MODULE, #{}},
@@ -1834,7 +1835,7 @@ sparse_write(Config) ->
     Context = #{},
     %% passing all Indexes but first one as snapshot state
     LiveIndexes = tl(Indexes),
-    Chunk = create_snapshot_chunk(Config, Meta, LiveIndexes, Context),
+    Chunk = create_snapshot_chunk(Config, Meta, LiveIndexes, LiveIndexes, Context),
     SnapState0 = ra_log:snapshot_state(Log2),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
     Machine = {machine, ?MODULE, #{}},
@@ -1912,6 +1913,86 @@ overwritten_segment_is_cleared_on_init(Config) ->
 
     ok.
 
+%% @doc Test that concurrent snapshot installation and compaction don't cause
+%% segment leaks or corruption. This tests the race condition where:
+%% 1. Follower installs snapshot A (triggers minor compaction)
+%% 2. then a major compaction is triggered
+%% 3. before major compaction is completed another snapshot is installed
+%% 4. Verify that a subsequent minor compaction is performed after the major
+%% compaction completes.
+concurrent_snapshot_install_and_compaction(Config) ->
+    Log00 = ra_log_init(Config, #{}),
+    Log0 = assert_log_events(write_and_roll(1, 1000, 1, Log00),
+                             fun(L) ->
+                                     #{num_segments := N} = ra_log:overview(L),
+                                     N == 8
+                             end),
+
+    %% Setup: Create a log with multiple segments
+
+    %% Create first snapshot with live indexes
+    LiveIndexes1 = ra_seq:from_list([100, 200, 300]),
+    SnapIdx1 = 500,
+    SnapTerm1 = 1,
+
+    Machine = {machine, ?MODULE, #{}},
+    Context = #{},
+    CreateSnapshot =
+        fun (Meta, LiveIndexes, L0) ->
+                Chunk = create_snapshot_chunk(Config, Meta, LiveIndexes,
+                                              LiveIndexes1, Context),
+                SnapState0 = ra_log:snapshot_state(L0),
+                {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+                {SnapState, _, LiveIndexes, AEffs} =
+                ra_snapshot:complete_accept(Chunk, 1, Machine, SnapState1),
+                {ra_log:set_snapshot_state(SnapState, L0), AEffs}
+        end,
+    {Log1, AEffs} = CreateSnapshot(meta(500, 1, [?N1]), LiveIndexes1, Log0),
+    run_effs(AEffs),
+    %% Install first snapshot - this triggers minor compaction
+    {ok, Log2, Effects1} = ra_log:install_snapshot({SnapIdx1, SnapTerm1},
+                                                   test_machine,
+                                                   LiveIndexes1, Log1),
+
+    %% Verify compaction was scheduled
+    ?assert(lists:any(fun({next_event, {ra_log_event, {compaction_result, _}}}) -> true;
+                         (_) -> false
+                      end, Effects1)),
+    [{next_event, {ra_log_event, Evt}}] = Effects1,
+    {Log3, []} = ra_log:handle_event(Evt, Log2),
+
+    {Log4, Effects3} = ra_log:handle_event(major_compaction, Log3),
+    run_effs(Effects3),
+    %% Before processing major compaction result, install second snapshot
+    LiveIndexes2 = ra_seq:from_list([600, 700]),
+    SnapIdx2 = 800,
+    SnapTerm2 = 1,
+    {Log5, AEffs2} = CreateSnapshot(meta(800, 1, [?N1]), LiveIndexes2, Log4),
+    run_effs(AEffs2),
+    %% no minor compaction here, i.e. no compaction result as part of effects
+    {ok, Log6, []} = ra_log:install_snapshot({SnapIdx2, SnapTerm2},
+                                             test_machine,
+                                             LiveIndexes2,
+                                             Log5),
+
+    %% Now process both compaction results until we have only 4 left
+    Log7 = assert_log_events(Log6,
+                             fun(L) ->
+                                     #{num_segments := N} = ra_log:overview(L),
+                                     N == 4
+                             end),
+
+    %% Verify log state is consistent
+    {SnapIdx2, SnapTerm2} = ra_log:snapshot_index_term(Log7),
+
+    %% Verify no segment leaks by checking all segments are accounted for
+    %% Cleanup
+    ra_log:close(Log6),
+    ok.
+
+
+
+%% INTERNAL
 validate_fold(From, To, Term, Log0) ->
     {Entries0, Log} = ra_log:fold(From, To, fun ra_lib:cons/2, [], Log0),
     ?assertEqual(To - From + 1, length(Entries0)),
@@ -2063,6 +2144,7 @@ assert_log_events(Log0, AssertPred, Timeout) ->
                     %% handle any next events
                     Log = lists:foldl(
                             fun ({next_event, {ra_log_event, E}}, Acc0) ->
+                                    ct:pal("log evt: ~p", [E]),
                                     {Acc, Effs1} = ra_log:handle_event(E, Acc0),
                                     run_effs(Effs1),
                                     Acc;
@@ -2166,26 +2248,27 @@ meta(Idx, Term, Cluster) ->
       machine_version => 1}.
 
 create_snapshot_chunk(Config, Meta, Context) ->
-    create_snapshot_chunk(Config, Meta, <<"9">>, Context).
+    create_snapshot_chunk(Config, Meta, <<"9">>, [], Context).
 
-create_snapshot_chunk(Config, #{index := Idx} = Meta, MacState, Context) ->
+create_snapshot_chunk(Config, #{index := Idx,
+                                term := Term} = Meta, MacState, LiveIndexes, Context) ->
     OthDir = filename:join(?config(work_dir, Config), "snapshot_installation"),
     CPDir = filename:join(?config(work_dir, Config), "checkpoints"),
     ok = ra_lib:make_dir(OthDir),
     ok = ra_lib:make_dir(CPDir),
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
                            OthDir, CPDir, undefined, ?DEFAULT_MAX_CHECKPOINTS),
-    LiveIndexes = [],
+    % LiveIndexes = [],
     {Sn1, [{bg_work, Fun, _ErrFun}]} =
         ra_snapshot:begin_snapshot(Meta, ?MODULE, MacState, snapshot, Sn0),
     Fun(),
     Sn2 =
         receive
-            {ra_log_event, {snapshot_written, {Idx, 2} = IdxTerm, _, snapshot, _}} ->
+            {ra_log_event, {snapshot_written, {Idx, Term} = IdxTerm, _, snapshot, _}} ->
                 ra_snapshot:complete_snapshot(IdxTerm, snapshot,
-
                                               LiveIndexes, Sn1)
         after 1000 ->
+                  flush(),
                   exit(snapshot_timeout)
         end,
     {ok, Meta, ChunkSt} = ra_snapshot:begin_read(Sn2, Context),
