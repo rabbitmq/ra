@@ -212,7 +212,7 @@ query(ServerLoc, AuxCmd, consistent_aux, _Options, Timeout) ->
 
 -spec read_entries(ra_server_id(), [ra:index()],
                    undefined | ra_flru:state(),
-                   non_neg_integer()) ->
+                   timeout()) ->
     {ok, {map(), ra_flru:state()}} | {error, term()}.
 read_entries({_, Node} = ServerId, Indexes, Flru0, Timeout)
   when Node == node() ->
@@ -1994,13 +1994,9 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                     %% anything else should crash the process
                     ?assert(is_record(Res0, install_snapshot_result)),
                     %% there are live indexes to send before the snapshot
-                    %% TODO: write lazy(?) ra_seq:list_chunk function to avoid
-                    %% immediate expansion
-                    Idxs = lists:reverse(ra_seq:expand(Indexes)),
-                    Chunks = ra_lib:lists_chunk(16, Idxs),
-                    Flru = send_pre_snapshot_entries(Id, To, RPC, Chunks,
-                                                     InstallTimeout, undefined),
-                    _ = ra_flru:evict_all(Flru),
+                    MaybeFlru = send_pre_snapshot_entries(Id, To, RPC, Indexes,
+                                                          InstallTimeout, undefined),
+                    _ = maybe_evict_flru(MaybeFlru),
                     ok;
                 _ ->
                     ok
@@ -2047,55 +2043,65 @@ send_snapshot_chunks(RPC0, To, ReadState0, Num, ChunkSize,
 
 %% Send pre-snapshot entries using pipelined async reads.
 %% This overlaps reading the next chunk with sending the current chunk
-%% to reduce blocking time.
-send_pre_snapshot_entries(_Id, _To, _RPC, [], _InstallTimeout, Flru) ->
-    Flru;
-send_pre_snapshot_entries(Id, To, RPC, [FirstIs | RestChunks],
-                          InstallTimeout, Flru0) ->
-    %% First chunk: do a blocking read to get started
-    {ok, {Ents0, Flru1}} = ra_server_proc:read_entries(Id, FirstIs, Flru0,
-                                                       infinity),
-    Ents = [map_get(I, Ents0) || I <- FirstIs],
-    send_pre_snapshot_entries0(Id, To, RPC, RestChunks, Ents,
-                                   InstallTimeout, Flru1).
+%% to reduce blocking time. Uses lazy chunking to avoid expanding
+%% the entire sequence upfront.
+send_pre_snapshot_entries(Id, To, RPC, Indexes, InstallTimeout, Flru0) ->
+    case ra_seq:list_chunk(16, Indexes) of
+        end_of_seq ->
+            Flru0;
+        {FirstIs, SeqIter} ->
+            %% First chunk: do a blocking read to get started
+            {ok, {Ents0, Flru1}} = ra_server_proc:read_entries(Id, FirstIs, Flru0,
+                                                               infinity),
+            Ents = [map_get(I, Ents0) || I <- FirstIs],
+            send_pre_snapshot_entries0(Id, To, RPC, SeqIter, Ents,
+                                       InstallTimeout, Flru1)
+    end.
 
-send_pre_snapshot_entries0(_Id, To, RPC, [], CurrentEnts,
-                           InstallTimeout, Flru) ->
-    %% Last chunk: just send it, no more reads to start
-    RPC1 = RPC#install_snapshot_rpc{chunk_state = {0, pre},
-                                    data = CurrentEnts},
-    Res = gen_statem:call(To, RPC1, {dirty_timeout, InstallTimeout}),
-    ?assert(is_record(Res, install_snapshot_result)),
-    Flru;
-send_pre_snapshot_entries0(Id, To, RPC, [NextIs | RestChunks], CurrentEnts,
+send_pre_snapshot_entries0(Id, To, RPC, SeqIter, CurrentEnts,
                            InstallTimeout, Flru0) ->
-    %% Pipeline: start async read for next chunk, then send current chunk
-    %% Start async request for the next chunk's read plan
-    ReqId = gen_statem:send_request(Id, {local_call, {read_entries, NextIs}}),
-    %% Send current entries to remote server (blocking)
-    RPC1 = RPC#install_snapshot_rpc{chunk_state = {0, pre},
-                                    data = CurrentEnts},
-    Res = gen_statem:call(To, RPC1, {dirty_timeout, InstallTimeout}),
-    ?assert(is_record(Res, install_snapshot_result)),
-    %% Wait for the async read plan response
-    {ok, ReadPlan} = case gen_statem:receive_response(ReqId, infinity) of
-                         {reply, {ok, RP}} ->
-                             {ok, RP};
-                         {error, Reason} ->
-                             error(Reason);
-                         timeout ->
-                             error(read_entries_timeout)
-                     end,
-    %% Execute the read plan to get actual entries
-    {Reads, Flru1} = ra_log:execute_read_plan(ReadPlan, Flru0,
-                                              fun (Idx, Term, Cmd) ->
-                                                      {Idx, Term, Cmd}
-                                              end,
-                                              #{access_pattern => random,
-                                                file_advise => random}),
-    NextEnts = [map_get(I, Reads) || I <- NextIs],
-    send_pre_snapshot_entries0(Id, To, RPC, RestChunks, NextEnts,
-                               InstallTimeout, Flru1).
+    case ra_seq:list_chunk(16, SeqIter) of
+        end_of_seq ->
+            %% Last chunk: just send it, no more reads to start
+            RPC1 = RPC#install_snapshot_rpc{chunk_state = {0, pre},
+                                            data = CurrentEnts},
+            Res = gen_statem:call(To, RPC1, {dirty_timeout, InstallTimeout}),
+            ?assert(is_record(Res, install_snapshot_result)),
+            Flru0;
+        {NextIs, NextSeqIter} ->
+            %% Pipeline: start async read for next chunk, then send current chunk
+            %% Start async request for the next chunk's read plan
+            ReqId = gen_statem:send_request(Id, {local_call, {read_entries, NextIs}}),
+            %% Send current entries to remote server (blocking)
+            RPC1 = RPC#install_snapshot_rpc{chunk_state = {0, pre},
+                                            data = CurrentEnts},
+            Res = gen_statem:call(To, RPC1, {dirty_timeout, InstallTimeout}),
+            ?assert(is_record(Res, install_snapshot_result)),
+            %% Wait for the async read plan response
+            {ok, ReadPlan} = case gen_statem:receive_response(ReqId, infinity) of
+                                 {reply, {ok, RP}} ->
+                                     {ok, RP};
+                                 {error, Reason} ->
+                                     error(Reason);
+                                 timeout ->
+                                     error(read_entries_timeout)
+                             end,
+            %% Execute the read plan to get actual entries
+            {Reads, Flru1} = ra_log:execute_read_plan(ReadPlan, Flru0,
+                                                      fun (Idx, Term, Cmd) ->
+                                                              {Idx, Term, Cmd}
+                                                      end,
+                                                      #{access_pattern => random,
+                                                        file_advise => random}),
+            NextEnts = [map_get(I, Reads) || I <- NextIs],
+            send_pre_snapshot_entries0(Id, To, RPC, NextSeqIter, NextEnts,
+                                       InstallTimeout, Flru1)
+    end.
+
+maybe_evict_flru(undefined) ->
+    ok;
+maybe_evict_flru(Flru) ->
+    ra_flru:evict_all(Flru).
 
 validate_reply_mode(after_log_append) ->
     ok;

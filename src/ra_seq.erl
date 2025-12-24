@@ -32,6 +32,7 @@
          last/1,
          iterator/1,
          next/1,
+         list_chunk/2,
          length/1,
          in/2,
          range/1,
@@ -167,6 +168,30 @@ next(#i{seq = [{Next, End} | Rem]}) ->
             {Next, #i{seq = Rem}};
         NextRange ->
             {Next, #i{seq = [NextRange | Rem]}}
+    end.
+
+%% @doc Returns a chunk of up to ChunkSize expanded indices from the sequence
+%% without eagerly expanding the entire sequence. On first call, pass a state().
+%% On subsequent calls, pass the returned iterator.
+%% Returns `{Chunk, NewIterator}` or `end_of_seq` when exhausted.
+%% Indices are returned in ascending order.
+-spec list_chunk(ChunkSize :: pos_integer(), state() | iter()) ->
+    {[ra:index()], iter()} | end_of_seq.
+list_chunk(ChunkSize, Seq) when is_list(Seq) ->
+    list_chunk(ChunkSize, iterator(Seq));
+list_chunk(ChunkSize, Iter) when is_record(Iter, i) ->
+    list_chunk(ChunkSize, Iter, []).
+
+list_chunk(0, Iter, Acc) ->
+    {lists:reverse(Acc), Iter};
+list_chunk(N, Iter, Acc) ->
+    case next(Iter) of
+        end_of_seq when Acc =:= [] ->
+            end_of_seq;
+        end_of_seq ->
+            {lists:reverse(Acc), Iter};
+        {Idx, NextIter} ->
+            list_chunk(N - 1, NextIter, [Idx | Acc])
     end.
 
 length(Seq) ->

@@ -26,6 +26,7 @@ all_tests() ->
      add,
      subtract,
      iter,
+     list_chunk,
      remove_prefix,
      remove_prefix_2,
      from_list_with_duplicates
@@ -126,6 +127,44 @@ iter(_Config) ->
     {10, I8} = ra_seq:next(I7),
     {12, I9} = ra_seq:next(I8),
     end_of_seq = ra_seq:next(I9),
+    ok.
+
+list_chunk(_Config) ->
+    %% Test with empty sequence
+    end_of_seq = ra_seq:list_chunk(3, []),
+
+    %% Test with sequence smaller than chunk size
+    S1 = ra_seq:from_list([1, 2]),
+    {[1, 2], I1} = ra_seq:list_chunk(5, S1),
+    end_of_seq = ra_seq:list_chunk(5, I1),
+
+    %% Test chunking a sequence with gaps
+    S2 = ra_seq:from_list([1, 2, 3, 5, 6, 8, 9, 10, 12]),
+    {[1, 2, 3], I2} = ra_seq:list_chunk(3, S2),
+    {[5, 6, 8], I3} = ra_seq:list_chunk(3, I2),
+    {[9, 10, 12], I4} = ra_seq:list_chunk(3, I3),
+    end_of_seq = ra_seq:list_chunk(3, I4),
+
+    %% Test with chunk size of 1
+    S3 = ra_seq:from_list([1, 2, 3]),
+    {[1], I5} = ra_seq:list_chunk(1, S3),
+    {[2], I6} = ra_seq:list_chunk(1, I5),
+    {[3], I7} = ra_seq:list_chunk(1, I6),
+    end_of_seq = ra_seq:list_chunk(1, I7),
+
+    %% Test that final chunk can be smaller than chunk size
+    S4 = ra_seq:from_list([1, 2, 3, 4, 5]),
+    {[1, 2, 3], I8} = ra_seq:list_chunk(3, S4),
+    {[4, 5], I9} = ra_seq:list_chunk(3, I8),
+    end_of_seq = ra_seq:list_chunk(3, I9),
+
+    %% Test with a large range (verifies lazy behavior works)
+    S5 = [{1, 100}],
+    {Chunk1, I10} = ra_seq:list_chunk(16, S5),
+    ?assertEqual(lists:seq(1, 16), Chunk1),
+    {Chunk2, _I11} = ra_seq:list_chunk(16, I10),
+    ?assertEqual(lists:seq(17, 32), Chunk2),
+
     ok.
 
 remove_prefix(_Config) ->
