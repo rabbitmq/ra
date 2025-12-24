@@ -493,40 +493,56 @@ info(Filename) ->
 -spec info(file:filename_all(), option(ra_seq:state())) -> infos().
 info(Filename, Live0)
   when not is_tuple(Filename) ->
-    %% TODO: this can be much optimised by a specialised index parsing
-    %% function
+    %% Optimized implementation that parses index data in a single pass
+    %% without building an intermediate map
     {ok, #file_info{type = Type,
                     links = Links,
                     ctime = CTime}} = prim_file:read_link_info(Filename,
                                                                [raw, {time, posix}]),
-
-    {ok, Seg} = open(Filename, #{mode => read}),
-    Index = Seg#state.index,
-    AllIndexesSeq = ra_seq:from_list(maps:keys(Index)),
-    Live = case Live0 of
-               undefined ->
-                   AllIndexesSeq;
-               _ ->
-                   Live0
-           end,
-    LiveSize = ra_seq:fold(fun (I, Acc) ->
-                                   {_, _, Sz, _} = maps:get(I, Index),
-                                   Acc + Sz
-                           end, 0, Live),
-    Info = #{size => Seg#state.data_write_offset,
-             index_size => Seg#state.data_start,
-             file_type => Type,
-             links => Links,
-             ctime => CTime,
-             max_count => max_count(Seg),
-             num_entries => maps:size(Index),
-             ref => segref(Seg),
-             live_size => LiveSize,
-             %% TODO: this is most likely just here for debugging
-             indexes => AllIndexesSeq
-            },
-    close(Seg),
-    Info.
+    {ok, Fd} = file:open(Filename, [read, raw, binary]),
+    try
+        {ok, Version, MaxCount} = read_header(Fd),
+        IndexRecordSize = index_record_size(Version),
+        IndexSize = MaxCount * IndexRecordSize,
+        DataStart = ?HEADER_SIZE + IndexSize,
+        %% Pass Live0 directly - ra_seq:in/2 is used for membership checks
+        %% This avoids expanding the sequence to a set which could be expensive
+        %% for large sequences. ra_seq:in/2 is efficient for compact sequences
+        %% with ranges.
+        case file:pread(Fd, ?HEADER_SIZE, IndexSize) of
+            {ok, Data} ->
+                {NumEntries, DataOffset, Range, IndexesSeq, LiveSize} =
+                    parse_index_info(Version, Data, DataStart, Live0),
+                Ref = case Range of
+                          undefined -> undefined;
+                          _ -> {ra_lib:to_binary(filename:basename(Filename)), Range}
+                      end,
+                #{size => DataOffset,
+                  index_size => DataStart,
+                  file_type => Type,
+                  links => Links,
+                  ctime => CTime,
+                  max_count => MaxCount,
+                  num_entries => NumEntries,
+                  ref => Ref,
+                  live_size => LiveSize,
+                  indexes => IndexesSeq};
+            eof ->
+                %% Empty segment
+                #{size => DataStart,
+                  index_size => DataStart,
+                  file_type => Type,
+                  links => Links,
+                  ctime => CTime,
+                  max_count => MaxCount,
+                  num_entries => 0,
+                  ref => undefined,
+                  live_size => 0,
+                  indexes => []}
+        end
+    after
+        _ = file:close(Fd)
+    end.
 
 -spec is_same_as(state(), file:filename_all()) -> boolean().
 is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
@@ -686,6 +702,80 @@ parse_index_data_v1(<<Idx:64/unsigned, Term:64/unsigned,
                      Offset + Length,
                      update_range(Range, Idx),
                      Index#{Idx => {Term, Offset, Length, Crc}}).
+
+%% Optimized index parsing for info/2 that computes stats in a single pass
+%% without building a full index map. Returns:
+%% {NumEntries, DataOffset, Range, IndexesSeq, LiveSize}
+parse_index_info(2, Data, DataOffset, LiveSeq) ->
+    parse_index_info_v2(Data, 0, 0, DataOffset, undefined, [], 0, LiveSeq);
+parse_index_info(1, Data, DataOffset, LiveSeq) ->
+    parse_index_info_v1(Data, 0, 0, DataOffset, undefined, [], 0, LiveSeq).
+
+%% V2 format: 64-bit index, 64-bit term, 64-bit offset, 32-bit length, 32-bit crc
+parse_index_info_v2(<<>>, Num, _LastIdx, DataOffset, Range, IdxAcc, LiveSize, _LiveSeq) ->
+    {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)), LiveSize};
+parse_index_info_v2(<<0:64/unsigned, 0:64/unsigned, 0:64/unsigned,
+                      0:32/unsigned, 0:32/integer, _Rest/binary>>,
+                    Num, _LastIdx, DataOffset, Range, IdxAcc, LiveSize, _LiveSeq) ->
+    %% End of written data (partially written index)
+    {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)), LiveSize};
+parse_index_info_v2(<<Idx:64/unsigned, _Term:64/unsigned,
+                      Offset:64/unsigned, Length:32/unsigned,
+                      _Crc:32/integer, Rest/binary>>,
+                    Num, LastIdx, _DataOffset, Range, IdxAcc0, LiveSize0, LiveSeq) ->
+    %% Handle index going backwards (trim entries)
+    IdxAcc = case Idx < LastIdx of
+                 true ->
+                     lists:dropwhile(fun(I) -> I > Idx end, IdxAcc0);
+                 false ->
+                     IdxAcc0
+             end,
+    %% Compute live size: if LiveSeq is undefined, all entries are live
+    LiveSize = case LiveSeq of
+                   undefined ->
+                       LiveSize0 + Length;
+                   _ ->
+                       case ra_seq:in(Idx, LiveSeq) of
+                           true ->
+                               LiveSize0 + Length;
+                           false ->
+                               LiveSize0
+                       end
+               end,
+    parse_index_info_v2(Rest, Num+1, Idx,
+                        Offset + Length,
+                        update_range(Range, Idx),
+                        [Idx | IdxAcc], LiveSize, LiveSeq).
+
+%% V1 format: 64-bit index, 64-bit term, 32-bit offset, 32-bit length, 32-bit crc
+parse_index_info_v1(<<>>, Num, _LastIdx, DataOffset, Range, IdxAcc, LiveSize, _LiveSeq) ->
+    {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)), LiveSize};
+parse_index_info_v1(<<0:64/unsigned, 0:64/unsigned, 0:32/unsigned,
+                      0:32/unsigned, 0:32/integer, _Rest/binary>>,
+                    Num, _LastIdx, DataOffset, Range, IdxAcc, LiveSize, _LiveSeq) ->
+    %% End of written data (partially written index)
+    {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)), LiveSize};
+parse_index_info_v1(<<Idx:64/unsigned, _Term:64/unsigned,
+                      Offset:32/unsigned, Length:32/unsigned,
+                      _Crc:32/integer, Rest/binary>>,
+                    Num, LastIdx, _DataOffset, Range, IdxAcc0, LiveSize0, LiveSeq) ->
+    %% Handle index going backwards (trim entries)
+    IdxAcc = case Idx < LastIdx of
+                 true -> lists:dropwhile(fun(I) -> I > Idx end, IdxAcc0);
+                 false -> IdxAcc0
+             end,
+    %% Compute live size: if LiveSeq is undefined, all entries are live
+    LiveSize = case LiveSeq of
+                   undefined -> LiveSize0 + Length;
+                   _ -> case ra_seq:in(Idx, LiveSeq) of
+                            true -> LiveSize0 + Length;
+                            false -> LiveSize0
+                        end
+               end,
+    parse_index_info_v1(Rest, Num+1, Idx,
+                        Offset + Length,
+                        update_range(Range, Idx),
+                        [Idx | IdxAcc], LiveSize, LiveSeq).
 
 write_header(MaxCount, Fd) ->
     Header = <<?MAGIC, ?VERSION:16/unsigned, MaxCount:16/unsigned>>,
