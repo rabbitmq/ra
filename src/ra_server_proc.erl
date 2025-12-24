@@ -2001,7 +2001,7 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                 _ ->
                     ok
             end,
-            %% send install sntaphost RPC with entries here
+            %% send install snapshot RPC with entries here
             %% Read indexes for snapshot, if non-empty
             %% Find out what the follower's last applied index is
             %%
