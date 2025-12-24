@@ -112,3 +112,110 @@ redundant entries to disk.
 The latest snapshot index for each Ra server is kept in the `ra_log_snapshot_state`
 ETS table.
 
+## WAL Gap Detection and Resend Mechanism
+
+The WAL must maintain a contiguous sequence of log entries for each writer (Ra server).
+If entries arrive out of order or with gaps, the WAL cannot simply accept them as this
+would create holes in the durable log that violate Raft invariants.
+
+### Writer State Tracking
+
+The WAL tracks each writer's state in a map:
+
+```erlang
+writers = #{ra_uid() => {in_seq | out_of_seq, LastIndex :: ra_index()}}
+```
+
+- `{in_seq, LastIndex}` - Normal state. The writer's last successfully written index.
+- `{out_of_seq, LastIndex}` - Gap detected. No writes accepted until the gap is filled.
+
+### Gap Detection
+
+When the WAL receives a write request, it checks if the entry is contiguous with
+the last written index for that writer:
+
+```
+Expected: PrevIdx (from write request) <= LastIndex (WAL's record)
+```
+
+If this check fails and it's not a truncating write (overwrite scenario), a gap
+has been detected. This can happen due to:
+
+- Message reordering (rare in practice within a single node)
+- Lost messages (very rare, typically indicates system issues)
+- Bugs in the calling code
+
+### Resend Protocol
+
+When a gap is detected:
+
+1. **WAL transitions to `out_of_seq`**: The writer is marked as out-of-sequence
+   and all subsequent writes from this writer are dropped until the gap is filled.
+
+2. **WAL requests resend**: The WAL sends `{ra_log_event, {resend_write, MissingIdx}}`
+   to the Ra server, where `MissingIdx` is the first missing index.
+
+3. **Ra server resends entries**: Upon receiving the resend request, the Ra server
+   reads entries from its mem table and resends them to the WAL starting from
+   the missing index up to the current last index.
+
+4. **WAL transitions back to `in_seq`**: When the WAL receives the missing entry
+   with the correct previous index, it writes it and transitions back to `in_seq`.
+   Subsequent entries are then accepted normally.
+
+```
+Ra Server                         WAL
+    |                              |
+    |-- write(Idx=10) ----------->|  writers[UId] = {in_seq, 10}
+    |   (Idx=11 lost/delayed)      |
+    |-- write(Idx=12) ----------->|  Gap! Expected prev=11, have=10
+    |                              |  writers[UId] = {out_of_seq, 10}
+    |<-- {resend_write, 11} ------|
+    |                              |
+    |-- resend(Idx=11) ---------->|  Prev=10 ✓, write succeeds
+    |                              |  writers[UId] = {in_seq, 11}
+    |-- resend(Idx=12) ---------->|  Prev=11 ✓, write succeeds
+    |                              |  writers[UId] = {in_seq, 12}
+```
+
+### Resend Throttling
+
+To prevent resend storms, the Ra server tracks when the last resend occurred
+and will not resend again within a configurable window (default: 20 seconds).
+The throttle is bypassed if:
+
+- The window has elapsed
+- The WAL process has restarted (detected by pid change)
+
+### WAL Restart Handling
+
+If the WAL process crashes and restarts:
+
+1. The `writers` map is lost (it's in-memory only)
+2. WAL recovery rebuilds writer state from WAL files on disk
+3. The Ra server's `tick` function periodically checks if the WAL pid has changed
+4. If a WAL restart is detected and there are unconfirmed entries in the mem table,
+   the Ra server proactively resends them
+
+### Crash Safety
+
+The resend mechanism is crash-safe:
+
+- **Ra server crashes**: On restart, it recovers state from WAL/segments/snapshots.
+  The WAL's `out_of_seq` state for this writer becomes irrelevant as the server
+  will start fresh.
+
+- **WAL crashes**: The `out_of_seq` state is lost. On WAL restart, recovery
+  rebuilds writer state from disk. The Ra server detects the WAL restart via
+  `tick` and resends any unconfirmed entries.
+
+- **Both crash**: The supervision tree (`one_for_all` strategy) ensures consistent
+  restart. WAL recovery handles reconstruction of state from durable storage.
+
+### Key Invariant
+
+The WAL will never create gaps in the durable log. By refusing non-contiguous
+writes and requiring the writer to resend missing entries, the WAL ensures that
+the on-disk log always contains a complete, ordered sequence of entries for each
+writer.
+
