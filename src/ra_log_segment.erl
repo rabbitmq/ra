@@ -466,7 +466,7 @@ read_sparse_binary(Fd, Version, RecSize, NumEntries, IndexBin,
 %% Prepare cache for binary mode by finding consecutive index runs
 prepare_cache_binary(_Fd, _Version, _RecSize, _NumEntries, _IndexBin, [_]) ->
     undefined;
-prepare_cache_binary(Fd, Version, RecSize, NumEntries, IndexBin, 
+prepare_cache_binary(Fd, Version, RecSize, NumEntries, IndexBin,
                      [FirstIdx | Rem]) ->
     case consec_run(FirstIdx, FirstIdx, Rem) of
         {Idx, Idx} ->
@@ -475,15 +475,15 @@ prepare_cache_binary(Fd, Version, RecSize, NumEntries, IndexBin,
         {FirstIdx, LastIdx} ->
             %% Found a consecutive run, look up positions via binary search
             %% Use hint from first lookup to speed up second lookup
-            case binary_search_index_with_pos(Version, IndexBin, RecSize, 
+            case binary_search_index_with_pos(Version, IndexBin, RecSize,
                                               0, NumEntries - 1, FirstIdx) of
                 {ok, {_, FstPos, FstLength, _}, FstFoundPos} ->
                     %% LastIdx > FirstIdx, so search forward from FstFoundPos
                     case binary_search_index_with_pos(Version, IndexBin, RecSize,
-                                                      FstFoundPos, NumEntries - 1, 
+                                                      FstFoundPos, NumEntries - 1,
                                                       LastIdx) of
                         {ok, {_, LastPos, LastLength, _}, _} ->
-                            CacheLen = cache_length(FstPos, FstLength, 
+                            CacheLen = cache_length(FstPos, FstLength,
                                                     LastPos, LastLength),
                             {ok, CacheData} = file:pread(Fd, FstPos, CacheLen),
                             {FstPos, byte_size(CacheData), CacheData};

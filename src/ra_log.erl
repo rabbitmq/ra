@@ -876,11 +876,11 @@ handle_event({segments, TidRanges, NewSegs},
           end,
     {State, [{bg_work, Fun, fun (_Err) -> ok end}]};
 handle_event({compaction_result, Result},
-             #?MODULE{cfg = #cfg{log_id = LogId},
+             #?MODULE{cfg = #cfg{log_id = _LogId},
                       current_snapshot = {CurSnapIdx, _},
                       live_indexes = LiveIndexes,
                       reader = Segments0} = State) ->
-    ?DEBUG("~ts: compaction result ~p", [LogId, Result]),
+    % ?DEBUG("~ts: compaction result ~p", [LogId, Result]),
     Compaction = ra_log_segments:compaction(Segments0),
     {Segments1, Effs} = ra_log_segments:handle_compaction_result(Result,
                                                                  Segments0),
