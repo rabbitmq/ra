@@ -73,6 +73,8 @@ handle_cast({work, FunOrMfa, ErrFun}, State) ->
             end,
             ok
     end,
+    erlang:garbage_collect(),
+    %% TODO: this wont clear up the bg_work funs, fix this some day
     {noreply, State}.
 
 handle_info(_Info, State) ->

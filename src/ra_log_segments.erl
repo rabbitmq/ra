@@ -247,7 +247,8 @@ schedule_compaction(Type, SnapIdx, LiveIndexes,
                        Self ! {ra_log_event,
                                {compaction_result, #compaction_result{}}},
                        ?WARN("~ts: Major compaction failed with ~p",
-                             [LogId, Err]), ok
+                             [LogId, Err]),
+                       ok
                end}]}
     end;
 schedule_compaction(Type, SnapIdx, _LiveIndexes,
