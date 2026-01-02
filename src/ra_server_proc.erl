@@ -223,7 +223,8 @@ read_entries({_, Node} = ServerId, Indexes, Flru0, Timeout)
                                                              {Idx, Term, Cmd}
                                                      end,
                                                      #{access_pattern => random,
-                                                       file_advise => random}),
+                                                       file_advise => random,
+                                                       index_mode => binary}),
             {ok, {Reads, Flru}};
         Err ->
             Err
@@ -2092,7 +2093,8 @@ send_pre_snapshot_entries0(Id, To, RPC, SeqIter, CurrentEnts,
                                                               {Idx, Term, Cmd}
                                                       end,
                                                       #{access_pattern => random,
-                                                        file_advise => random}),
+                                                        file_advise => random,
+                                                        index_mode => binary}),
             NextEnts = [map_get(I, Reads) || I <- NextIs],
             send_pre_snapshot_entries0(Id, To, RPC, NextSeqIter, NextEnts,
                                        InstallTimeout, Flru1)

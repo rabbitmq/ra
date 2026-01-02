@@ -51,6 +51,11 @@
 
 -type ra_segment_index() :: #{ra_index() => index_record_data()}.
 
+%% Index mode for read operations:
+%% - map: Parse full index into Erlang map on open (default, best for many reads)
+%% - binary: Keep raw index binary, binary search on demand (best for sparse reads)
+-type index_mode() :: map | binary.
+
 -record(cfg, {version :: non_neg_integer(),
               max_count = ?SEGMENT_MAX_ENTRIES :: non_neg_integer(),
               max_pending = ?SEGMENT_MAX_PENDING :: non_neg_integer(),
@@ -58,9 +63,11 @@
               filename :: file:filename_all(),
               fd :: option(file:io_device()),
               index_size :: pos_integer(),
+              index_record_size :: pos_integer(),
               access_pattern :: sequential | random,
               file_advise = normal :: posix_file_advise(),
               mode = append :: read | append,
+              index_mode = map :: index_mode(),
               compute_checksums = true :: boolean()}).
 
 -record(state,
@@ -70,7 +77,10 @@
          data_start :: pos_integer(),
          data_offset :: pos_integer(),
          data_write_offset :: pos_integer(),
-         index = undefined :: option(ra_segment_index()),
+         %% For map mode: parsed index map
+         %% For binary mode: raw index binary for binary search
+         index = undefined :: option(ra_segment_index()) | binary(),
+         num_entries = 0 :: non_neg_integer(),
          range :: option({ra_index(), ra_index()}),
          pending_data = [] :: iodata(),
          pending_index = [] :: iodata(),
@@ -86,12 +96,14 @@
                                     max_size => non_neg_integer(),
                                     compute_checksums => boolean(),
                                     mode => append | read,
+                                    index_mode => index_mode(),
                                     access_pattern => sequential | random,
                                     file_advise => posix_file_advise()}.
 -opaque state() :: #state{}.
 
 -export_type([state/0,
               posix_file_advise/0,
+              index_mode/0,
               ra_log_segment_options/0]).
 
 -spec open(Filename :: file:filename_all()) ->
@@ -131,6 +143,7 @@ open(Filename, Options) ->
 process_file(true, Mode, Filename, Fd, Options) ->
     AccessPattern = maps:get(access_pattern, Options, random),
     FileAdvise = maps:get(file_advise, Options, normal),
+    IndexMode = maps:get(index_mode, Options, map),
     if FileAdvise == random andalso
        Mode == read ->
            Offs = maps:get(max_count, Options, ?SEGMENT_MAX_ENTRIES) * ?INDEX_RECORD_SIZE_V2,
@@ -145,10 +158,27 @@ process_file(true, Mode, Filename, Fd, Options) ->
             MaxSize = maps:get(max_size, Options, ?SEGMENT_MAX_SIZE_B),
             IndexRecordSize = index_record_size(Version),
             IndexSize = MaxCount * IndexRecordSize,
-            {NumIndexRecords, DataOffset, Range, Index} =
-                recover_index(Fd, Version, MaxCount),
-            IndexOffset = ?HEADER_SIZE + NumIndexRecords * IndexRecordSize,
             ComputeChecksums = maps:get(compute_checksums, Options, true),
+
+            %% Choose index recovery strategy based on mode
+            {NumIndexRecords, DataOffset, Range, Index, ActualIndexMode} =
+                case {Mode, IndexMode} of
+                    {read, binary} ->
+                        %% Binary mode: keep raw index binary, don't parse into map
+                        %% Falls back to map if overwrites detected
+                        case recover_index_binary(Fd, Version, MaxCount) of
+                            {ok, N, DO, R, IndexBin} ->
+                                {N, DO, R, IndexBin, binary};
+                            {fallback_to_map, N, DO, R, IndexMap} ->
+                                %% Overwrites detected - use map mode instead
+                                {N, DO, R, IndexMap, map}
+                        end;
+                    _ ->
+                        %% Map mode (default) or append mode
+                        {N, DO, R, I} = recover_index(Fd, Version, MaxCount),
+                        {N, DO, R, I, map}
+                end,
+            IndexOffset = ?HEADER_SIZE + NumIndexRecords * IndexRecordSize,
 
             {ok, #state{cfg = #cfg{version = Version,
                                    max_count = MaxCount,
@@ -157,8 +187,10 @@ process_file(true, Mode, Filename, Fd, Options) ->
                                    filename = Filename,
                                    mode = Mode,
                                    index_size = IndexSize,
+                                   index_record_size = IndexRecordSize,
                                    access_pattern = AccessPattern,
                                    file_advise = FileAdvise,
+                                   index_mode = ActualIndexMode,
                                    compute_checksums = ComputeChecksums,
                                    fd = Fd},
                     data_start = ?HEADER_SIZE + IndexSize,
@@ -167,6 +199,7 @@ process_file(true, Mode, Filename, Fd, Options) ->
                     index_offset = IndexOffset,
                     index_write_offset = IndexOffset,
                     range = Range,
+                    num_entries = NumIndexRecords,
                     cache = undefined,
                     % we don't need an index in memory in append mode
                     index = case Mode of
@@ -184,6 +217,7 @@ process_file(false, Mode, Filename, Fd, Options) ->
     IndexSize = MaxCount * ?INDEX_RECORD_SIZE_V2,
     ok = write_header(MaxCount, Fd),
     FileAdvise = maps:get(file_advise, Options, dont_need),
+    IndexMode = maps:get(index_mode, Options, map),
     {ok, #state{cfg = #cfg{version = ?VERSION,
                            max_count = MaxCount,
                            max_pending = MaxPending,
@@ -191,9 +225,11 @@ process_file(false, Mode, Filename, Fd, Options) ->
                            filename = Filename,
                            mode = Mode,
                            index_size = IndexSize,
+                           index_record_size = ?INDEX_RECORD_SIZE_V2,
                            fd = Fd,
                            compute_checksums = ComputeChecksums,
                            file_advise = FileAdvise,
+                           index_mode = IndexMode,
                            access_pattern = random},
                 index_write_offset = ?HEADER_SIZE,
                 index_offset = ?HEADER_SIZE,
@@ -299,9 +335,10 @@ flush(#state{cfg = #cfg{fd = Fd},
     Acc when Acc :: term().
 fold(#state{cfg = #cfg{mode = read} = Cfg,
             cache = Cache,
-            index = Index},
+            index = Index,
+            num_entries = NumEntries},
      FromIdx, ToIdx, Fun, AccFun, Acc) ->
-    fold0(Cfg, Cache, FromIdx, ToIdx, Index, Fun, AccFun, Acc,
+    fold0(Cfg, Cache, FromIdx, ToIdx, Index, NumEntries, Fun, AccFun, Acc,
           error).
 
 -spec fold(state(),
@@ -313,9 +350,10 @@ fold(#state{cfg = #cfg{mode = read} = Cfg,
     Acc when Acc :: term().
 fold(#state{cfg = #cfg{mode = read} = Cfg,
             cache = Cache,
-            index = Index},
+            index = Index,
+            num_entries = NumEntries},
      FromIdx, ToIdx, Fun, AccFun, Acc, MissingKeyStrat) ->
-    fold0(Cfg, Cache, FromIdx, ToIdx, Index, Fun, AccFun, Acc,
+    fold0(Cfg, Cache, FromIdx, ToIdx, Index, NumEntries, Fun, AccFun, Acc,
           MissingKeyStrat).
 
 -spec is_modified(state()) -> boolean().
@@ -351,11 +389,185 @@ read_sparse(#state{} = State, Indexes, AccFun, Acc) ->
     {ok, NumRead :: non_neg_integer(), Acc}
       when Acc :: term().
 read_sparse_no_checks(#state{index = Index,
-                             cfg = #cfg{fd = Fd}},
+                             num_entries = NumEntries,
+                             cfg = #cfg{fd = Fd,
+                                        version = Version,
+                                        index_record_size = RecSize,
+                                        index_mode = IndexMode}},
                       Indexes, AccFun, Acc) ->
-    Cache0 = prepare_cache(Fd, Indexes, Index),
-    read_sparse0(Fd, Indexes, Index, Cache0, Acc, AccFun, 0).
+    case IndexMode of
+        binary when is_binary(Index) ->
+            %% Binary mode: use binary search on the raw index binary
+            %% Index is guaranteed monotonically increasing
+            %% (overwrites fall back to map)
+            read_sparse_binary(Fd, Version, RecSize, NumEntries, Index,
+                               Indexes, AccFun, Acc, 0);
+        _ ->
+            %% Map mode: use map lookups with caching
+            Cache0 = prepare_cache(Fd, Indexes, Index),
+            read_sparse0(Fd, Indexes, Index, Cache0, Acc, AccFun, 0)
+    end.
 
+%% Binary mode: binary search on in-memory index binary
+%% Uses a hint to optimize sequential ascending reads
+%% Index is guaranteed monotonically increasing (overwrites fall back to map
+%% mode)
+read_sparse_binary(Fd, Version, RecSize, NumEntries, IndexBin,
+                   Indexes, AccFun, Acc, Num) ->
+    %% Prepare cache for consecutive runs (same optimization as map mode)
+    Cache0 = prepare_cache_binary(Fd, Version, RecSize, NumEntries,
+                                  IndexBin, Indexes),
+    %% Start with no hint
+    read_sparse_binary(Fd, Version, RecSize, NumEntries, IndexBin,
+                       Indexes, AccFun, Acc, Num, undefined, Cache0).
+
+read_sparse_binary(_Fd, _Version, _RecSize, _NumEntries, _IndexBin,
+                   [], _AccFun, Acc, Num, _Hint, _Cache) ->
+    {ok, Num, Acc};
+read_sparse_binary(Fd, Version, RecSize, NumEntries, IndexBin,
+                   [NextIdx | Rem] = Indexes, AccFun, Acc, Num, Hint, Cache0) ->
+    case binary_search_index_hinted(Version, IndexBin, RecSize, NumEntries,
+                                    NextIdx, Hint) of
+        {ok, {Term, Pos, Length, _Crc}, FoundPos} ->
+            case cache_read(Cache0, Pos, Length) of
+                false ->
+                    %% Cache miss - try to prepare a new cache or read directly
+                    case prepare_cache_binary(Fd, Version, RecSize, NumEntries,
+                                              IndexBin, Indexes) of
+                        undefined ->
+                            case file:pread(Fd, Pos, Length) of
+                                {ok, Data} when byte_size(Data) == Length ->
+                                    NewHint = {NextIdx, FoundPos},
+                                    read_sparse_binary(Fd, Version, RecSize, NumEntries,
+                                                       IndexBin, Rem, AccFun,
+                                                       AccFun(NextIdx, Term, Data, Acc),
+                                                       Num + 1, NewHint, undefined);
+                                _ ->
+                                    exit({read_error, NextIdx})
+                            end;
+                        Cache ->
+                            %% Retry with new cache
+                            read_sparse_binary(Fd, Version, RecSize, NumEntries,
+                                               IndexBin, Indexes, AccFun, Acc,
+                                               Num, Hint, Cache)
+                    end;
+                Data ->
+                    %% Cache hit
+                    NewHint = {NextIdx, FoundPos},
+                    read_sparse_binary(Fd, Version, RecSize, NumEntries,
+                                       IndexBin, Rem, AccFun,
+                                       AccFun(NextIdx, Term, Data, Acc),
+                                       Num + 1, NewHint, Cache0)
+            end;
+        not_found ->
+            exit({missing_key, NextIdx})
+    end.
+
+%% Prepare cache for binary mode by finding consecutive index runs
+prepare_cache_binary(_Fd, _Version, _RecSize, _NumEntries, _IndexBin, [_]) ->
+    undefined;
+prepare_cache_binary(Fd, Version, RecSize, NumEntries, IndexBin, 
+                     [FirstIdx | Rem]) ->
+    case consec_run(FirstIdx, FirstIdx, Rem) of
+        {Idx, Idx} ->
+            %% no run, no cache
+            undefined;
+        {FirstIdx, LastIdx} ->
+            %% Found a consecutive run, look up positions via binary search
+            %% Use hint from first lookup to speed up second lookup
+            case binary_search_index_with_pos(Version, IndexBin, RecSize, 
+                                              0, NumEntries - 1, FirstIdx) of
+                {ok, {_, FstPos, FstLength, _}, FstFoundPos} ->
+                    %% LastIdx > FirstIdx, so search forward from FstFoundPos
+                    case binary_search_index_with_pos(Version, IndexBin, RecSize,
+                                                      FstFoundPos, NumEntries - 1, 
+                                                      LastIdx) of
+                        {ok, {_, LastPos, LastLength, _}, _} ->
+                            CacheLen = cache_length(FstPos, FstLength, 
+                                                    LastPos, LastLength),
+                            {ok, CacheData} = file:pread(Fd, FstPos, CacheLen),
+                            {FstPos, byte_size(CacheData), CacheData};
+                        not_found ->
+                            undefined
+                    end;
+                not_found ->
+                    undefined
+            end
+    end.
+
+%% Binary search with hint optimization for sequential ascending reads
+%% Index is guaranteed monotonically increasing (overwrites fall back to map mode)
+%% If NextIdx > LastIdx, search forward from LastPos (common consumer pattern)
+%% Returns {ok, Record, Position} or not_found
+binary_search_index_hinted(Version, Bin, RecSize, NumEntries, Idx,
+                           undefined) ->
+    %% No hint, do full binary search
+    binary_search_index_with_pos(Version, Bin, RecSize, 0, NumEntries - 1, Idx);
+binary_search_index_hinted(Version, Bin, RecSize, NumEntries, Idx,
+                           {LastIdx, LastPos})
+  when Idx > LastIdx ->
+    %% Ascending access pattern: search forward from last position
+    %% First check if it's the very next entry (common case for sequential reads)
+    NextPos = LastPos + 1,
+    case NextPos < NumEntries of
+        true ->
+            case parse_index_entry(Version, Bin, NextPos * RecSize) of
+                {ok, {Idx, Term, DataOffset, Length, Crc}} ->
+                    %% Found it at the next position - O(1)!
+                    {ok, {Term, DataOffset, Length, Crc}, NextPos};
+                {ok, {FoundIdx, _, _, _, _}} when FoundIdx < Idx ->
+                    %% Need to search forward from here (index is monotonic)
+                    binary_search_index_with_pos(Version, Bin, RecSize,
+                                                 NextPos + 1, NumEntries - 1,
+                                                 Idx);
+                _ ->
+                    %% Index at NextPos is > Idx, search between LastPos and NextPos
+                    binary_search_index_with_pos(Version, Bin, RecSize,
+                                                 LastPos, NextPos, Idx)
+            end;
+        false ->
+            not_found
+    end;
+binary_search_index_hinted(Version, Bin, RecSize, _NumEntries, Idx,
+                           {LastIdx, LastPos})
+  when Idx < LastIdx ->
+    %% Descending access: search from 0 to LastPos
+    binary_search_index_with_pos(Version, Bin, RecSize, 0, LastPos, Idx);
+binary_search_index_hinted(Version, Bin, RecSize, _NumEntries, Idx,
+                           {Idx, LastPos}) ->
+    %% Same index as last time - direct lookup
+    case parse_index_entry(Version, Bin, LastPos * RecSize) of
+        {ok, {Idx, Term, DataOffset, Length, Crc}} ->
+            {ok, {Term, DataOffset, Length, Crc}, LastPos};
+        _ ->
+            not_found
+    end.
+
+%% Binary search that returns position along with result
+binary_search_index_with_pos(_Version, _Bin, _RecSize, Low, High, _Idx)
+  when Low > High ->
+    not_found;
+binary_search_index_with_pos(Version, Bin, RecSize, Low, High, Idx) ->
+    Mid = (Low + High) div 2,
+    Offset = Mid * RecSize,
+    case parse_index_entry(Version, Bin, Offset) of
+        {ok, {MidIdx, Term, DataOffset, Length, Crc}} ->
+            if MidIdx == Idx ->
+                   {ok, {Term, DataOffset, Length, Crc}, Mid};
+               MidIdx < Idx ->
+                   binary_search_index_with_pos(Version, Bin, RecSize,
+                                                Mid + 1, High, Idx);
+               true ->
+                   binary_search_index_with_pos(Version, Bin, RecSize,
+                                                Low, Mid - 1, Idx)
+            end;
+        eof ->
+            %% Hit unwritten region, search lower half
+            binary_search_index_with_pos(Version, Bin, RecSize,
+                                         Low, Mid - 1, Idx)
+    end.
+
+%% Map mode: use map lookups
 read_sparse0(_Fd, [], _Index, _Cache, Acc, _AccFun, Num) ->
     {ok, Num, Acc};
 read_sparse0(Fd, [NextIdx | Rem] = Indexes, Index, Cache0, Acc, AccFun, Num)
@@ -412,27 +624,78 @@ map_get_(Key, _Map) ->
     exit({missing_key, Key}).
 
 -spec term_query(state(), Idx :: ra_index()) -> option(ra_term()).
-term_query(#state{index = Index}, Idx) ->
-    case Index of
-        #{Idx := {Term, _, _, _}} ->
-            Term;
-        _ -> undefined
+term_query(#state{index = Index,
+                  num_entries = NumEntries,
+                  cfg = #cfg{version = Version,
+                             index_record_size = RecSize,
+                             index_mode = IndexMode}}, Idx) ->
+    case IndexMode of
+        binary when is_binary(Index) ->
+            %% Binary search on monotonically increasing index
+            case binary_search_index(Version, Index, RecSize, 0,
+                                     NumEntries - 1, Idx) of
+                {ok, {Term, _, _, _}} ->
+                    Term;
+                not_found ->
+                    undefined
+            end;
+        _ ->
+            case Index of
+                #{Idx := {Term, _, _, _}} ->
+                    Term;
+                _ ->
+                    undefined
+            end
     end.
 
-fold0(_Cfg, _Cache, Idx, FinalIdx, _, _Fun, _AccFun, Acc, _)
+fold0(_Cfg, _Cache, Idx, FinalIdx, _, _, _Fun, _AccFun, Acc, _)
   when Idx > FinalIdx ->
     Acc;
-fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0, MissingKeyStrat) ->
-    case Index of
-        #{Idx := {Term, Offset, Length, Crc} = IdxRec} ->
+fold0(#cfg{index_mode = binary,
+           version = Version,
+           index_record_size = RecSize} = Cfg,
+      Cache0, Idx, FinalIdx, Index, NumEntries, Fun, AccFun, Acc0,
+      MissingKeyStrat)
+  when is_binary(Index) ->
+    %% Binary mode: use binary search
+    case binary_search_index(Version, Index, RecSize, 0,
+                             NumEntries - 1, Idx) of
+        {ok, {Term, Offset, Length, Crc} = IdxRec} ->
             case pread(Cfg, Cache0, Offset, Length) of
                 {ok, Data, Cache} ->
-                    %% performc crc check
                     case validate_checksum(Crc, Data) of
                         true ->
                             Acc = AccFun({Idx, Term, Fun(Data)}, Acc0),
                             fold0(Cfg, Cache, Idx+1, FinalIdx,
-                                  Index, Fun, AccFun, Acc, MissingKeyStrat);
+                                  Index, NumEntries, Fun, AccFun, Acc,
+                                  MissingKeyStrat);
+                        false ->
+                            exit({ra_log_segment_crc_check_failure, Idx, IdxRec,
+                                  Cfg#cfg.filename})
+                    end;
+                {error, partial_data} ->
+                    exit({ra_log_segment_unexpected_eof, Idx, IdxRec,
+                          Cfg#cfg.filename})
+            end;
+        not_found when MissingKeyStrat == error ->
+            exit({missing_key, Idx, Cfg#cfg.filename});
+        not_found when MissingKeyStrat == return ->
+            Acc0
+    end;
+fold0(Cfg, Cache0, Idx, FinalIdx, Index, NumEntries, Fun, AccFun,
+      Acc0, MissingKeyStrat) ->
+    %% Map mode: use map lookup
+    case Index of
+        #{Idx := {Term, Offset, Length, Crc} = IdxRec} ->
+            case pread(Cfg, Cache0, Offset, Length) of
+                {ok, Data, Cache} ->
+                    %% perform crc check
+                    case validate_checksum(Crc, Data) of
+                        true ->
+                            Acc = AccFun({Idx, Term, Fun(Data)}, Acc0),
+                            fold0(Cfg, Cache, Idx+1, FinalIdx,
+                                  Index, NumEntries, Fun, AccFun, Acc,
+                                  MissingKeyStrat);
                         false ->
                             %% CRC check failures are irrecoverable
                             exit({ra_log_segment_crc_check_failure, Idx, IdxRec,
@@ -443,9 +706,9 @@ fold0(Cfg, Cache0, Idx, FinalIdx, Index, Fun, AccFun, Acc0, MissingKeyStrat) ->
                     exit({ra_log_segment_unexpected_eof, Idx, IdxRec,
                           Cfg#cfg.filename})
             end;
-        _ when  MissingKeyStrat == error ->
+        _ when MissingKeyStrat == error ->
             exit({missing_key, Idx, Cfg#cfg.filename});
-        _ when  MissingKeyStrat == return ->
+        _ when MissingKeyStrat == return ->
             Acc0
     end.
 
@@ -610,6 +873,130 @@ recover_index(Fd, Version, MaxCount) ->
             {0, DataOffset, undefined, #{}}
     end.
 
+%% Binary mode: keep raw index binary, scan for range and count only
+%% Returns {ok, NumEntries, DataOffset, Range, IndexBinary} if no overwrites,
+%% or {fallback_to_map, NumEntries, DataOffset, Range, IndexMap} if overwrites detected.
+recover_index_binary(Fd, Version, MaxCount) ->
+    IndexSize = MaxCount * index_record_size(Version),
+    DataOffset = ?HEADER_SIZE + IndexSize,
+    case file:pread(Fd, ?HEADER_SIZE, IndexSize) of
+        {ok, IndexBinary} ->
+            case scan_index_binary(Version, IndexBinary, DataOffset) of
+                {ok, NumEntries, ActualDataOffset, Range} ->
+                    %% No overwrites - use binary mode
+                    {ok, NumEntries, ActualDataOffset, Range, IndexBinary};
+                {overwrites_detected, _PartialNum, _PartialOffset, _PartialRange} ->
+                    %% Overwrites detected - fall back to map mode for correctness
+                    %% Re-parse the full index into a map
+                    {NumEntries, ActualDataOffset, Range, IndexMap} =
+                        parse_index_data(Version, IndexBinary, DataOffset),
+                    {fallback_to_map, NumEntries, ActualDataOffset, Range,
+                     IndexMap}
+            end;
+        eof ->
+            {ok, 0, DataOffset, undefined, <<>>}
+    end.
+
+%% Scan index binary to find range and count entries.
+%% Returns {ok, NumEntries, DataOffset, Range} if no overwrites detected,
+%% or {overwrites_detected, NumEntries, DataOffset, Range} if overwrites found.
+%% When overwrites are detected, caller should fall back to map mode.
+scan_index_binary(Version, Bin, DataOffset) ->
+    scan_index_binary(Version, Bin, 0, 0, 0, DataOffset, undefined).
+
+scan_index_binary(2, Bin, Offset, Num, LastIdx, DataOffset, Range)
+  when byte_size(Bin) >= Offset + ?INDEX_RECORD_SIZE_V2 ->
+    case Bin of
+        <<_:Offset/binary, 0:64/unsigned, 0:64/unsigned, 0:64/unsigned,
+          0:32/unsigned, 0:32/integer, _/binary>> ->
+            {ok, Num, DataOffset, Range};
+        <<_:Offset/binary, Idx:64/unsigned, _Term:64/unsigned,
+          EntryOffset:64/unsigned, Length:32/unsigned,
+          _Crc:32/integer, _/binary>> ->
+            %% Detect overwrite: if Idx goes backwards, fall back to map mode
+            case Idx < LastIdx of
+                true ->
+                    {overwrites_detected, Num + 1, EntryOffset + Length,
+                     update_range(Range, Idx)};
+                false ->
+                    NewRange = update_range(Range, Idx),
+                    NewDataOffset = EntryOffset + Length,
+                    scan_index_binary(2, Bin, Offset + ?INDEX_RECORD_SIZE_V2,
+                                      Num + 1, Idx, NewDataOffset, NewRange)
+            end
+    end;
+scan_index_binary(1, Bin, Offset, Num, LastIdx, DataOffset, Range)
+  when byte_size(Bin) >= Offset + ?INDEX_RECORD_SIZE_V1 ->
+    case Bin of
+        <<_:Offset/binary, 0:64/unsigned, 0:64/unsigned, 0:32/unsigned,
+          0:32/unsigned, 0:32/integer, _/binary>> ->
+            {ok, Num, DataOffset, Range};
+        <<_:Offset/binary, Idx:64/unsigned, _Term:64/unsigned,
+          EntryOffset:32/unsigned, Length:32/unsigned,
+          _Crc:32/integer, _/binary>> ->
+            case Idx < LastIdx of
+                true ->
+                    {overwrites_detected, Num + 1, EntryOffset + Length,
+                     update_range(Range, Idx)};
+                false ->
+                    NewRange = update_range(Range, Idx),
+                    NewDataOffset = EntryOffset + Length,
+                    scan_index_binary(1, Bin, Offset + ?INDEX_RECORD_SIZE_V1,
+                                      Num + 1, Idx, NewDataOffset, NewRange)
+            end
+    end;
+scan_index_binary(_, _, _, Num, _, DataOffset, Range) ->
+    {ok, Num, DataOffset, Range}.
+
+%% Binary search on in-memory index binary
+%% Returns {ok, {Term, Offset, Length, Crc}} or not_found
+binary_search_index(_Version, _Bin, _RecSize, Low, High, _Idx)
+  when Low > High ->
+    not_found;
+binary_search_index(Version, Bin, RecSize, Low, High, Idx) ->
+    Mid = (Low + High) div 2,
+    Offset = Mid * RecSize,
+    case parse_index_entry(Version, Bin, Offset) of
+        {ok, {MidIdx, Term, DataOffset, Length, Crc}} ->
+            if MidIdx == Idx ->
+                   {ok, {Term, DataOffset, Length, Crc}};
+               MidIdx < Idx ->
+                   binary_search_index(Version, Bin, RecSize, Mid + 1,
+                                       High, Idx);
+               true ->
+                   binary_search_index(Version, Bin, RecSize, Low, Mid - 1, Idx)
+            end;
+        eof ->
+            %% Hit unwritten region, search lower half
+            binary_search_index(Version, Bin, RecSize, Low, Mid - 1, Idx)
+    end.
+
+%% Parse an index entry from a binary at the given offset
+parse_index_entry(2, Bin, Offset)
+  when byte_size(Bin) >= Offset + ?INDEX_RECORD_SIZE_V2 ->
+    case Bin of
+        <<_:Offset/binary, 0:64/unsigned, 0:64/unsigned, 0:64/unsigned,
+          0:32/unsigned, 0:32/integer, _/binary>> ->
+            eof;
+        <<_:Offset/binary, Idx:64/unsigned, Term:64/unsigned,
+          DataOffset:64/unsigned, Length:32/unsigned,
+          Crc:32/integer, _/binary>> ->
+            {ok, {Idx, Term, DataOffset, Length, Crc}}
+    end;
+parse_index_entry(1, Bin, Offset)
+  when byte_size(Bin) >= Offset + ?INDEX_RECORD_SIZE_V1 ->
+    case Bin of
+        <<_:Offset/binary, 0:64/unsigned, 0:64/unsigned, 0:32/unsigned,
+          0:32/unsigned, 0:32/integer, _/binary>> ->
+            eof;
+        <<_:Offset/binary, Idx:64/unsigned, Term:64/unsigned,
+          DataOffset:32/unsigned, Length:32/unsigned,
+          Crc:32/integer, _/binary>> ->
+            {ok, {Idx, Term, DataOffset, Length, Crc}}
+    end;
+parse_index_entry(_, _, _) ->
+    eof.
+
 dump_index(File) ->
     {ok, Fd} = file:open(File, [read, raw, binary
                                ]),
@@ -711,18 +1098,22 @@ parse_index_info(2, Data, DataOffset, LiveSeq) ->
 parse_index_info(1, Data, DataOffset, LiveSeq) ->
     parse_index_info_v1(Data, 0, 0, DataOffset, undefined, [], 0, LiveSeq).
 
-%% V2 format: 64-bit index, 64-bit term, 64-bit offset, 32-bit length, 32-bit crc
-parse_index_info_v2(<<>>, Num, _LastIdx, DataOffset, Range, IdxAcc, LiveSize, _LiveSeq) ->
+%% V2 format: 64-bit index, 64-bit term, 64-bit offset, 32-bit length,
+%% 32-bit crc
+parse_index_info_v2(<<>>, Num, _LastIdx, DataOffset, Range, IdxAcc, LiveSize,
+                    _LiveSeq) ->
     {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)), LiveSize};
 parse_index_info_v2(<<0:64/unsigned, 0:64/unsigned, 0:64/unsigned,
                       0:32/unsigned, 0:32/integer, _Rest/binary>>,
-                    Num, _LastIdx, DataOffset, Range, IdxAcc, LiveSize, _LiveSeq) ->
+                    Num, _LastIdx, DataOffset, Range, IdxAcc, LiveSize,
+                    _LiveSeq) ->
     %% End of written data (partially written index)
     {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)), LiveSize};
 parse_index_info_v2(<<Idx:64/unsigned, _Term:64/unsigned,
                       Offset:64/unsigned, Length:32/unsigned,
                       _Crc:32/integer, Rest/binary>>,
-                    Num, LastIdx, _DataOffset, Range, IdxAcc0, LiveSize0, LiveSeq) ->
+                    Num, LastIdx, _DataOffset, Range, IdxAcc0, LiveSize0,
+                    LiveSeq) ->
     %% Handle index going backwards (trim entries)
     IdxAcc = case Idx < LastIdx of
                  true ->

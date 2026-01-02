@@ -78,7 +78,8 @@
 -opaque state() :: #?STATE{}.
 -type read_plan() :: [{BaseName :: file:filename_all(), [ra:index()]}].
 -type read_plan_options() :: #{access_pattern => random | sequential,
-                               file_advise => ra_log_segment:posix_file_advise()}.
+                               file_advise => ra_log_segment:posix_file_advise(),
+                               index_mode => ra_log_segment:index_mode()}.
 
 -export_type([
               state/0,

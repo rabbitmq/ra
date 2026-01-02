@@ -25,7 +25,7 @@
 %% State is either:
 %% - {list, GtFun, List} where List is stored in descending order (newest first)
 %% - {tuple, GtFun, Len, Data} where Data is a tuple in descending order
--opaque state() :: {list, gt_fun(), list()} 
+-opaque state() :: {list, gt_fun(), list()}
                  | {tuple, gt_fun(), non_neg_integer(), tuple()}.
 
 %% Continuation is either:
