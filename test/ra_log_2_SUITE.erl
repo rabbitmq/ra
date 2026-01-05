@@ -54,6 +54,7 @@ all_tests() ->
      snapshot_installation,
      snapshot_written_after_installation,
      oldcheckpoints_deleted_after_snapshot_install,
+     append_after_snapshot_installation_with_live_indexes,
      append_after_snapshot_installation,
      release_cursor_after_snapshot_installation,
      written_event_after_snapshot_installation,
@@ -1451,6 +1452,48 @@ snapshot_installation(Config) ->
     {[_, _], _} = ra_log_take(16, 17, Log6),
     Log = deliver_all_log_events(Log6, 100),
     {[], _} = ra_log_take(1, 9, Log),
+    {[_, _], _} = ra_log_take(16, 17, Log),
+    ok.
+
+append_after_snapshot_installation_with_live_indexes(Config) ->
+    logger:set_primary_config(level, all),
+    %% simulates scenario where a node becomes leader after receiving a
+    %% snapshot with live indexes
+    % write a few entries
+    % simulate outage/ message loss
+    % write snapshot for entry not seen
+    % then write entries
+    Log0 = ra_log_init(Config), {0, 0} = ra_log:last_index_term(Log0),
+    % Log1 = write_n(1, 10, 2, Log0),
+    Log1 = assert_log_events(write_n(1, 10, 2, Log0),
+                             fun (L) ->
+                                     {9, 2} == ra_log:last_written(L)
+                             end),
+    %% do snapshot
+    Meta = meta(15, 2, [?N1]),
+    LiveIndexes = [5,1],
+    Chunk = create_snapshot_chunk(Config, Meta, LiveIndexes, LiveIndexes, #{}),
+    SnapState0 = ra_log:snapshot_state(Log1),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log2, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log1)),
+    run_effs(Effs4),
+    {15, _} = ra_log:last_index_term(Log2),
+    {15, _} = ra_log:last_written(Log2),
+
+    % after a snapshot we need a "truncating write" that ignores missing
+    % indexes
+    Log3 = append_n(16, 20, 3, Log2),
+    Log = assert_log_events(Log3, fun (L) ->
+                                          {19, 3} == ra_log:last_written(L)
+                                  end),
+
+    ?assertMatch({[_, _], _}, ra_log:sparse_read([1, 5], Log)),
+    % {[], _} = ra_log_take(1, 9, Log),
     {[_, _], _} = ra_log_take(16, 17, Log),
     ok.
 

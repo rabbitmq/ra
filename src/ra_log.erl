@@ -427,6 +427,7 @@ append({Idx, Term, Cmd0} = Entry,
         {ok, Mt} ->
             Cmd = {ttb, term_to_iovec(Cmd0)},
             case ra_log_wal:write(Wal, {UId, self()}, ra_mt:tid(Mt),
+                                  previous_wal_index(State),
                                   Idx, Term, Cmd) of
                 {ok, Pid} ->
                     Pend = ra_seq:limit(Idx - 1, Pend0),
