@@ -49,7 +49,8 @@
                            uid => ra_uid()}.
 
 -type ra_peer_status() :: normal |
-                          {sending_snapshot, pid()} |
+                          {sending_snapshot, pid(), non_neg_integer()} |  %% {sending_snapshot, Pid, AttemptCount}
+                          {snapshot_backoff, non_neg_integer()} |          %% {snapshot_backoff, AttemptCount}
                           suspended |
                           disconnected.
 

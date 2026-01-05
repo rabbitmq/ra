@@ -151,7 +151,8 @@
                   #info_rpc{} |
                   #info_reply{} |
                   {ra_server_id, #heartbeat_reply{}} |
-                  pipeline_rpcs.
+                  pipeline_rpcs |
+                  {snapshot_retry_timeout, ra_server_id()}.
 
 -type ra_reply_body() :: #append_entries_reply{} |
                          #request_vote_result{} |
@@ -183,6 +184,7 @@
     %% used for tracking valid leader messages
     {record_leader_msg, ra_server_id()} |
     start_election_timeout |
+    {start_snapshot_retry_timer, ra_server_id(), non_neg_integer()} |
     {bg_work, fun(() -> ok) | mfargs(), fun()}.
 
 -type effects() :: [effect()].
@@ -736,7 +738,7 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
 
             %% we can now demonitor the process
             Effects0 = case Peer0 of
-                           #{status := {sending_snapshot, Pid}} ->
+                           #{status := {sending_snapshot, Pid, _}} ->
                                [{demonitor, process, Pid}];
                            _ -> []
                        end,
@@ -753,6 +755,22 @@ handle_leader(pipeline_rpcs, State0) ->
                       Effects0
               end,
     {leader, State, Effects};
+handle_leader({snapshot_retry_timeout, PeerId},
+              #{cfg := #cfg{id = Id},
+                current_term := Term,
+                log := Log,
+                cluster := Peers} = State0) ->
+    case maps:get(PeerId, Peers, undefined) of
+        #{status := {snapshot_backoff, _Count}} ->
+            %% Keep status as snapshot_backoff so send_snapshot effect handler
+            %% can read the attempt count. The effect handler will update
+            %% status to {sending_snapshot, Pid, Count}.
+            SnapState = ra_log:snapshot_state(Log),
+            {leader, State0, [{send_snapshot, PeerId, {SnapState, Id, Term}}]};
+        _ ->
+            %% Peer no longer in backoff (maybe removed or snapshot succeeded)
+            {leader, State0, []}
+    end;
 handle_leader(#install_snapshot_rpc{term = Term,
                                     leader_id = Leader} = Evt,
               #{current_term := CurTerm,
@@ -2376,26 +2394,46 @@ update_disconnected_peers(Node, nodeup, #{cluster := Peers} = State) ->
                         fun ({_, PeerNode}, #{status := disconnected} = Peer)
                               when PeerNode == Node ->
                                 Peer#{status => normal};
+                            ({_, PeerNode}, #{status := {snapshot_backoff, _}} = Peer)
+                              when PeerNode == Node ->
+                                %% Node came back up - reset backoff to allow immediate retry
+                                Peer#{status => normal};
                             (_, Peer) ->
                                 Peer
                         end, Peers)};
 update_disconnected_peers(_Node, _Status, State) ->
     State.
 
-peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
-     PeerKv =
-         maps:to_list(
-           maps:filter(fun(_, #{status := {sending_snapshot, Pid}})
-                             when Pid =:= SnapshotPid ->
-                               true;
+%% Helper to find peer by snapshot sender pid
+find_peer_with_snapshot_pid(SnapshotPid, Peers) ->
+    case maps:to_list(
+           maps:filter(fun(_, #{status := {sending_snapshot, Pid, _}})
+                             when Pid =:= SnapshotPid -> true;
                           (_, _) -> false
-                       end, Peers)),
-     case PeerKv of
-         [{PeerId, Peer}] ->
-             put_peer(PeerId, Peer#{status => normal}, State);
-         _ ->
-             State
-     end.
+                       end, Peers)) of
+        [{PeerId, Peer}] -> {PeerId, Peer};
+        _ -> undefined
+    end.
+
+peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
+    case find_peer_with_snapshot_pid(SnapshotPid, Peers) of
+        {PeerId, Peer} ->
+            put_peer(PeerId, Peer#{status => normal}, State);
+        undefined ->
+            State
+    end.
+
+%% Set backoff status preserving attempt count from sending_snapshot
+peer_snapshot_process_exited_with_backoff(SnapshotPid, #{cluster := Peers} = State) ->
+    case find_peer_with_snapshot_pid(SnapshotPid, Peers) of
+        {PeerId, #{status := {sending_snapshot, _, AttemptCount}} = Peer} ->
+            %% Increment count and set backoff status
+            NewCount = AttemptCount + 1,
+            NewState = put_peer(PeerId, Peer#{status => {snapshot_backoff, NewCount}}, State),
+            {NewState, PeerId, NewCount};
+        _ ->
+            {State, undefined, 0}
+    end.
 
 -spec handle_down(ra_state(),
                   machine | snapshot_sender | snapshot_writer | aux,
@@ -2407,16 +2445,32 @@ handle_down(leader, machine, Pid, Info, State)
     Eff = {next_event, {command, low, {'$usr', {down, Pid, Info}, noreply}}},
     {leader, State, [Eff]};
 handle_down(RaftState, snapshot_sender, Pid, Info,
-            #{cfg := #cfg{log_id = LogId}} = State)
+            #{cfg := #cfg{log_id = LogId}} = State0)
   when (RaftState == leader orelse
         RaftState == await_condition)
        andalso is_pid(Pid)  ->
     %% if a rebalance is being done we also need to handle snapshot_sender
     %% downs here
-    ?DEBUG_IF(Info /= normal,
-              "~ts: Snapshot sender process ~w exited with ~W",
-              [LogId, Pid, Info, 10]),
-    {leader, peer_snapshot_process_exited(Pid, State), []};
+    case Info of
+        normal ->
+            %% Success - handled by install_snapshot_result, just clean up
+            State = peer_snapshot_process_exited(Pid, State0),
+            {RaftState, State, []};
+        _Error ->
+            ?DEBUG("~ts: Snapshot sender process ~w exited with ~W",
+                   [LogId, Pid, Info, 10]),
+            {State, PeerId, AttemptCount} =
+                peer_snapshot_process_exited_with_backoff(Pid, State0),
+            case PeerId of
+                undefined ->
+                    {RaftState, State, []};
+                _ ->
+                    %% Exponential backoff: min(5000 * 2^(count-1), 60000) ms
+                    Delay = min(5000 * (1 bsl (AttemptCount - 1)), 60000),
+                    {RaftState, State,
+                     [{start_snapshot_retry_timer, PeerId, Delay}]}
+            end
+    end;
 handle_down(RaftState, log, Pid, Info, #{log := Log0} = State) ->
     {Log, Effects} = ra_log:handle_event({down, Pid, Info}, Log0),
     {RaftState, State#{log => Log}, Effects};

@@ -115,7 +115,11 @@ all() ->
      receive_snapshot_heartbeat_reply_dropped,
 
      handle_down,
-     persist_last_applied_with_unwritten
+     persist_last_applied_with_unwritten,
+
+     snapshot_sender_exponential_backoff,
+     snapshot_backoff_prevents_immediate_retry,
+     snapshot_backoff_reset_on_nodeup
     ].
 
 -define(MACFUN, fun (E, _) -> E end).
@@ -3524,6 +3528,134 @@ leader_heartbeat_reply_higher_term(_Config) ->
     ReplyWithHigherIndex = HeartbeatReply#heartbeat_reply{query_index = QueryIndex + 1},
     {follower, StateWithNewTerm, []} =
         ra_server:handle_leader({ReplyingPeerId, ReplyWithHigherIndex}, State).
+
+snapshot_sender_exponential_backoff(_Config) ->
+    %% Test that snapshot sender failures result in exponential backoff
+    N2 = ?N2,
+    State0 = base_state(3, ?FUNCTION_NAME),
+    #{cluster := Cluster0} = State0,
+    %% Set up N2 with sending_snapshot status (simulating an active snapshot send)
+    SnapshotPid = spawn(fun() -> receive stop -> ok end end),
+    Peer2 = maps:get(N2, Cluster0),
+    Cluster1 = Cluster0#{N2 => Peer2#{status => {sending_snapshot, SnapshotPid, 0}}},
+    State1 = State0#{cluster => Cluster1},
+
+    %% Simulate snapshot sender crash (non-normal exit)
+    {leader, State2, Effects1} =
+        ra_server:handle_down(leader, snapshot_sender, SnapshotPid, crashed, State1),
+
+    %% Should have backoff status with count 1 and timer effect
+    #{cluster := #{N2 := #{status := {snapshot_backoff, 1}}}} = State2,
+    [{start_snapshot_retry_timer, N2, Delay1}] = Effects1,
+    %% First delay should be 5000ms (5000 * 2^0)
+    5000 = Delay1,
+
+    %% Simulate second failure - set up sending_snapshot again with count 1
+    SnapshotPid2 = spawn(fun() -> receive stop -> ok end end),
+    #{cluster := Cluster2} = State2,
+    Peer2b = maps:get(N2, Cluster2),
+    Cluster3 = Cluster2#{N2 => Peer2b#{status => {sending_snapshot, SnapshotPid2, 1}}},
+    State3 = State2#{cluster => Cluster3},
+
+    {leader, State4, Effects2} =
+        ra_server:handle_down(leader, snapshot_sender, SnapshotPid2, crashed, State3),
+
+    %% Should have backoff status with count 2
+    #{cluster := #{N2 := #{status := {snapshot_backoff, 2}}}} = State4,
+    [{start_snapshot_retry_timer, N2, Delay2}] = Effects2,
+    %% Second delay should be 10000ms (5000 * 2^1)
+    10000 = Delay2,
+
+    %% Simulate third failure
+    SnapshotPid3 = spawn(fun() -> receive stop -> ok end end),
+    #{cluster := Cluster4} = State4,
+    Peer2c = maps:get(N2, Cluster4),
+    Cluster5 = Cluster4#{N2 => Peer2c#{status => {sending_snapshot, SnapshotPid3, 2}}},
+    State5 = State4#{cluster => Cluster5},
+
+    {leader, State6, Effects3} =
+        ra_server:handle_down(leader, snapshot_sender, SnapshotPid3, crashed, State5),
+
+    %% Should have backoff status with count 3
+    #{cluster := #{N2 := #{status := {snapshot_backoff, 3}}}} = State6,
+    [{start_snapshot_retry_timer, N2, Delay3}] = Effects3,
+    %% Third delay should be 20000ms (5000 * 2^2)
+    20000 = Delay3,
+
+    %% Verify normal exit doesn't trigger backoff
+    SnapshotPid4 = spawn(fun() -> receive stop -> ok end end),
+    #{cluster := Cluster6} = State6,
+    Peer2d = maps:get(N2, Cluster6),
+    Cluster7 = Cluster6#{N2 => Peer2d#{status => {sending_snapshot, SnapshotPid4, 3}}},
+    State7 = State6#{cluster => Cluster7},
+
+    {leader, State8, []} =
+        ra_server:handle_down(leader, snapshot_sender, SnapshotPid4, normal, State7),
+
+    %% Normal exit should reset status to normal
+    #{cluster := #{N2 := #{status := normal}}} = State8,
+    ok.
+
+snapshot_backoff_prevents_immediate_retry(_Config) ->
+    %% Test that retry timeout emits send_snapshot effect while keeping
+    %% the backoff status (so effect handler can read attempt count)
+    N2 = ?N2,
+    State0 = base_state(3, ?FUNCTION_NAME),
+    #{cluster := Cluster0} = State0,
+    %% Set up N2 with snapshot_backoff status
+    Peer2 = maps:get(N2, Cluster0),
+    Cluster1 = Cluster0#{N2 => Peer2#{status => {snapshot_backoff, 2}}},
+    State1 = State0#{cluster => Cluster1},
+
+    %% Handle the retry timeout
+    {leader, State2, Effects} =
+        ra_server:handle_leader({snapshot_retry_timeout, N2}, State1),
+
+    %% Status should remain as snapshot_backoff so effect handler can read count
+    #{cluster := #{N2 := #{status := {snapshot_backoff, 2}}}} = State2,
+    %% Should emit send_snapshot effect
+    [{send_snapshot, N2, {_SnapState, _Id, _Term}}] = Effects,
+
+    %% Test that retry timeout for non-backoff peer is ignored
+    Cluster2 = Cluster0#{N2 => Peer2#{status => normal}},
+    State3 = State0#{cluster => Cluster2},
+    {leader, State3, []} =
+        ra_server:handle_leader({snapshot_retry_timeout, N2}, State3),
+
+    %% Test that retry timeout for unknown peer is ignored
+    UnknownPeer = {unknown, node()},
+    {leader, State3, []} =
+        ra_server:handle_leader({snapshot_retry_timeout, UnknownPeer}, State3),
+    ok.
+
+snapshot_backoff_reset_on_nodeup(_Config) ->
+    %% Test that snapshot_backoff status is reset when node comes back up
+    N2 = ?N2,
+    State0 = base_state(3, ?FUNCTION_NAME),
+    #{cluster := Cluster0} = State0,
+    %% Set up N2 with snapshot_backoff status
+    Peer2 = maps:get(N2, Cluster0),
+    Cluster1 = Cluster0#{N2 => Peer2#{status => {snapshot_backoff, 3}}},
+    State1 = State0#{cluster => Cluster1},
+
+    %% Simulate nodeup for N2's node
+    State2 = ra_server:update_disconnected_peers(node(), nodeup, State1),
+
+    %% Peer status should be reset to normal
+    #{cluster := #{N2 := #{status := normal}}} = State2,
+
+    %% Test that disconnected status is also reset
+    Cluster2 = Cluster0#{N2 => Peer2#{status => disconnected}},
+    State3 = State0#{cluster => Cluster2},
+    State4 = ra_server:update_disconnected_peers(node(), nodeup, State3),
+    #{cluster := #{N2 := #{status := normal}}} = State4,
+
+    %% Test that nodeup for different node doesn't affect the peer
+    Cluster3 = Cluster0#{N2 => Peer2#{status => {snapshot_backoff, 2}}},
+    State5 = State0#{cluster => Cluster3},
+    State6 = ra_server:update_disconnected_peers(other_node, nodeup, State5),
+    #{cluster := #{N2 := #{status := {snapshot_backoff, 2}}}} = State6,
+    ok.
 
 % %%% helpers
 

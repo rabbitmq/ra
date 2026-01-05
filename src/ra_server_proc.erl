@@ -619,6 +619,15 @@ leader({timeout, Name}, machine_timeout, State0) ->
     {leader, State1, Effects} = handle_leader({command, Cmd}, State0),
     {State, Actions} = ?HANDLE_EFFECTS(Effects, cast, State1),
     {keep_state, State, Actions};
+leader({timeout, {snapshot_retry, PeerId}}, {snapshot_retry, PeerId},
+       #state{server_state = SS0} = State0) ->
+    %% Reset peer status from backoff to normal and trigger RPC evaluation
+    case ra_server:handle_leader({snapshot_retry_timeout, PeerId}, SS0) of
+        {leader, SS, Effects} ->
+            {State, Actions} = ?HANDLE_EFFECTS(Effects, cast,
+                                               State0#state{server_state = SS}),
+            {keep_state, State, Actions}
+    end;
 leader({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
 leader({call, From}, {read_entries, Indexes}, State) ->
@@ -1092,6 +1101,9 @@ await_condition(info, {Status, Node, InfoList}, State0)
 await_condition(_, tick_timeout, State0) ->
     {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast, State0),
     {keep_state, State, set_tick_timer(State, Actions)};
+await_condition({timeout, {snapshot_retry, _}}, {snapshot_retry, _}, _State) ->
+    %% Postpone snapshot retry until we transition back to leader
+    {keep_state_and_data, [postpone]};
 await_condition({call, From}, {read_entries, Indexes}, State) ->
     read_entries0(From, Indexes, State);
 await_condition(EventType, Msg, State0) ->
@@ -1576,8 +1588,12 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
             %% node is connected
             %% leader effect only
             Machine = ra_server:machine(SS0),
-            %% temporary assertion
-            #{To := #{status := normal}} = ra_server:peers(SS0),
+            %% temporary assertion - status must be normal or snapshot_backoff (for retries)
+            #{To := #{status := Status}} = ra_server:peers(SS0),
+            AttemptCount = case Status of
+                               {snapshot_backoff, N} -> N;
+                               normal -> 0
+                           end,
             Id = ra_server:id(SS0),
             Pid = spawn(fun () ->
                                 try send_snapshots(Id, Term, To,
@@ -1600,7 +1616,7 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
             ok = incr_counter(Conf, ?C_RA_SRV_SNAPSHOTS_SENT, 1),
             %% update the peer state so that no pipelined entries are sent during
             %% the snapshot sending phase
-            SS = ra_server:update_peer(To, #{status => {sending_snapshot, Pid}}, SS0),
+            SS = ra_server:update_peer(To, #{status => {sending_snapshot, Pid, AttemptCount}}, SS0),
             {State0#state{server_state = SS,
                           monitors = ra_monitors:add(Pid, snapshot_sender, Monitors)},
              Actions};
@@ -1701,6 +1717,13 @@ handle_effect(leader, {mod_call, Mod, Fun, Args}, _,
     {State, Actions};
 handle_effect(_RaftState, start_election_timeout, _, State, Actions) ->
     maybe_set_election_timeout(long, State, Actions);
+handle_effect(RaftState, {start_snapshot_retry_timer, PeerId, Delay}, _,
+              State, Actions)
+  when RaftState == leader orelse
+       RaftState == await_condition ->
+    %% Use gen_statem generic timeout with named timer
+    {State, [{{timeout, {snapshot_retry, PeerId}}, Delay,
+              {snapshot_retry, PeerId}} | Actions]};
 handle_effect(follower, {record_leader_msg, _LeaderId}, _, State0, Actions) ->
     %% record last time leader seen
     State = State0#state{leader_last_seen = erlang:system_time(millisecond),
