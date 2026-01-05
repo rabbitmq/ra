@@ -1743,6 +1743,24 @@ handle_receive_snapshot(#info_reply{term = Term} = Msg,
     {follower, update_term(Term, State), [{next_event, Msg}]};
 handle_receive_snapshot(#info_reply{}, State) ->
     {receive_snapshot, State, []};
+%% Handle request_vote_rpc with higher term - abort snapshot and participate in election
+handle_receive_snapshot(#request_vote_rpc{term = Term} = Msg,
+                        #{current_term := CurTerm,
+                          cfg := #cfg{log_id = LogId}} = State0)
+  when Term > CurTerm ->
+    ?INFO("~ts: receive_snapshot saw request_vote_rpc for term ~b, "
+          "current term ~b, aborting snapshot receive",
+          [LogId, Term, CurTerm]),
+    State = abort_receive(State0),
+    {follower, update_term(Term, State), [{next_event, Msg}]};
+%% Handle request_vote_rpc with lower or equal term - reject without aborting
+handle_receive_snapshot(#request_vote_rpc{},
+                        #{current_term := CurTerm} = State) ->
+    Reply = #request_vote_result{term = CurTerm, vote_granted = false},
+    {receive_snapshot, State, [{reply, Reply}]};
+%% Handle pre_vote_rpc without leaving receive_snapshot state
+handle_receive_snapshot(#pre_vote_rpc{} = PreVote, State) ->
+    process_pre_vote(receive_snapshot, PreVote, State);
 handle_receive_snapshot(Msg, State) ->
     log_unhandled_msg(receive_snapshot, Msg, State),
     %% drop all other events??

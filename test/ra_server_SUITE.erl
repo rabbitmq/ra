@@ -74,6 +74,9 @@ all() ->
      follower_receives_snapshot_lower_than_last_applied,
      receive_snapshot_timeout,
      receive_snapshot_new_leader_aer,
+     receive_snapshot_request_vote_higher_term,
+     receive_snapshot_request_vote_lower_term,
+     receive_snapshot_pre_vote,
      snapshotted_follower_received_append_entries,
      leader_received_append_entries_reply_with_stale_last_index,
      leader_receives_install_snapshot_result,
@@ -2643,6 +2646,112 @@ receive_snapshot_new_leader_aer(_Config) ->
     %% snapshot should be aborted
     SS = ra_log:snapshot_state(Log),
     undefined = ra_snapshot:accepting(SS),
+    ok.
+
+receive_snapshot_request_vote_higher_term(_Config) ->
+    %% When receiving a request_vote_rpc with a higher term while in
+    %% receive_snapshot state, we should abort the snapshot and transition
+    %% to follower to participate in the election
+    N1 = ?N1, N2 = ?N2, N3 = ?N3,
+    #{N3 := {_, FState0 = #{cluster := Config,
+                            current_term := CurTerm}, _}}
+    = init_servers([N1, N2, N3], {module, ra_queue, #{}}),
+    FState = FState0#{last_applied => 3},
+    LastTerm = 1,
+    Idx = 6,
+    ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = N1,
+                                  meta = snap_meta(Idx, LastTerm, Config),
+                                  chunk_state = {1, last},
+                                  data = []},
+    {receive_snapshot, FState1,
+     [{next_event, ISRpc}, {record_leader_msg, _}]} =
+        ra_server:handle_follower(ISRpc, FState),
+
+    %% Now receive a request_vote_rpc with a higher term
+    HigherTerm = CurTerm + 1,
+    VoteRpc = #request_vote_rpc{term = HigherTerm,
+                                candidate_id = N2,
+                                last_log_index = 5,
+                                last_log_term = 1},
+    {follower, #{log := Log, current_term := NewTerm}, [{next_event, VoteRpc}]}
+        = ra_server:handle_receive_snapshot(VoteRpc, FState1),
+    %% term should be updated
+    NewTerm = HigherTerm,
+    %% snapshot should be aborted
+    SS = ra_log:snapshot_state(Log),
+    undefined = ra_snapshot:accepting(SS),
+    ok.
+
+receive_snapshot_request_vote_lower_term(_Config) ->
+    %% When receiving a request_vote_rpc with a lower or equal term while in
+    %% receive_snapshot state, we should reject the vote without aborting
+    N1 = ?N1, N2 = ?N2, N3 = ?N3,
+    #{N3 := {_, FState0 = #{cluster := Config,
+                            current_term := CurTerm}, _}}
+    = init_servers([N1, N2, N3], {module, ra_queue, #{}}),
+    FState = FState0#{last_applied => 3},
+    LastTerm = 1,
+    Idx = 6,
+    ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = N1,
+                                  meta = snap_meta(Idx, LastTerm, Config),
+                                  chunk_state = {1, last},
+                                  data = []},
+    {receive_snapshot, FState1,
+     [{next_event, ISRpc}, {record_leader_msg, _}]} =
+        ra_server:handle_follower(ISRpc, FState),
+
+    %% Now receive a request_vote_rpc with lower term
+    LowerTerm = CurTerm - 1,
+    VoteRpc = #request_vote_rpc{term = LowerTerm,
+                                candidate_id = N2,
+                                last_log_index = 5,
+                                last_log_term = 1},
+    {receive_snapshot, FState1,
+     [{reply, #request_vote_result{term = CurTerm, vote_granted = false}}]}
+        = ra_server:handle_receive_snapshot(VoteRpc, FState1),
+
+    %% Also test with equal term
+    VoteRpcEqual = #request_vote_rpc{term = CurTerm,
+                                     candidate_id = N2,
+                                     last_log_index = 5,
+                                     last_log_term = 1},
+    {receive_snapshot, FState1,
+     [{reply, #request_vote_result{term = CurTerm, vote_granted = false}}]}
+        = ra_server:handle_receive_snapshot(VoteRpcEqual, FState1),
+    ok.
+
+receive_snapshot_pre_vote(_Config) ->
+    %% When receiving a pre_vote_rpc while in receive_snapshot state,
+    %% we should handle it without aborting the snapshot
+    N1 = ?N1, N2 = ?N2, N3 = ?N3,
+    #{N3 := {_, FState0 = #{cluster := Config,
+                            current_term := CurTerm}, _}}
+    = init_servers([N1, N2, N3], {module, ra_queue, #{}}),
+    FState = FState0#{last_applied => 3},
+    LastTerm = 1,
+    Idx = 6,
+    ISRpc = #install_snapshot_rpc{term = CurTerm, leader_id = N1,
+                                  meta = snap_meta(Idx, LastTerm, Config),
+                                  chunk_state = {1, last},
+                                  data = []},
+    {receive_snapshot, FState1,
+     [{next_event, ISRpc}, {record_leader_msg, _}]} =
+        ra_server:handle_follower(ISRpc, FState),
+
+    %% Now receive a pre_vote_rpc - should stay in receive_snapshot
+    Token = make_ref(),
+    PreVoteRpc = #pre_vote_rpc{term = CurTerm + 1,
+                               candidate_id = N2,
+                               last_log_index = 5,
+                               last_log_term = 1,
+                               machine_version = 0,
+                               token = Token},
+    {receive_snapshot, _FState2, Effects}
+        = ra_server:handle_receive_snapshot(PreVoteRpc, FState1),
+    %% Should have a reply effect with pre_vote_result
+    ?assert(lists:any(fun({reply, #pre_vote_result{}}) -> true;
+                         (_) -> false
+                      end, Effects)),
     ok.
 
 snapshotted_follower_received_append_entries(_Config) ->
