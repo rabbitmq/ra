@@ -5,8 +5,8 @@ This document describes the log compaction feature in Ra v3.
 ## Overview
 
 Compaction in Ra is intrinsically linked to the snapshotting feature. Standard 
-Raft snapshotting removes all entries in the Ra log below the snapshot index 
-where the snapshot is a full representation of the state machine state.
+Raft snapshotting removes all entries in the Ra log below the snapshot index
+that are not explicitly required by the state machine.
 
 The high level idea of compacting in Ra is that instead of deleting all segment 
 data that precedes the snapshot index, the state machine can emit a list of 
@@ -14,6 +14,8 @@ data that precedes the snapshot index, the state machine can emit a list of
 written to new compacted segments. The data for these indexes can then be 
 omitted from the snapshot to reduce its size and the write amplification 
 incurred by writing the snapshot.
+
+For example the `ra_kv` key-value store only keeps a map of Key => Raft Index in memory and reads the values from disk on demand when reading. 
 
 ### Machine Callback
 
