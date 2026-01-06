@@ -589,6 +589,7 @@ complete_accept(Chunk, Num, Machine,
     %% delete accepting marker file
     AcceptMarker = filename:join(SnapDir, <<"accepting">>),
     _ = prim_file:delete(AcceptMarker),
+    % ok = ra_lib:sync_dir(SnapDir),
     %% assert accepting marker is no longer there
     ?assertNot(filelib:is_file(AcceptMarker)),
     SmallestIdx = case ra_seq:first(LiveIndexes) of

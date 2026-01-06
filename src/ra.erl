@@ -89,8 +89,8 @@
     {wal_max_size_bytes, non_neg_integer()} |
     {wal_compute_checksums, boolean()}.
 
--type query_fun() :: fun((term()) -> term()) |
-                     {M :: module(), F :: atom(), A :: list()}.
+-type query_mfa() :: {M :: module(), F :: atom(), A :: list()}.
+-type query_fun() :: fun((term()) -> term()) | query_mfa().
 
 %% export some internal types
 -type index() :: ra_index().
@@ -117,6 +117,7 @@
               server_id/0,
               cluster_name/0,
               range/0,
+              query_mfa/0,
               query_fun/0,
               query_condition/0,
               from/0,
@@ -944,11 +945,12 @@ local_query(ServerId, QueryFun, Options) when is_map(Options) ->
 %% @param QueryFun the query function to run
 %% @end
 -spec leader_query(ServerId :: ra_server_id() | [ra_server_id()],
-                   QueryFun :: query_fun()) ->
+                   QueryFun :: query_mfa()) ->
     ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
     {ok, {ra_idxterm(), Reply :: term()}, not_known}.
-leader_query(ServerId, QueryFun) ->
-    leader_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
+leader_query(ServerId, QueryMFA)
+  when is_tuple(QueryMFA) ->
+    leader_query(ServerId, QueryMFA, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `leader_query/2' but accepts a custom timeout or a map of
 %% options.
@@ -966,7 +968,7 @@ leader_query(ServerId, QueryFun) ->
 %% @see leader_query/2
 %% @end
 -spec leader_query(ServerId :: ra_server_id() | [ra_server_id()],
-                   QueryFun :: query_fun(),
+                   QueryFun :: query_mfa(),
                    TimeoutOrOptions) ->
     ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
     {ok, {ra_idxterm(), Reply :: term()}, not_known}
@@ -974,14 +976,17 @@ leader_query(ServerId, QueryFun) ->
            Timeout :: timeout(),
            Options :: #{condition => query_condition(),
                         timeout => timeout()}.
-leader_query(ServerId, QueryFun, Timeout)
-  when Timeout =:= infinity orelse is_integer(Timeout) ->
-    ra_server_proc:query(ServerId, QueryFun, leader, #{}, Timeout);
-leader_query(ServerId, QueryFun, Options) when is_map(Options) ->
+leader_query(ServerId, QueryMFA, Timeout)
+  when is_tuple(QueryMFA) andalso
+       (Timeout =:= infinity orelse
+       is_integer(Timeout)) ->
+    ra_server_proc:query(ServerId, QueryMFA, leader, #{}, Timeout);
+leader_query(ServerId, QueryMFA, Options)
+  when is_map(Options) andalso
+       is_tuple(QueryMFA) ->
     Timeout = maps:get(timeout, Options, ?DEFAULT_TIMEOUT),
     Options1 = maps:remove(timeout, Options),
-    ra_server_proc:query(
-      ServerId, QueryFun, leader, Options1, Timeout).
+    ra_server_proc:query(ServerId, QueryMFA, leader, Options1, Timeout).
 
 %% @doc Query the state machine with a consistency guarantee.
 %% This allows the caller to query the state machine on the leader node with
@@ -993,10 +998,10 @@ leader_query(ServerId, QueryFun, Options) when is_map(Options) ->
 %% @param QueryFun the query function to run
 %% @end
 -spec consistent_query(ServerId :: ra_server_id() | [ra_server_id()],
-                       QueryFun :: query_fun()) ->
+                       QueryMFA :: query_mfa()) ->
     ra_server_proc:ra_leader_call_ret(Reply :: term()).
-consistent_query(ServerId, QueryFun) ->
-    consistent_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
+consistent_query(ServerId, QueryMFA) ->
+    consistent_query(ServerId, QueryMFA, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `consistent_query/2' but accepts a custom timeout.
 %% @param ServerId the ra server id(s) to send the query to
@@ -1005,16 +1010,17 @@ consistent_query(ServerId, QueryFun) ->
 %% @see consistent_query/2
 %% @end
 -spec consistent_query(ServerId :: ra_server_id() | [ra_server_id()],
-                       QueryFun :: query_fun(),
+                       QueryMFA :: query_mfa(),
                        Timeout :: timeout()) ->
     ra_server_proc:ra_leader_call_ret(Reply :: term()).
-consistent_query(ServerId, QueryFun, Timeout) ->
-    ra_server_proc:query(ServerId, QueryFun, consistent, #{}, Timeout).
+consistent_query(ServerId, QueryMFA, Timeout)
+  when is_tuple(QueryMFA) ->
+    ra_server_proc:query(ServerId, QueryMFA, consistent, #{}, Timeout).
 
 
 %% @doc Similar to `consistent_query/3' but will process an aux command
 %% after consensus has been achieved.
-%% @param ServerId the ra server id(s) to send the query to
+%% @param ServerId the ra server id(s) to try to send the query to in order
 %% @param QueryFun the query function to run
 %% @param Timeout the timeout to use
 %% @see consistent_query/2
@@ -1025,6 +1031,7 @@ consistent_query(ServerId, QueryFun, Timeout) ->
     ra_server_proc:ra_leader_call_ret(Reply :: term()).
 consistent_aux(ServerId, AuxCmd, Timeout) ->
     ra_server_proc:query(ServerId, AuxCmd, consistent_aux, #{}, Timeout).
+
 %% @doc Returns a list of cluster members
 %%
 %% Except if `{local, ServerId}' is passed, the query is sent to the specified

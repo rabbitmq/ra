@@ -14,6 +14,7 @@
 -include_lib("eunit/include/eunit.hrl").
 % -define(info, true).
 -define(SYS, ?MODULE).
+-define(IDMFA, {ra_lib, id, []}).
 
 %% common ra_log tests to ensure behaviour is equivalent across
 %% ra_log backends
@@ -536,19 +537,19 @@ recover_after_kill(Config) ->
     %% this should by the ?SYS release cursor interval of 128
     %% create a new snapshot
     {_F3, _AllDeq} = enq_deq_n(65, F2, Deqd),
-    {ok, MS, _} = ra:consistent_query(ServerId, fun (S) -> S end),
+    {ok, MS, _} = ra:consistent_query(ServerId, ?IDMFA),
     %% kill node again to trigger post snapshot recovery
     exit(whereis(Name), kill),
     timer:sleep(250),
     ra:members(ServerId),
     timer:sleep(200),
     % give leader time to commit noop
-    {ok, MS2, _} = ra:consistent_query(ServerId, fun (S) -> S end),
+    {ok, MS2, _} = ra:consistent_query(ServerId, ?IDMFA),
     ok = ra:stop_server(?SYS, ServerId),
     ?assertEqual(MS, MS2),
     ok = ra:restart_server(?SYS, ServerId),
     {ok, _, _} = ra:members(ServerId, 30000),
-    {ok, MS3, _} = ra:consistent_query(ServerId, fun (S) -> S end),
+    {ok, MS3, _} = ra:consistent_query(ServerId, ?IDMFA),
     ct:pal("~p ~p", [MS2, MS3]),
     ?assertEqual(MS2, MS3),
     ok.

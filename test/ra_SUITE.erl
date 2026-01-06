@@ -15,6 +15,7 @@
 
 -define(PROCESS_COMMAND_TIMEOUT, 6000).
 -define(SYS, default).
+-define(IDMFA, {ra_lib, id, []}).
 
 %% The dialyzer catches that the given reply mode is not included in the
 %% `ra_server:command_reply_mode()' type:
@@ -366,7 +367,7 @@ process_command_reply_from_local(Config) ->
     %% The server is stopped so the command is not handled.
     ?assertEqual({error, noproc},
                  ra:process_command(Follower, 5, Options)),
-    {ok, {_, 10}, _} = ra:leader_query(Leader, fun(State) -> State end),
+    {ok, {_, 10}, _} = ra:leader_query(Leader, ?IDMFA),
 
     %% The local member can't reply to the command request since it is stopped.
     ?assertMatch({timeout, _},
@@ -392,12 +393,12 @@ process_command_reply_from_member(Config) ->
 
     %% The process is no longer alive so the command is not handled.
     ?assertEqual({error, noproc}, ra:process_command(Follower, 5, Options)),
-    {ok, {_, 14}, _} = ra:leader_query(Leader, fun(State) -> State end),
+    {ok, {_, 14}, _} = ra:leader_query(Leader, ?IDMFA),
 
     %% The command is successfully handled on the leader but the member is
     %% not available to reply to the caller.
     ?assertMatch({timeout, _}, ra:process_command(Leader, 5, Options)),
-    {ok, {_, 19}, _} = ra:leader_query(Leader, fun(State) -> State end),
+    {ok, {_, 19}, _} = ra:leader_query(Leader, ?IDMFA),
 
     %% If the given member is not part of the cluster then the reply is
     %% performed by the leader.
@@ -460,7 +461,7 @@ pipeline_command_2_forwards_to_leader(Config) ->
     ok = ra:pipeline_command(B, 5),
     ok = ra:pipeline_command(C, 5),
     timer:sleep(50),
-    {ok, _, _} = ra:consistent_query(A, fun (X) -> X end),
+    {ok, _, _} = ra:consistent_query(A, ?IDMFA),
     terminate_cluster(Cluster).
 
 local_query(Config) ->
@@ -665,9 +666,9 @@ local_query_with_condition_option(Config) ->
 consistent_query_stale(Config) ->
     [A, B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
                                                add_machine()),
-    {ok, 0, _} = ra:consistent_query(B, fun(S) -> S end),
+    {ok, 0, _} = ra:consistent_query(B, ?IDMFA),
     {ok, _, Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
-    {ok, 5, _} = ra:consistent_query(Leader, fun(S) -> S end),
+    {ok, 5, _} = ra:consistent_query(Leader, ?IDMFA),
 
     NonLeader = hd([Node || Node <- [A,B], Node =/= Leader]),
     ra:stop_server(?SYS, NonLeader),
@@ -679,13 +680,13 @@ consistent_query_stale(Config) ->
 
     ra:restart_server(?SYS, NonLeader),
 
-    {ok, NonLeaderV, _} = ra:consistent_query(NonLeader, fun(S) -> S end),
-    {ok, LeaderV, _} = ra:consistent_query(Leader, fun(S) -> S end),
+    {ok, NonLeaderV, _} = ra:consistent_query(NonLeader, ?IDMFA),
+    {ok, LeaderV, _} = ra:consistent_query(Leader, ?IDMFA),
     ct:pal("LeaderV ~p~n NonLeaderV ~p", [LeaderV, NonLeaderV]),
     ?assertMatch(LeaderV, NonLeaderV),
     {ok, {{Index, _}, _}, _} = ra:local_query(Leader, fun(S) -> S end),
-    {ok, V, _} = ra:consistent_query(NonLeader, fun(S) -> S end),
-    {ok, V, _} = ra:consistent_query(Leader, fun(S) -> S end),
+    {ok, V, _} = ra:consistent_query(NonLeader, ?IDMFA),
+    {ok, V, _} = ra:consistent_query(Leader, ?IDMFA),
     {ok, {{IndexAfter, _}, _}, _} = ra:local_query(Leader, fun(S) -> S end),
     ?assertMatch(Index, IndexAfter),
     terminate_cluster(Cluster).
@@ -720,7 +721,7 @@ members_info(Config) ->
     C =  {CName, Host},
     ok = ra:start_server(default, Name, CSpec, add_machine(), InitNodes),
     {ok, _, _} = ra:add_member(Leader, CSpec),
-    {ok, 9, Leader} = ra:consistent_query(C, fun(S) -> S end),
+    {ok, 9, Leader} = ra:consistent_query(C, ?IDMFA),
     timer:sleep(100),
     ?assertMatch({ok,
                   #{Follower := #{status := normal,
@@ -757,10 +758,10 @@ consistent_query(Config) ->
                                                add_machine()),
     {ok, _, Leader} = ra:process_command(A, 9,
                                          ?PROCESS_COMMAND_TIMEOUT),
-    {ok, 9, Leader} = ra:consistent_query(A, fun(S) -> S end),
+    {ok, 9, Leader} = ra:consistent_query(A, ?IDMFA),
     {ok, 14, _} = ra:process_command(Leader, 5,
                                     ?PROCESS_COMMAND_TIMEOUT),
-    {ok, 14, Leader} = ra:consistent_query(A, fun(S) -> S end),
+    {ok, 14, Leader} = ra:consistent_query(A, ?IDMFA),
     terminate_cluster(Cluster).
 
 new_value(A, _) ->
@@ -779,7 +780,7 @@ consistent_query_after_restart(Config) ->
          restart_ra(DataDir),
          ok = ra:restart_server(?SYS, A),
          ok = ra:restart_server(?SYS, B),
-         ?assertMatch({ok, N, _}, ra:consistent_query(A, fun(S) -> S end))
+         ?assertMatch({ok, N, _}, ra:consistent_query(A, ?IDMFA))
      end || N <- lists:seq(1, 30)],
 
     terminate_cluster(Cluster),
@@ -794,7 +795,7 @@ consistent_query_minority(Config) ->
     ra:stop_server(?SYS, F1),
     ra:stop_server(?SYS, F2),
 
-    {timeout, _} = ra:consistent_query(Leader, fun(S) -> S end),
+    {timeout, _} = ra:consistent_query(Leader, ?IDMFA),
     %% restart after a short sleep so that quorum is restored whilst the next
     %% query is executing
     _ = spawn(fun() ->
@@ -802,8 +803,8 @@ consistent_query_minority(Config) ->
                       ra:restart_server(?SYS, F1),
                       ok
               end),
-    {ok, 9, _} = ra:consistent_query(Leader, fun(S) -> S end, 10000),
-    {ok, 9, _} = ra:consistent_query(Leader, fun(S) -> S end),
+    {ok, 9, _} = ra:consistent_query(Leader, ?IDMFA, 10000),
+    {ok, 9, _} = ra:consistent_query(Leader, ?IDMFA),
     _ = terminate_cluster(Cluster),
     ok.
 
@@ -817,9 +818,9 @@ consistent_query_leader_change(Config) ->
     ok = ra:transfer_leadership(A, A),
     {ok, _, A} = ra:process_command(A, 9, ?PROCESS_COMMAND_TIMEOUT),
     %% do two consistent queries, this will put query_index == 2 everywhere
-    {ok, 9, A} = ra:consistent_query(A, fun(S) -> S end),
+    {ok, 9, A} = ra:consistent_query(A, ?IDMFA),
     ok = ra:stop_server(?SYS, E),
-    {ok, 9, A} = ra:consistent_query(A, fun(S) -> S end),
+    {ok, 9, A} = ra:consistent_query(A, ?IDMFA),
     %% restart B
     ok = ra:stop_server(?SYS, B),
     ok = ra:restart_server(?SYS, B),
@@ -841,14 +842,14 @@ consistent_query_leader_change(Config) ->
       end, 20),
     %% restart E
     ok = ra:restart_server(?SYS, E),
-    {ok, 9, B} = ra:consistent_query(B, fun(S) -> S end),
+    {ok, 9, B} = ra:consistent_query(B, ?IDMFA),
 
     ok = ra:stop_server(?SYS, A),
     ok = ra:stop_server(?SYS, C),
     ok = ra:stop_server(?SYS, D),
 
     %% there is no quorum now so this should time out
-    case ra:consistent_query(B, fun(S) -> S end, 500) of
+    case ra:consistent_query(B, ?IDMFA, 500) of
         {timeout, _} ->
             ok;
         {ok, _, _} ->
@@ -858,11 +859,11 @@ consistent_query_leader_change(Config) ->
     ok = ra:restart_server(?SYS, A),
     ok = ra:restart_server(?SYS, C),
     ok = ra:restart_server(?SYS, D),
-    {ok, 9, _} = ra:consistent_query(A, fun(S) -> S end),
-    {ok, 9, _} = ra:consistent_query(B, fun(S) -> S end),
-    {ok, 9, _} = ra:consistent_query(C, fun(S) -> S end),
-    {ok, 9, _} = ra:consistent_query(D, fun(S) -> S end),
-    {ok, 9, _} = ra:consistent_query(E, fun(S) -> S end),
+    {ok, 9, _} = ra:consistent_query(A, ?IDMFA),
+    {ok, 9, _} = ra:consistent_query(B, ?IDMFA),
+    {ok, 9, _} = ra:consistent_query(C, ?IDMFA),
+    {ok, 9, _} = ra:consistent_query(D, ?IDMFA),
+    {ok, 9, _} = ra:consistent_query(E, ?IDMFA),
 
     terminate_cluster(Cluster),
     ok.
@@ -874,7 +875,7 @@ add_member(Config) ->
     C = {ra_server:name(Name, "3"), node()},
     ok = ra:start_server(default, Name, C, add_machine(), Cluster),
     {ok, _, _Leader} = ra:add_member(Leader, C),
-    {ok, 9, Leader} = ra:consistent_query(C, fun(S) -> S end),
+    {ok, 9, Leader} = ra:consistent_query(C, ?IDMFA),
     terminate_cluster([C | Cluster]).
 
 server_catches_up(Config) ->
@@ -1468,7 +1469,7 @@ issue_op(Name, Op) ->
     Leader.
 
 validate_state_on_node(Name, Expected) ->
-    {ok, Expected, _} = ra:consistent_query(Name, fun(X) -> X end).
+    {ok, Expected, _} = ra:consistent_query(Name, ?IDMFA).
 
 dump(T) ->
     ct:pal("DUMP: ~p", [T]),
