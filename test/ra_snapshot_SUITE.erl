@@ -20,6 +20,10 @@
 
 -define(MAGIC, "RASN").
 -define(VERSION, 1).
+
+%% Indexes file format constants
+-define(IDX_MAGIC, "RASI").
+-define(IDX_VERSION, 1).
 %%%===================================================================
 %%% Common Test callbacks
 %%%===================================================================
@@ -43,7 +47,12 @@ all_tests() ->
      accept_snapshot,
      abort_accept,
      accept_receives_snapshot_written_with_higher_index,
-     accept_receives_snapshot_written_with_higher_index_2
+     accept_receives_snapshot_written_with_higher_index_2,
+     %% indexes format tests
+     write_and_read_indexes,
+     indexes_invalid_version,
+     indexes_checksum_error,
+     indexes_backward_compat
     ].
 
 groups() ->
@@ -504,6 +513,88 @@ accept_receives_snapshot_written_with_higher_index_2(Config) ->
     after 1000 ->
               error(snapshot_event_timeout)
     end,
+    ok.
+
+%% Test that write_indexes and indexes work correctly with the new format
+write_and_read_indexes(Config) ->
+    SnapDir = ?config(snap_dir, Config),
+    TestDir = filename:join(SnapDir, "test_indexes"),
+    ok = ra_lib:make_dir(TestDir),
+
+    %% Test with a sample indexes data structure
+    Indexes = ra_seq:from_list([1, 2, 3, 5, 8, 13, 21]),
+
+    %% Write indexes
+    ok = ra_snapshot:write_indexes(TestDir, Indexes),
+
+    %% Read and verify
+    {ok, ReadIndexes} = ra_snapshot:indexes(TestDir),
+    ?assertEqual(Indexes, ReadIndexes),
+
+    %% Verify the file format manually
+    File = filename:join(TestDir, <<"indexes">>),
+    {ok, Bin} = file:read_file(File),
+    <<?IDX_MAGIC, ?IDX_VERSION:8/unsigned, Crc:32/unsigned, Data/binary>> = Bin,
+    ?assertEqual(Crc, erlang:crc32(Data)),
+    ?assertEqual(Indexes, binary_to_term(Data)),
+    ok.
+
+%% Test that indexes/1 returns error for invalid version
+indexes_invalid_version(Config) ->
+    SnapDir = ?config(snap_dir, Config),
+    TestDir = filename:join(SnapDir, "test_invalid_version"),
+    ok = ra_lib:make_dir(TestDir),
+
+    %% Write a file with invalid version (99)
+    Indexes = ra_seq:from_list([1, 2, 3]),
+    Data = term_to_binary(Indexes),
+    Crc = erlang:crc32(Data),
+    InvalidVersion = 99,
+    File = filename:join(TestDir, <<"indexes">>),
+    ok = file:write_file(File, [<<?IDX_MAGIC,
+                                   InvalidVersion:8/unsigned,
+                                   Crc:32/unsigned>>,
+                                 Data]),
+
+    %% Should return invalid_version error
+    ?assertEqual({error, {invalid_version, InvalidVersion}},
+                 ra_snapshot:indexes(TestDir)),
+    ok.
+
+%% Test that indexes/1 returns error for checksum mismatch
+indexes_checksum_error(Config) ->
+    SnapDir = ?config(snap_dir, Config),
+    TestDir = filename:join(SnapDir, "test_checksum_error"),
+    ok = ra_lib:make_dir(TestDir),
+
+    %% Write a file with wrong checksum
+    Indexes = ra_seq:from_list([1, 2, 3]),
+    Data = term_to_binary(Indexes),
+    WrongCrc = 12345678,  %% intentionally wrong
+    File = filename:join(TestDir, <<"indexes">>),
+    ok = file:write_file(File, [<<?IDX_MAGIC,
+                                   ?IDX_VERSION:8/unsigned,
+                                   WrongCrc:32/unsigned>>,
+                                 Data]),
+
+    %% Should return checksum_error
+    ?assertEqual({error, checksum_error}, ra_snapshot:indexes(TestDir)),
+    ok.
+
+%% Test backward compatibility with old format (plain term_to_binary)
+indexes_backward_compat(Config) ->
+    SnapDir = ?config(snap_dir, Config),
+    TestDir = filename:join(SnapDir, "test_backward_compat"),
+    ok = ra_lib:make_dir(TestDir),
+
+    %% Write a file in old format (plain term_to_binary, no header)
+    Indexes = ra_seq:from_list([1, 2, 3, 5, 8]),
+    File = filename:join(TestDir, <<"indexes">>),
+    ok = file:write_file(File, term_to_binary(Indexes)),
+
+    %% Should still be able to read it
+    {ok, ReadIndexes} = ra_snapshot:indexes(TestDir),
+    ?assertEqual(Indexes, ReadIndexes),
     ok.
 
 init_state(Config) ->

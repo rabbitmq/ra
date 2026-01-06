@@ -95,6 +95,10 @@
 
 -define(ETSTBL, ra_log_snapshot_state).
 
+%% Indexes file format constants
+-define(IDX_MAGIC, "RASI").  %% RA Snapshot Indexes
+-define(IDX_VERSION, 1).
+
 -opaque state() :: #?MODULE{}.
 
 -export_type([state/0]).
@@ -470,12 +474,11 @@ promote_checkpoint(PromotionIdx,
                           %% into a snapshot.
                           ok = Mod:sync(Checkpoint),
                           ok = ra_file:rename(Checkpoint, Snapshot),
-                          F = filename:join(SnapDir, <<"indexes">>),
-                          Indexes = case file:read_file(F) of
-                                        {ok, Bin} ->
-                                            binary_to_term(Bin);
+                          Indexes = case indexes(Snapshot) of
+                                        {ok, Idxs} ->
+                                            Idxs;
                                         _ ->
-                                         []
+                                            []
                                     end,
                           EndTime = erlang:monotonic_time(),
                           Duration = erlang:convert_time_unit(EndTime - StartTime,
@@ -762,19 +765,51 @@ take_extra_checkpoints(#?MODULE{checkpoints = Checkpoints0,
             {State0, Checks}
     end.
 
+%% @doc
+%% Indexes file format:
+%% "RASI"           (4 bytes - magic)
+%% Version          (1 byte - unsigned)
+%% CRC32            (4 bytes - unsigned 32-bit integer)
+%% Data             (binary - term_to_binary of indexes)
+%% @end
 -spec write_indexes(file:filename_all(), ra_seq:state()) ->
     ok | {error, file:posix()}.
 write_indexes(Dir, Indexes) ->
     File = filename:join(Dir, <<"indexes">>),
-    ra_lib:write_file(File, term_to_binary(Indexes)).
+    Data = term_to_binary(Indexes),
+    Crc = erlang:crc32(Data),
+    ra_lib:write_file(File, [<<?IDX_MAGIC,
+                                ?IDX_VERSION:8/unsigned,
+                                Crc:32/unsigned>>,
+                              Data]).
 
 -spec indexes(file:filename_all()) ->
-    {ok, ra_seq:state()} | {error, file:posix()}.
+    {ok, ra_seq:state()} |
+    {error, invalid_format |
+            {invalid_version, integer()} |
+            checksum_error |
+            file:posix()}.
 indexes(Dir) ->
     File = filename:join(Dir, <<"indexes">>),
     case prim_file:read_file(File) of
+        {ok, <<?IDX_MAGIC, ?IDX_VERSION:8/unsigned, Crc:32/unsigned, Data/binary>>} ->
+            case erlang:crc32(Data) of
+                Crc ->
+                    {ok, binary_to_term(Data)};
+                _ ->
+                    {error, checksum_error}
+            end;
+        {ok, <<?IDX_MAGIC, Version:8/unsigned, _Crc:32/unsigned, _Data/binary>>} ->
+            {error, {invalid_version, Version}};
         {ok, Bin} ->
-            {ok, binary_to_term(Bin)};
+            %% Backward compatibility: old format without header
+            %% Try to parse as plain term_to_binary data
+            try
+                {ok, binary_to_term(Bin)}
+            catch
+                _:_ ->
+                    {error, invalid_format}
+            end;
         {error, enoent} ->
             %% no indexes
             {ok, []};
