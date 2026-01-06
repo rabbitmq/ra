@@ -106,6 +106,15 @@
               index_mode/0,
               ra_log_segment_options/0]).
 
+%% Index format abstraction - hides V1/V2 differences
+-record(idx_fmt, {version :: 1 | 2,
+                  record_size :: pos_integer(),
+                  offset_size :: 32 | 64}).
+
+-compile({inline, [idx_fmt/1,
+                   decode_index_record/3,
+                   encode_index_record/6]}).
+
 -spec open(Filename :: file:filename_all()) ->
     {ok, state()} | {error, term()}.
 open(Filename) ->
@@ -264,13 +273,12 @@ append(#state{cfg = #cfg{version = Version,
         false ->
             % TODO: check length is less than #FFFFFFFF ??
             Checksum = compute_checksum(Cfg, Data),
-            OSize = offset_size(Version),
-            IndexData = <<Index:64/unsigned, Term:64/unsigned,
-                          DataOffset:OSize/unsigned, Length:32/unsigned,
-                          Checksum:32/unsigned>>,
+            Fmt = idx_fmt(Version),
+            IndexData = encode_index_record(Fmt, Index, Term, DataOffset,
+                                            Length, Checksum),
             Range = update_range(Range0, Index),
             % fsync is done explicitly
-            {ok, State#state{index_offset = IndexOffset + index_record_size(Version),
+            {ok, State#state{index_offset = IndexOffset + Fmt#idx_fmt.record_size,
                              data_offset = DataOffset + Length,
                              range = Range,
                              pending_index = [IdxPend0, IndexData],
@@ -333,13 +341,9 @@ flush(#state{cfg = #cfg{fd = Fd},
            fun((binary()) -> term()),
            fun(({ra_index(), ra_term(), term()}, Acc) -> Acc), Acc) ->
     Acc when Acc :: term().
-fold(#state{cfg = #cfg{mode = read} = Cfg,
-            cache = Cache,
-            index = Index,
-            num_entries = NumEntries},
+fold(#state{cfg = #cfg{mode = read}} = State,
      FromIdx, ToIdx, Fun, AccFun, Acc) ->
-    fold0(Cfg, Cache, FromIdx, ToIdx, Index, NumEntries, Fun, AccFun, Acc,
-          error).
+    fold0(State, FromIdx, ToIdx, Fun, AccFun, Acc, error).
 
 -spec fold(state(),
            FromIdx :: ra_index(),
@@ -348,13 +352,9 @@ fold(#state{cfg = #cfg{mode = read} = Cfg,
            fun(({ra_index(), ra_term(), term()}, Acc) -> Acc), Acc,
             MissingKeyStrat :: error | return) ->
     Acc when Acc :: term().
-fold(#state{cfg = #cfg{mode = read} = Cfg,
-            cache = Cache,
-            index = Index,
-            num_entries = NumEntries},
+fold(#state{cfg = #cfg{mode = read}} = State,
      FromIdx, ToIdx, Fun, AccFun, Acc, MissingKeyStrat) ->
-    fold0(Cfg, Cache, FromIdx, ToIdx, Index, NumEntries, Fun, AccFun, Acc,
-          MissingKeyStrat).
+    fold0(State, FromIdx, ToIdx, Fun, AccFun, Acc, MissingKeyStrat).
 
 -spec is_modified(state()) -> boolean().
 is_modified(#state{cfg = #cfg{fd = Fd},
@@ -464,6 +464,7 @@ read_sparse_binary(Fd, Version, RecSize, NumEntries, IndexBin,
     end.
 
 %% Prepare cache for binary mode by finding consecutive index runs
+%% Uses binary search with position hints for efficiency
 prepare_cache_binary(_Fd, _Version, _RecSize, _NumEntries, _IndexBin, [_]) ->
     undefined;
 prepare_cache_binary(Fd, Version, RecSize, NumEntries, IndexBin,
@@ -483,10 +484,7 @@ prepare_cache_binary(Fd, Version, RecSize, NumEntries, IndexBin,
                                                       FstFoundPos, NumEntries - 1,
                                                       LastIdx) of
                         {ok, {_, LastPos, LastLength, _}, _} ->
-                            CacheLen = cache_length(FstPos, FstLength,
-                                                    LastPos, LastLength),
-                            {ok, CacheData} = file:pread(Fd, FstPos, CacheLen),
-                            {FstPos, byte_size(CacheData), CacheData};
+                            make_cache(Fd, FstPos, FstLength, LastPos, LastLength);
                         not_found ->
                             undefined
                     end;
@@ -494,6 +492,12 @@ prepare_cache_binary(Fd, Version, RecSize, NumEntries, IndexBin,
                     undefined
             end
     end.
+
+%% Create cache by reading data range from file
+make_cache(Fd, FstPos, FstLength, LastPos, LastLength) ->
+    CacheLen = cache_length(FstPos, FstLength, LastPos, LastLength),
+    {ok, CacheData} = file:pread(Fd, FstPos, CacheLen),
+    {FstPos, byte_size(CacheData), CacheData}.
 
 %% Binary search with hint optimization for sequential ascending reads
 %% Index is guaranteed monotonically increasing (overwrites fall back to map mode)
@@ -581,7 +585,7 @@ read_sparse0(Fd, [NextIdx | Rem] = Indexes, Index, Cache0, Acc, AccFun, Num)
                     {ok, Data} = file:pread(Fd, Pos, Length),
                     read_sparse0(Fd, Rem, Index, undefined,
                                  AccFun(NextIdx, Term, Data, Acc),
-                                 AccFun, Num+1);
+                                 AccFun, Num + 1);
                 Cache ->
                     read_sparse0(Fd, Indexes, Index, Cache,
                                  Acc, AccFun, Num)
@@ -601,21 +605,24 @@ cache_read({CPos, CLen, Bin}, Pos, Length)
 cache_read(_, _, _) ->
     false.
 
+%% Prepare cache for map mode by finding consecutive index runs
 prepare_cache(_Fd, [_], _SegIndex) ->
     undefined;
 prepare_cache(Fd, [FirstIdx | Rem], SegIndex) ->
+    prepare_cache_for_run(Fd, FirstIdx, Rem,
+                          fun(Idx) -> map_get_(Idx, SegIndex) end).
+
+%% Shared cache preparation logic for consecutive index runs
+%% LookupFun returns {Term, Pos, Length, Crc} for an index
+prepare_cache_for_run(Fd, FirstIdx, Rem, LookupFun) ->
     case consec_run(FirstIdx, FirstIdx, Rem) of
         {Idx, Idx} ->
-            %% no run, no cache;
+            %% no run, no cache
             undefined;
         {FirstIdx, LastIdx} ->
-            {_, FstPos, FstLength, _} = map_get_(FirstIdx, SegIndex),
-            {_, LastPos, LastLength, _} = map_get_(LastIdx, SegIndex),
-            % %% read at least the remainder of the block from
-            % %% the first position or the length of the first record
-            CacheLen = cache_length(FstPos, FstLength, LastPos, LastLength),
-            {ok, CacheData} = file:pread(Fd, FstPos, CacheLen),
-            {FstPos, byte_size(CacheData), CacheData}
+            {_, FstPos, FstLength, _} = LookupFun(FirstIdx),
+            {_, LastPos, LastLength, _} = LookupFun(LastIdx),
+            make_cache(Fd, FstPos, FstLength, LastPos, LastLength)
     end.
 
 map_get_(Key, Map) when is_map_key(Key, Map) ->
@@ -623,92 +630,61 @@ map_get_(Key, Map) when is_map_key(Key, Map) ->
 map_get_(Key, _Map) ->
     exit({missing_key, Key}).
 
--spec term_query(state(), Idx :: ra_index()) -> option(ra_term()).
-term_query(#state{index = Index,
-                  num_entries = NumEntries,
-                  cfg = #cfg{version = Version,
-                             index_record_size = RecSize,
-                             index_mode = IndexMode}}, Idx) ->
+%% Unified index lookup that abstracts over map/binary modes
+%% Returns {ok, index_record_data()} | not_found
+lookup_index(#state{index = Index,
+                    num_entries = NumEntries,
+                    cfg = #cfg{version = Version,
+                               index_record_size = RecSize,
+                               index_mode = IndexMode}}, Idx) ->
     case IndexMode of
         binary when is_binary(Index) ->
-            %% Binary search on monotonically increasing index
-            case binary_search_index(Version, Index, RecSize, 0,
-                                     NumEntries - 1, Idx) of
-                {ok, {Term, _, _, _}} ->
-                    Term;
-                not_found ->
-                    undefined
-            end;
+            binary_search_index(Version, Index, RecSize, 0, NumEntries - 1, Idx);
         _ ->
             case Index of
-                #{Idx := {Term, _, _, _}} ->
-                    Term;
+                #{Idx := Record} ->
+                    {ok, Record};
                 _ ->
-                    undefined
+                    not_found
             end
     end.
 
-fold0(_Cfg, _Cache, Idx, FinalIdx, _, _, _Fun, _AccFun, Acc, _)
+-spec term_query(state(), Idx :: ra_index()) -> option(ra_term()).
+term_query(State, Idx) ->
+    case lookup_index(State, Idx) of
+        {ok, {Term, _, _, _}} ->
+            Term;
+        not_found ->
+            undefined
+    end.
+
+fold0(_State, Idx, FinalIdx, _Fun, _AccFun, Acc, _)
   when Idx > FinalIdx ->
     Acc;
-fold0(#cfg{index_mode = binary,
-           version = Version,
-           index_record_size = RecSize} = Cfg,
-      Cache0, Idx, FinalIdx, Index, NumEntries, Fun, AccFun, Acc0,
-      MissingKeyStrat)
-  when is_binary(Index) ->
-    %% Binary mode: use binary search
-    case binary_search_index(Version, Index, RecSize, 0,
-                             NumEntries - 1, Idx) of
+fold0(#state{cfg = Cfg, cache = Cache0} = State, Idx, FinalIdx, Fun, AccFun,
+      Acc0, MissingKeyStrat) ->
+    case lookup_index(State, Idx) of
         {ok, {Term, Offset, Length, Crc} = IdxRec} ->
             case pread(Cfg, Cache0, Offset, Length) of
                 {ok, Data, Cache} ->
                     case validate_checksum(Crc, Data) of
                         true ->
                             Acc = AccFun({Idx, Term, Fun(Data)}, Acc0),
-                            fold0(Cfg, Cache, Idx+1, FinalIdx,
-                                  Index, NumEntries, Fun, AccFun, Acc,
-                                  MissingKeyStrat);
-                        false ->
-                            exit({ra_log_segment_crc_check_failure, Idx, IdxRec,
-                                  Cfg#cfg.filename})
-                    end;
-                {error, partial_data} ->
-                    exit({ra_log_segment_unexpected_eof, Idx, IdxRec,
-                          Cfg#cfg.filename})
-            end;
-        not_found when MissingKeyStrat == error ->
-            exit({missing_key, Idx, Cfg#cfg.filename});
-        not_found when MissingKeyStrat == return ->
-            Acc0
-    end;
-fold0(Cfg, Cache0, Idx, FinalIdx, Index, NumEntries, Fun, AccFun,
-      Acc0, MissingKeyStrat) ->
-    %% Map mode: use map lookup
-    case Index of
-        #{Idx := {Term, Offset, Length, Crc} = IdxRec} ->
-            case pread(Cfg, Cache0, Offset, Length) of
-                {ok, Data, Cache} ->
-                    %% perform crc check
-                    case validate_checksum(Crc, Data) of
-                        true ->
-                            Acc = AccFun({Idx, Term, Fun(Data)}, Acc0),
-                            fold0(Cfg, Cache, Idx+1, FinalIdx,
-                                  Index, NumEntries, Fun, AccFun, Acc,
-                                  MissingKeyStrat);
+                            fold0(State#state{cache = Cache}, Idx + 1, FinalIdx,
+                                  Fun, AccFun, Acc, MissingKeyStrat);
                         false ->
                             %% CRC check failures are irrecoverable
                             exit({ra_log_segment_crc_check_failure, Idx, IdxRec,
                                   Cfg#cfg.filename})
                     end;
                 {error, partial_data} ->
-                    %% we did not read the correct number of bytes suggesting
+                    %% we did not read the correct number of bytes
                     exit({ra_log_segment_unexpected_eof, Idx, IdxRec,
                           Cfg#cfg.filename})
             end;
-        _ when MissingKeyStrat == error ->
+        not_found when MissingKeyStrat == error ->
             exit({missing_key, Idx, Cfg#cfg.filename});
-        _ when MissingKeyStrat == return ->
+        not_found when MissingKeyStrat == return ->
             Acc0
     end.
 
@@ -902,17 +878,14 @@ recover_index_binary(Fd, Version, MaxCount) ->
 %% or {overwrites_detected, NumEntries, DataOffset, Range} if overwrites found.
 %% When overwrites are detected, caller should fall back to map mode.
 scan_index_binary(Version, Bin, DataOffset) ->
-    scan_index_binary(Version, Bin, 0, 0, 0, DataOffset, undefined).
+    Fmt = idx_fmt(Version),
+    scan_index_binary_loop(Fmt, Bin, 0, 0, 0, DataOffset, undefined).
 
-scan_index_binary(2, Bin, Offset, Num, LastIdx, DataOffset, Range)
-  when byte_size(Bin) >= Offset + ?INDEX_RECORD_SIZE_V2 ->
-    case Bin of
-        <<_:Offset/binary, 0:64/unsigned, 0:64/unsigned, 0:64/unsigned,
-          0:32/unsigned, 0:32/integer, _/binary>> ->
+scan_index_binary_loop(Fmt, Bin, ByteOffset, Num, LastIdx, DataOffset, Range) ->
+    case decode_index_record(Fmt, Bin, ByteOffset) of
+        eof ->
             {ok, Num, DataOffset, Range};
-        <<_:Offset/binary, Idx:64/unsigned, _Term:64/unsigned,
-          EntryOffset:64/unsigned, Length:32/unsigned,
-          _Crc:32/integer, _/binary>> ->
+        {ok, {Idx, _Term, EntryOffset, Length, _Crc}} ->
             %% Detect overwrite: if Idx goes backwards, fall back to map mode
             case Idx < LastIdx of
                 true ->
@@ -921,32 +894,11 @@ scan_index_binary(2, Bin, Offset, Num, LastIdx, DataOffset, Range)
                 false ->
                     NewRange = update_range(Range, Idx),
                     NewDataOffset = EntryOffset + Length,
-                    scan_index_binary(2, Bin, Offset + ?INDEX_RECORD_SIZE_V2,
-                                      Num + 1, Idx, NewDataOffset, NewRange)
+                    RecSize = Fmt#idx_fmt.record_size,
+                    scan_index_binary_loop(Fmt, Bin, ByteOffset + RecSize,
+                                           Num + 1, Idx, NewDataOffset, NewRange)
             end
-    end;
-scan_index_binary(1, Bin, Offset, Num, LastIdx, DataOffset, Range)
-  when byte_size(Bin) >= Offset + ?INDEX_RECORD_SIZE_V1 ->
-    case Bin of
-        <<_:Offset/binary, 0:64/unsigned, 0:64/unsigned, 0:32/unsigned,
-          0:32/unsigned, 0:32/integer, _/binary>> ->
-            {ok, Num, DataOffset, Range};
-        <<_:Offset/binary, Idx:64/unsigned, _Term:64/unsigned,
-          EntryOffset:32/unsigned, Length:32/unsigned,
-          _Crc:32/integer, _/binary>> ->
-            case Idx < LastIdx of
-                true ->
-                    {overwrites_detected, Num + 1, EntryOffset + Length,
-                     update_range(Range, Idx)};
-                false ->
-                    NewRange = update_range(Range, Idx),
-                    NewDataOffset = EntryOffset + Length,
-                    scan_index_binary(1, Bin, Offset + ?INDEX_RECORD_SIZE_V1,
-                                      Num + 1, Idx, NewDataOffset, NewRange)
-            end
-    end;
-scan_index_binary(_, _, _, Num, _, DataOffset, Range) ->
-    {ok, Num, DataOffset, Range}.
+    end.
 
 %% Binary search on in-memory index binary
 %% Returns {ok, {Term, Offset, Length, Crc}} or not_found
@@ -972,30 +924,9 @@ binary_search_index(Version, Bin, RecSize, Low, High, Idx) ->
     end.
 
 %% Parse an index entry from a binary at the given offset
-parse_index_entry(2, Bin, Offset)
-  when byte_size(Bin) >= Offset + ?INDEX_RECORD_SIZE_V2 ->
-    case Bin of
-        <<_:Offset/binary, 0:64/unsigned, 0:64/unsigned, 0:64/unsigned,
-          0:32/unsigned, 0:32/integer, _/binary>> ->
-            eof;
-        <<_:Offset/binary, Idx:64/unsigned, Term:64/unsigned,
-          DataOffset:64/unsigned, Length:32/unsigned,
-          Crc:32/integer, _/binary>> ->
-            {ok, {Idx, Term, DataOffset, Length, Crc}}
-    end;
-parse_index_entry(1, Bin, Offset)
-  when byte_size(Bin) >= Offset + ?INDEX_RECORD_SIZE_V1 ->
-    case Bin of
-        <<_:Offset/binary, 0:64/unsigned, 0:64/unsigned, 0:32/unsigned,
-          0:32/unsigned, 0:32/integer, _/binary>> ->
-            eof;
-        <<_:Offset/binary, Idx:64/unsigned, Term:64/unsigned,
-          DataOffset:32/unsigned, Length:32/unsigned,
-          Crc:32/integer, _/binary>> ->
-            {ok, {Idx, Term, DataOffset, Length, Crc}}
-    end;
-parse_index_entry(_, _, _) ->
-    eof.
+%% Wrapper that uses the unified decode_index_record
+parse_index_entry(Version, Bin, Offset) ->
+    decode_index_record(idx_fmt(Version), Bin, Offset).
 
 dump_index(File) ->
     {ok, Fd} = file:open(File, [read, raw, binary
@@ -1035,138 +966,70 @@ dump_index_data(Rest, [{Idx, Term, Offset, Length} | Acc]);
 dump_index_data(_, Acc) ->
     lists:reverse(Acc).
 
-parse_index_data(2, Data, DataOffset) ->
-    parse_index_data(Data, 0, 0, DataOffset, undefined, #{});
-parse_index_data(1, Data, DataOffset) ->
-    parse_index_data_v1(Data, 0, 0, DataOffset, undefined, #{}).
+parse_index_data(Version, Data, DataOffset) ->
+    Fmt = idx_fmt(Version),
+    parse_index_data_loop(Fmt, Data, 0, 0, 0, DataOffset, undefined, #{}).
 
-parse_index_data(<<>>, Num, _LastIdx, DataOffset, Range, Index) ->
-    % end of data
-    {Num, DataOffset, Range, Index};
-parse_index_data(<<0:64/unsigned, 0:64/unsigned, 0:64/unsigned,
-                   0:32/unsigned, 0:32/integer, _Rest/binary>>,
-                 Num, _LastIdx, DataOffset, Range, Index) ->
-    % partially written index
-    % end of written data
-    {Num, DataOffset, Range, Index};
-parse_index_data(<<Idx:64/unsigned, Term:64/unsigned,
-                   Offset:64/unsigned, Length:32/unsigned,
-                   Crc:32/integer, Rest/binary>>,
-                 Num, LastIdx, _DataOffset, Range, Index0) ->
-    % trim index entries if Idx goes "backwards"
-    Index = case Idx < LastIdx of
-                true -> maps:filter(fun (K, _) when K > Idx -> false;
-                                        (_, _) -> true
-                                    end, Index0);
-                false -> Index0
-            end,
-    parse_index_data(Rest, Num+1, Idx,
-                     Offset + Length,
-                     update_range(Range, Idx),
-                     Index#{Idx => {Term, Offset, Length, Crc}}).
-
-parse_index_data_v1(<<>>, Num, _LastIdx, DataOffset, Range, Index) ->
-    % end of data
-    {Num, DataOffset, Range, Index};
-parse_index_data_v1(<<0:64/unsigned, 0:64/unsigned, 0:32/unsigned,
-                   0:32/unsigned, 0:32/integer, _Rest/binary>>,
-                 Num, _LastIdx, DataOffset, Range, Index) ->
-    % partially written index
-    % end of written data
-    {Num, DataOffset, Range, Index};
-parse_index_data_v1(<<Idx:64/unsigned, Term:64/unsigned,
-                   Offset:32/unsigned, Length:32/unsigned,
-                   Crc:32/integer, Rest/binary>>,
-                 Num, LastIdx, _DataOffset, Range, Index0) ->
-    % trim index entries if Idx goes "backwards"
-    Index = case Idx < LastIdx of
-                true -> maps:filter(fun (K, _) when K > Idx -> false;
-                                        (_, _) -> true
-                                    end, Index0);
-                false -> Index0
-            end,
-    parse_index_data_v1(Rest, Num+1, Idx,
-                     Offset + Length,
-                     update_range(Range, Idx),
-                     Index#{Idx => {Term, Offset, Length, Crc}}).
+parse_index_data_loop(Fmt, Bin, ByteOffset, Num, LastIdx, DataOffset, Range, Index) ->
+    case decode_index_record(Fmt, Bin, ByteOffset) of
+        eof ->
+            % end of data or partially written index
+            {Num, DataOffset, Range, Index};
+        {ok, {Idx, Term, Offset, Length, Crc}} ->
+            % trim index entries if Idx goes "backwards"
+            Index1 = case Idx < LastIdx of
+                         true -> maps:filter(fun (K, _) when K > Idx -> false;
+                                                 (_, _) -> true
+                                             end, Index);
+                         false -> Index
+                     end,
+            RecSize = Fmt#idx_fmt.record_size,
+            parse_index_data_loop(Fmt, Bin, ByteOffset + RecSize, Num + 1, Idx,
+                                  Offset + Length,
+                                  update_range(Range, Idx),
+                                  Index1#{Idx => {Term, Offset, Length, Crc}})
+    end.
 
 %% Optimized index parsing for info/2 that computes stats in a single pass
 %% without building a full index map. Returns:
 %% {NumEntries, DataOffset, Range, IndexesSeq, LiveSize}
-parse_index_info(2, Data, DataOffset, LiveSeq) ->
-    parse_index_info_v2(Data, 0, 0, DataOffset, undefined, [], 0, LiveSeq);
-parse_index_info(1, Data, DataOffset, LiveSeq) ->
-    parse_index_info_v1(Data, 0, 0, DataOffset, undefined, [], 0, LiveSeq).
+parse_index_info(Version, Data, DataOffset, LiveSeq) ->
+    Fmt = idx_fmt(Version),
+    parse_index_info_loop(Fmt, Data, 0, 0, 0, DataOffset, undefined, [], 0, LiveSeq).
 
-%% V2 format: 64-bit index, 64-bit term, 64-bit offset, 32-bit length,
-%% 32-bit crc
-parse_index_info_v2(<<>>, Num, _LastIdx, DataOffset, Range, IdxAcc, LiveSize,
-                    _LiveSeq) ->
-    {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)), LiveSize};
-parse_index_info_v2(<<0:64/unsigned, 0:64/unsigned, 0:64/unsigned,
-                      0:32/unsigned, 0:32/integer, _Rest/binary>>,
-                    Num, _LastIdx, DataOffset, Range, IdxAcc, LiveSize,
-                    _LiveSeq) ->
-    %% End of written data (partially written index)
-    {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)), LiveSize};
-parse_index_info_v2(<<Idx:64/unsigned, _Term:64/unsigned,
-                      Offset:64/unsigned, Length:32/unsigned,
-                      _Crc:32/integer, Rest/binary>>,
-                    Num, LastIdx, _DataOffset, Range, IdxAcc0, LiveSize0,
-                    LiveSeq) ->
-    %% Handle index going backwards (trim entries)
-    IdxAcc = case Idx < LastIdx of
-                 true ->
-                     lists:dropwhile(fun(I) -> I > Idx end, IdxAcc0);
-                 false ->
-                     IdxAcc0
-             end,
-    %% Compute live size: if LiveSeq is undefined, all entries are live
-    LiveSize = case LiveSeq of
-                   undefined ->
-                       LiveSize0 + Length;
-                   _ ->
-                       case ra_seq:in(Idx, LiveSeq) of
-                           true ->
-                               LiveSize0 + Length;
-                           false ->
-                               LiveSize0
-                       end
-               end,
-    parse_index_info_v2(Rest, Num+1, Idx,
-                        Offset + Length,
-                        update_range(Range, Idx),
-                        [Idx | IdxAcc], LiveSize, LiveSeq).
-
-%% V1 format: 64-bit index, 64-bit term, 32-bit offset, 32-bit length, 32-bit crc
-parse_index_info_v1(<<>>, Num, _LastIdx, DataOffset, Range, IdxAcc, LiveSize, _LiveSeq) ->
-    {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)), LiveSize};
-parse_index_info_v1(<<0:64/unsigned, 0:64/unsigned, 0:32/unsigned,
-                      0:32/unsigned, 0:32/integer, _Rest/binary>>,
-                    Num, _LastIdx, DataOffset, Range, IdxAcc, LiveSize, _LiveSeq) ->
-    %% End of written data (partially written index)
-    {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)), LiveSize};
-parse_index_info_v1(<<Idx:64/unsigned, _Term:64/unsigned,
-                      Offset:32/unsigned, Length:32/unsigned,
-                      _Crc:32/integer, Rest/binary>>,
-                    Num, LastIdx, _DataOffset, Range, IdxAcc0, LiveSize0, LiveSeq) ->
-    %% Handle index going backwards (trim entries)
-    IdxAcc = case Idx < LastIdx of
-                 true -> lists:dropwhile(fun(I) -> I > Idx end, IdxAcc0);
-                 false -> IdxAcc0
-             end,
-    %% Compute live size: if LiveSeq is undefined, all entries are live
-    LiveSize = case LiveSeq of
-                   undefined -> LiveSize0 + Length;
-                   _ -> case ra_seq:in(Idx, LiveSeq) of
-                            true -> LiveSize0 + Length;
-                            false -> LiveSize0
-                        end
-               end,
-    parse_index_info_v1(Rest, Num+1, Idx,
-                        Offset + Length,
-                        update_range(Range, Idx),
-                        [Idx | IdxAcc], LiveSize, LiveSeq).
+parse_index_info_loop(Fmt, Bin, ByteOffset, Num, LastIdx, DataOffset, Range,
+                      IdxAcc, LiveSize, LiveSeq) ->
+    case decode_index_record(Fmt, Bin, ByteOffset) of
+        eof ->
+            %% End of data or partially written index
+            {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)),
+             LiveSize};
+        {ok, {Idx, _Term, Offset, Length, _Crc}} ->
+            %% Handle index going backwards (trim entries)
+            IdxAcc1 = case Idx < LastIdx of
+                          true ->
+                              lists:dropwhile(fun(I) -> I > Idx end, IdxAcc);
+                          false ->
+                              IdxAcc
+                      end,
+            %% Compute live size: if LiveSeq is undefined, all entries are live
+            LiveSize1 = case LiveSeq of
+                            undefined ->
+                                LiveSize + Length;
+                            _ ->
+                                case ra_seq:in(Idx, LiveSeq) of
+                                    true ->
+                                        LiveSize + Length;
+                                    false ->
+                                        LiveSize
+                                end
+                        end,
+            RecSize = Fmt#idx_fmt.record_size,
+            parse_index_info_loop(Fmt, Bin, ByteOffset + RecSize, Num + 1, Idx,
+                                  Offset + Length,
+                                  update_range(Range, Idx),
+                                  [Idx | IdxAcc1], LiveSize1, LiveSeq)
+    end.
 
 write_header(MaxCount, Fd) ->
     Header = <<?MAGIC, ?VERSION:16/unsigned, MaxCount:16/unsigned>>,
@@ -1219,14 +1082,57 @@ pread(Cfg, {_, _, _}, Pos, Length) ->
     %% invalidate cache
     pread(Cfg, undefined, Pos, Length).
 
-
-offset_size(2) -> 64;
-offset_size(1) -> 32.
-
 index_record_size(2) ->
     ?INDEX_RECORD_SIZE_V2;
 index_record_size(1) ->
     ?INDEX_RECORD_SIZE_V1.
+
+%% Index format abstraction - creates format descriptor for a version
+idx_fmt(2) ->
+    #idx_fmt{version = 2,
+             record_size = ?INDEX_RECORD_SIZE_V2,
+             offset_size = 64};
+idx_fmt(1) ->
+    #idx_fmt{version = 1,
+             record_size = ?INDEX_RECORD_SIZE_V1,
+             offset_size = 32}.
+
+%% Decode an index record from binary at given byte offset
+%% Returns {ok, {Idx, Term, DataOffset, Length, Crc}} | eof
+decode_index_record(#idx_fmt{version = 2}, Bin, Offset)
+  when byte_size(Bin) >= Offset + ?INDEX_RECORD_SIZE_V2 ->
+    case Bin of
+        <<_:Offset/binary, 0:64/unsigned, 0:64/unsigned, 0:64/unsigned,
+          0:32/unsigned, 0:32/integer, _/binary>> ->
+            eof;
+        <<_:Offset/binary, Idx:64/unsigned, Term:64/unsigned,
+          DataOffset:64/unsigned, Length:32/unsigned,
+          Crc:32/integer, _/binary>> ->
+            {ok, {Idx, Term, DataOffset, Length, Crc}}
+    end;
+decode_index_record(#idx_fmt{version = 1}, Bin, Offset)
+  when byte_size(Bin) >= Offset + ?INDEX_RECORD_SIZE_V1 ->
+    case Bin of
+        <<_:Offset/binary, 0:64/unsigned, 0:64/unsigned, 0:32/unsigned,
+          0:32/unsigned, 0:32/integer, _/binary>> ->
+            eof;
+        <<_:Offset/binary, Idx:64/unsigned, Term:64/unsigned,
+          DataOffset:32/unsigned, Length:32/unsigned,
+          Crc:32/integer, _/binary>> ->
+            {ok, {Idx, Term, DataOffset, Length, Crc}}
+    end;
+decode_index_record(_, _, _) ->
+    eof.
+
+%% Encode an index record to binary
+encode_index_record(#idx_fmt{version = 2}, Idx, Term, DataOffset, Length, Crc) ->
+    <<Idx:64/unsigned, Term:64/unsigned,
+      DataOffset:64/unsigned, Length:32/unsigned,
+      Crc:32/unsigned>>;
+encode_index_record(#idx_fmt{version = 1}, Idx, Term, DataOffset, Length, Crc) ->
+    <<Idx:64/unsigned, Term:64/unsigned,
+      DataOffset:32/unsigned, Length:32/unsigned,
+      Crc:32/unsigned>>.
 
 %% returns the first and last indexes of the next consecutive run
 %% of indexes
