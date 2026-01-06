@@ -44,6 +44,7 @@
          write_file/2,
          write_file/3,
          sync_file/1,
+         sync_dir/1,
          lists_chunk/2,
          lists_detect_sort/1,
          lists_shuffle/1,
@@ -383,6 +384,22 @@ sync_file(Name) ->
     case file:open(Name, [binary, read, write, raw]) of
         {ok, Fd} ->
             sync_and_close_fd(Fd);
+        Err ->
+            Err
+    end.
+
+-spec sync_dir(file:name_all()) ->
+    ok | {error, file_err()}.
+sync_dir(Dir) ->
+    case file:open(Dir, [read, directory, raw]) of
+        {ok, Fd} ->
+            case file:datasync(Fd) of
+                ok ->
+                    file:close(Fd);
+                Err ->
+                    _ = file:close(Fd),
+                    Err
+            end;
         Err ->
             Err
     end.

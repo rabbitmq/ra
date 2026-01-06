@@ -742,6 +742,8 @@ major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
          %% finally delete the .compaction_marker file to signal
          %% compaction group is complete
          ok = prim_file:delete(CompactionMarker),
+         %% sync the directory as changes have been made
+         ok = ra_lib:sync_dir(Dir),
          %% return the new segref and additional segment keys
          {ra_log_segment:segref(FirstSegmentFn),
           [A || {_, _, {A, _}} <- Additional]}
