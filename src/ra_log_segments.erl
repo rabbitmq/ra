@@ -283,6 +283,11 @@ handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
     Fun = fun () ->
                   [prim_file:delete(filename:join(Dir, F))
                    || F <- Unreferenced],
+                  %% TODO: scanning all files for dangling symlinks isn't really
+                  %% something that should be done every minor compaction as
+                  %% it could potentially have a performance impact when there
+                  %% are a lot of live segments left
+                  purge_dangling_symlinks(Dir),
                   ok
           end,
     ok = incr_counter(Cfg, ?C_RA_LOG_COMPACTIONS_SEGMENTS_WRITTEN,
@@ -444,12 +449,12 @@ purge_symlinks(Dir, OlderThanSec) ->
 -spec purge_dangling_symlinks(file:filename_all()) -> ok.
 purge_dangling_symlinks(Dir) ->
     [begin
-         Fn = filename:join(Dir, F),
+         Fn = filename:join(Dir, term_to_binary(File)),
          case file:read_link_info(Fn, [raw]) of
              {ok, #file_info{type = symlink}} ->
-                 case file:open(Fn, [raw, read, binary]) of
-                     {ok, Fd} ->
-                         ok = file:close(Fd);
+                 case file:read_file_info(Fn, [raw]) of
+                     {ok, _} ->
+                         ok;
                      {error, enoent} ->
                          %% dangling symlink
                          ok = prim_file:delete(Fn)
@@ -457,7 +462,8 @@ purge_dangling_symlinks(Dir) ->
              _ ->
                  ok
          end
-     end || F <- list_files(Dir, ".segment")],
+     end || File <- list_dir(Dir),
+            filename:extension(File) =:= ".segment"],
     ok.
 %% LOCAL
 
@@ -660,13 +666,16 @@ list_files(Dir, Ext) ->
     list_files(Dir, Ext, fun (_) -> true end).
 
 list_files(Dir, Ext, Fun) ->
+    Files = [list_to_binary(F)
+             || F <- list_dir(Dir),
+                filename:extension(F) =:= Ext,
+                Fun(F)],
+    lists:sort(Files).
+
+list_dir(Dir) ->
     case prim_file:list_dir(Dir) of
-        {ok, Files0} ->
-            Files = [list_to_binary(F)
-                     || F <- Files0,
-                        filename:extension(F) =:= Ext,
-                        Fun(F)],
-            lists:sort(Files);
+        {ok, Files} ->
+            Files;
         {error, enoent} ->
             []
     end.

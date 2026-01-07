@@ -1614,8 +1614,8 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
                                                     Monitors)},
              Actions};
         false ->
-            ?DEBUG("~ts: send_snapshot node ~s disconnected",
-                   [log_id(State), ToNode]),
+            ?DEBUG("~ts: not sending snapshot to ~w as not connected to node ~s",
+                   [LogId, To, ToNode]),
             SS = ra_server:update_peer(To, #{status => disconnected}, SS0),
             {State#state{server_state = SS}, Actions}
     end;
@@ -2004,8 +2004,9 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                   "result ~w",
                                   [LogId, To, Unexp]),
                             exit(unexpected_install_snapshot_result)
-                    catch _:noproc:_ ->
-                            ?INFO("~ts: ~w not ready to receive snapshot", [LogId, To]),
+                    catch exit:{noproc, _}:_ ->
+                              ?INFO("~ts: ~w not ready to receive snapshot, "
+                                    "reason: noproc", [LogId, To]),
                               %% no process, not ready yet, exit to reduce sasl logging
                               exit(snapshot_receiver_not_ready_yet);
                           C:E:S ->
