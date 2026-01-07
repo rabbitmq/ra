@@ -1581,50 +1581,43 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
                      conf = #conf{snapshot_chunk_size = ChunkSize,
                                   log_id = LogId,
                                   install_snap_rpc_timeout = InstallSnapTimeout} = Conf}
-              = State0,
+              = State,
               Actions) ->
     case lists:member(ToNode, [node() | nodes()]) of
         true ->
             %% node is connected
             %% leader effect only
             Machine = ra_server:machine(SS0),
-            %% temporary assertion - status must be normal or snapshot_backoff (for retries)
+            %% assertion - status must be normal or snapshot_backoff
+            %% (for retries)
             #{To := #{status := Status}} = ra_server:peers(SS0),
             AttemptCount = case Status of
-                               {snapshot_backoff, N} -> N;
-                               normal -> 0
+                               {snapshot_backoff, N} ->
+                                   N;
+                               normal ->
+                                   0
                            end,
             Id = ra_server:id(SS0),
             Pid = spawn(fun () ->
-                                try send_snapshots(Id, Term, To,
-                                                   ChunkSize, InstallSnapTimeout,
-                                                   SnapState, Machine, LogId) of
-                                    _ -> ok
-                                catch
-                                    C:timeout:S ->
-                                        %% timeout is ok as we've already blocked
-                                        %% for a while
-                                        erlang:raise(C, timeout, S);
-                                    C:E:S ->
-                                        %% insert an arbitrary pause here as a primitive
-                                        %% throttling operation as certain errors
-                                        %% happen quickly
-                                        ok = timer:sleep(5000),
-                                        erlang:raise(C, E, S)
-                                end
+                                send_snapshots(Id, Term, To,
+                                               ChunkSize, InstallSnapTimeout,
+                                               SnapState, Machine, LogId)
                         end),
             ok = incr_counter(Conf, ?C_RA_SRV_SNAPSHOTS_SENT, 1),
             %% update the peer state so that no pipelined entries are sent during
             %% the snapshot sending phase
-            SS = ra_server:update_peer(To, #{status => {sending_snapshot, Pid, AttemptCount}}, SS0),
-            {State0#state{server_state = SS,
-                          monitors = ra_monitors:add(Pid, snapshot_sender, Monitors)},
+            SS = ra_server:update_peer(To, #{status =>
+                                             {sending_snapshot, Pid,
+                                              AttemptCount}}, SS0),
+            {State#state{server_state = SS,
+                         monitors = ra_monitors:add(Pid, snapshot_sender,
+                                                    Monitors)},
              Actions};
         false ->
             ?DEBUG("~ts: send_snapshot node ~s disconnected",
-                   [log_id(State0), ToNode]),
+                   [log_id(State), ToNode]),
             SS = ra_server:update_peer(To, #{status => disconnected}, SS0),
-            {State0#state{server_state = SS}, Actions}
+            {State#state{server_state = SS}, Actions}
     end;
 handle_effect(_, {delete_snapshot, Dir, SnapshotRef}, _, State0, Actions) ->
     %% delete snapshots in separate process
@@ -1994,30 +1987,38 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                    [LogId, To, TheirMacVer, SnapMacVer]),
             ok;
         false ->
-            %% TODO: this could be stale, replace with a call into the
-            %% process insted perhaps?
-            #{last_applied := LastApplied} = erpc:call(ToNode,
-                                                       ra_counters,
-                                                       counters,
-                                                       [To, [last_applied]]),
             RPC = #install_snapshot_rpc{term = Term,
                                         leader_id = Id,
                                         chunk_state = {0, init},
                                         meta = Meta},
-            case ra_snapshot:indexes(
-                   ra_snapshot:current_snapshot_dir(SnapState)) of
+            SnapDir = ra_snapshot:current_snapshot_dir(SnapState),
+            case ra_snapshot:indexes(SnapDir) of
                 {ok, [_|_] = Indexes0} ->
+                    %% first send the init phase
+                    try gen_statem:call(To, RPC,
+                                        {dirty_timeout, InstallTimeout}) of
+                        #install_snapshot_result{} ->
+                            ok;
+                        Unexp ->
+                            ?INFO("~ts: ~w returned an unexpected install snapshot "
+                                  "result ~w",
+                                  [LogId, To, Unexp]),
+                            exit(unexpected_install_snapshot_result)
+                    catch _:noproc:_ ->
+                            ?INFO("~ts: ~w not ready to receive snapshot", [LogId, To]),
+                              %% no process, not ready yet, exit to reduce sasl logging
+                              exit(snapshot_receiver_not_ready_yet);
+                          C:E:S ->
+                              erlang:raise(C, E, S)
+                    end,
+                    %% there are live indexes to send before the snapshot
+                    #{last_applied := LastApplied} =
+                        erpc:call(ToNode, ra_counters, counters,
+                                  [To, [last_applied]]),
                     %% remove all indexes lower than the target's last applied
                     Indexes = ra_seq:floor(LastApplied + 1, Indexes0),
                     ?DEBUG("~ts: sending ~b live indexes in the range ~w to ~w ",
                            [LogId, ra_seq:length(Indexes), ra_seq:range(Indexes), To]),
-                    %% first send the init phase
-                    Res0 = gen_statem:call(To, RPC,
-                                           {dirty_timeout, InstallTimeout}),
-                    %% this asserts we should continue,
-                    %% anything else should crash the process
-                    ?assert(is_record(Res0, install_snapshot_result)),
-                    %% there are live indexes to send before the snapshot
                     MaybeFlru = send_pre_snapshot_entries(Id, To, RPC, Indexes,
                                                           InstallTimeout, undefined),
                     _ = maybe_evict_flru(MaybeFlru),
@@ -2025,16 +2026,7 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                 _ ->
                     ok
             end,
-            %% send install snapshot RPC with entries here
-            %% Read indexes for snapshot, if non-empty
-            %% Find out what the follower's last applied index is
-            %%
-            %% Call into `Id' to do sparse read of some chunk of indexes
-            %% begin rpc with gen_statem:send_request/2
-            %% while waiting for reply call into `Id' to get the next chunk
-            %% of entries
-            %% wait for response
-            %% send again, etc
+
             Result = send_snapshot_chunks(RPC, To, ReadState, 1,
                                           ChunkSize, InstallTimeout,
                                           SnapState),
