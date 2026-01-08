@@ -4,6 +4,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("kernel/include/file.hrl").
 
 -include("src/ra.hrl").
 %%
@@ -78,8 +79,9 @@ all_tests() ->
      overwritten_segment_is_cleared,
      overwritten_segment_is_cleared_on_init,
      concurrent_snapshot_install_and_compaction,
-     snapshot_installation_with_live_indexes
-    ].
+    snapshot_installation_with_live_indexes,
+     init_with_dangling_symlink
+   ].
 
 groups() ->
     [
@@ -2351,6 +2353,63 @@ wait_for_wal(OldPid) ->
                       end, 100, 100).
 run_effs(Effs) ->
     [Fun() || {bg_work, Fun, _} <- Effs].
+
+init_with_dangling_symlink(Config) ->
+    %% This test verifies that ra_log:init handles dangling symlinks correctly.
+    %% During compaction, segment files can be replaced with symlinks pointing
+    %% to a compacted segment. If the target segment is deleted (e.g., due to
+    %% incomplete compaction recovery), the symlink becomes dangling.
+    %%
+    %% purge_dangling_symlinks should clean these up, but there's a bug where
+    %% it uses term_to_binary(File) instead of just File, causing it to check
+    %% the wrong filenames and never actually purge dangling symlinks.
+    %%
+    %% This causes ra_log:init to crash when my_segrefs tries to read info
+    %% from a dangling symlink.
+    UId = ?config(uid, Config),
+    ServerDataDir = ra_env:server_data_dir(default, UId),
+
+    %% First, create a valid log with some segments
+    Log0 = ra_log_init(Config),
+    Log1 = write_and_roll(1, 256, 1, Log0),
+    Log2 = assert_log_events(Log1,
+                             fun(L) ->
+                                     #{num_segments := N} = ra_log:overview(L),
+                                     N >= 2
+                             end),
+    ra_log:close(Log2),
+
+    %% Find the segment files
+    Segments = filelib:wildcard(filename:join(ServerDataDir, "*.segment")),
+    ?assert(length(Segments) >= 2),
+
+    %% Pick the first segment as the "target" and create a dangling symlink
+    %% that looks like a compacted segment pointing to a non-existent target
+    [_FirstSeg | _] = lists:sort(Segments),
+    DanglingSymlinkName = filename:join(ServerDataDir, "99999999.segment"),
+
+    %% Create a symlink pointing to a non-existent file (simulating a
+    %% compaction where the target was deleted but the symlink remains)
+    NonExistentTarget = "deleted_segment.segment",
+    ok = file:make_symlink(NonExistentTarget, DanglingSymlinkName),
+
+    %% Verify the symlink exists and is dangling
+    {ok, #file_info{type = symlink}} = file:read_link_info(DanglingSymlinkName),
+    {error, enoent} = file:read_file_info(DanglingSymlinkName),
+
+    %% Now try to re-init the log - this should NOT crash
+    %% Currently it crashes because:
+    %% 1. purge_dangling_symlinks has a bug (uses term_to_binary)
+    %% 2. my_segrefs lists all .segment files including the dangling symlink
+    %% 3. ra_log_segment:info tries to open the dangling symlink and fails
+    Log3 = ra_log_init(Config),
+
+    %% If we get here, the dangling symlink was handled correctly
+    %% Verify the dangling symlink was cleaned up
+    ?assertEqual({error, enoent}, file:read_link_info(DanglingSymlinkName)),
+
+    ra_log:close(Log3),
+    ok.
 
 %% ra_machine fakes
 version() -> 1.

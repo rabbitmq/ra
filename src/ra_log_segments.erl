@@ -449,7 +449,7 @@ purge_symlinks(Dir, OlderThanSec) ->
 -spec purge_dangling_symlinks(file:filename_all()) -> ok.
 purge_dangling_symlinks(Dir) ->
     [begin
-         Fn = filename:join(Dir, term_to_binary(File)),
+         Fn = filename:join(Dir, list_to_binary(File)),
          case file:read_link_info(Fn, [raw]) of
              {ok, #file_info{type = symlink}} ->
                  case file:read_file_info(Fn, [raw]) of
