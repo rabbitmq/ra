@@ -811,17 +811,87 @@ close(#state{cfg = #cfg{fd = Fd}}) ->
 copy(#state{} = State0, FromFile, Indexes)
   when is_list(Indexes) ->
     {ok, From} = open(FromFile, #{mode => read}),
-    %% TODO: the current approach recalculates the CRC and isn't completely
-    %% optimial. Also it does not allow for a future where copy_file_range may
-    %% be available
-    State = lists:foldl(
-              fun (I, S0) ->
-                      {ok, Term, Data} = simple_read(From, I),
-                      {ok, S} = append(S0, I, Term, Data),
-                      S
-              end, State0, lists:sort(Indexes)),
+    SortedIndexes = lists:sort(Indexes),
+    State = copy_with_cache(From, State0, SortedIndexes),
     close(From),
     sync(State).
+
+%% Optimized copy that batches reads for consecutive index runs.
+%% Uses the same caching strategy as read_sparse0 to minimize syscalls.
+%% Preserves existing CRCs from the source segment to avoid recomputation.
+copy_with_cache(#state{index = SrcIndex,
+                       cfg = #cfg{fd = SrcFd}} = _From,
+                DstState, Indexes) ->
+    copy_with_cache_loop(SrcFd, SrcIndex, DstState, Indexes, undefined).
+
+copy_with_cache_loop(_SrcFd, _SrcIndex, DstState, [], _Cache) ->
+    DstState;
+copy_with_cache_loop(SrcFd, SrcIndex, DstState, [Idx | Rem] = Indexes, Cache0)
+  when is_map_key(Idx, SrcIndex) ->
+    {Term, Pos, Length, Crc} = map_get(Idx, SrcIndex),
+    case cache_read(Cache0, Pos, Length) of
+        false ->
+            %% Cache miss - prepare cache for this run of consecutive indexes
+            case prepare_cache(SrcFd, Indexes, SrcIndex) of
+                undefined ->
+                    %% Single entry, no consecutive run - read directly
+                    {ok, Data} = file:pread(SrcFd, Pos, Length),
+                    {ok, DstState1} = append_raw(DstState, Idx, Term, Length,
+                                                 Data, Crc),
+                    copy_with_cache_loop(SrcFd, SrcIndex, DstState1, Rem,
+                                         undefined);
+                Cache ->
+                    %% Retry with populated cache
+                    copy_with_cache_loop(SrcFd, SrcIndex, DstState, Indexes,
+                                         Cache)
+            end;
+        Data ->
+            %% Cache hit - use cached data
+            {ok, DstState1} = append_raw(DstState, Idx, Term, Length,
+                                         Data, Crc),
+            copy_with_cache_loop(SrcFd, SrcIndex, DstState1, Rem, Cache0)
+    end;
+copy_with_cache_loop(_SrcFd, _SrcIndex, _DstState, [Idx | _], _Cache) ->
+    exit({copy_missing_key, Idx}).
+
+%% Append an entry with a pre-computed CRC, avoiding CRC recomputation.
+%% This is used during copy operations where the source CRC is known valid.
+-spec append_raw(state(), ra_index(), ra_term(),
+                 non_neg_integer(), binary(), integer()) ->
+    {ok, state()} | {error, full | inet:posix()}.
+append_raw(#state{cfg = #cfg{max_pending = PendingCount},
+                  pending_count = PendingCount} = State0,
+           Index, Term, Length, Data, Crc) ->
+    case flush(State0) of
+        {ok, State} ->
+            append_raw(State, Index, Term, Length, Data, Crc);
+        Err ->
+            Err
+    end;
+append_raw(#state{cfg = #cfg{version = Version,
+                             mode = append},
+                  index_offset = IndexOffset,
+                  data_offset = DataOffset,
+                  range = Range0,
+                  pending_count = PendCnt,
+                  pending_index = IdxPend0,
+                  pending_data = DataPend0} = State,
+           Index, Term, Length, Data, Crc) ->
+    case is_full(State) of
+        false ->
+            Fmt = idx_fmt(Version),
+            IndexData = encode_index_record(Fmt, Index, Term, DataOffset,
+                                            Length, Crc),
+            Range = update_range(Range0, Index),
+            {ok, State#state{index_offset = IndexOffset + Fmt#idx_fmt.record_size,
+                             data_offset = DataOffset + Length,
+                             range = Range,
+                             pending_index = [IdxPend0, IndexData],
+                             pending_data = [DataPend0, Data],
+                             pending_count = PendCnt + 1}};
+        true ->
+            {error, full}
+    end.
 
 %%% Internal
 
@@ -1170,19 +1240,6 @@ is_full(#state{cfg = #cfg{max_size = MaxSize},
     IndexOffset >= DataStart orelse
     (DataOffset - DataStart) > MaxSize.
 
-simple_read(#state{cfg = #cfg{fd = Fd},
-                   index = SegIndex}, Idx)
-  when is_map_key(Idx, SegIndex) ->
-    {Term, Pos, Len, _} = map_get(Idx, SegIndex),
-    case file:pread(Fd, Pos, Len) of
-        {ok, Data} ->
-            ?assert(byte_size(Data) == Len),
-            {ok, Term, Data};
-        Err ->
-            Err
-    end;
-simple_read(_State, _) ->
-    {error, not_found}.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
