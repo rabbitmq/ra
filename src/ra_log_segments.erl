@@ -268,6 +268,39 @@ handle_compaction_result(#compaction_result{unreferenced = [],
                                             compacted = []},
                          State) ->
     {State#?MODULE{compaction = undefined}, []};
+
+%% Fast path: minor compaction with only unreferenced segments
+%% Avoids expensive map conversions for the common case
+handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
+                                            linked = [],
+                                            compacted = []},
+                         #?STATE{cfg = #cfg{directory = Dir},
+                                 open_segments = Open0,
+                                 segment_refs = SegRefs0} = State)
+  when Unreferenced =/= [] ->
+    %% Filter segment refs directly without map conversion
+    UnrefSet = sets:from_list(Unreferenced, [{version, 2}]),
+    FilterFun = fun({Fn, _}) -> not sets:is_element(Fn, UnrefSet) end,
+    SegmentRefs = [SR || SR <- ra_lol:to_list(SegRefs0), FilterFun(SR)],
+    %% Selectively evict only removed segments
+    Open = lists:foldl(fun (Fn, Acc0) ->
+                               case ra_flru:evict(Fn, Acc0) of
+                                   {_, Acc} -> Acc;
+                                   error -> Acc0
+                               end
+                       end, Open0, Unreferenced),
+    Fun = fun () ->
+                  [prim_file:delete(filename:join(Dir, F))
+                   || F <- Unreferenced],
+                  purge_dangling_symlinks(Dir),
+                  ok
+          end,
+    {State#?MODULE{segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
+                                                   lists:reverse(SegmentRefs)),
+                   compaction = undefined,
+                   open_segments = Open},
+     [{bg_work, Fun, fun (_Err) -> ok end}]};
+%% General path: major compaction with linked/compacted segments
 handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
                                             linked = Linked,
                                             compacted = Compacted},
@@ -283,10 +316,6 @@ handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
     Fun = fun () ->
                   [prim_file:delete(filename:join(Dir, F))
                    || F <- Unreferenced],
-                  %% TODO: scanning all files for dangling symlinks isn't really
-                  %% something that should be done every minor compaction as
-                  %% it could potentially have a performance impact when there
-                  %% are a lot of live segments left
                   purge_dangling_symlinks(Dir),
                   ok
           end,
