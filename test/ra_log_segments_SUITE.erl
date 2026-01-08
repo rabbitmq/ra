@@ -37,7 +37,8 @@ all_tests() ->
      overwrite,
      result_after_segments,
      result_after_segments_overwrite,
-     major_strategy_num_minors
+     major_strategy_num_minors,
+     major_deletes_orphaned_segments
     ].
 
 groups() ->
@@ -664,6 +665,128 @@ major_strategy_num_minors(Config) ->
 
     ok.
 
+major_deletes_orphaned_segments(Config) ->
+    %% This test verifies that major compaction correctly deletes orphaned
+    %% segment files that exist on disk but are not in the segment refs.
+    %% This can happen when segments are fully overwritten.
+    %% It also verifies that symlinks are NOT deleted (they need to be kept
+    %% for pending readers).
+    %%
+    %% The scenario:
+    %% 1. Create 4 segments (indexes 1-512)
+    %% 2. Overwrite segments 2 and 3 with new data, creating orphaned files
+    %% 3. Create a symlink in the orphaned range to verify it's preserved
+    %% 4. Run major compaction
+    %% 5. Verify orphaned regular files are deleted but symlinks are preserved
+    Dir = ?config(dir, Config),
+    SegConf = #{max_count => 128},
+
+    %% Create initial 4 segments
+    Seg0 = open_last_segment(Config, SegConf),
+    Entries1 = [{I, 1, term_to_binary(<<"data1">>)} || I <- lists:seq(1, 512)],
+    {Seg1, Refs1} = append_to_segment(Seg0, Entries1, [], SegConf),
+    ok = ra_log_segment:close(Seg1),
+
+    %% We should have 4 segment files now
+    InitialFiles = all_segment_files(Dir),
+    ct:pal("Initial segment files: ~p", [InitialFiles]),
+    ?assertEqual(4, length(InitialFiles)),
+
+    %% Initialize ra_log_segments with these refs
+    Segs0 = ra_log_segments_init(Config, Dir, Refs1),
+
+    %% Now overwrite indexes 129-384 (segments 2 and 3) with term 2
+    %% This will create new segment files and the old segment 2 and 3 files
+    %% become orphaned (not referenced in segment_refs but still on disk)
+    Seg2 = open_last_segment(Config, SegConf),
+    Entries2 = [{I, 2, term_to_binary(<<"data2">>)} || I <- lists:seq(129, 384)],
+    {Seg3, Refs2} = append_to_segment(Seg2, Entries2, [], SegConf),
+    ok = ra_log_segment:close(Seg3),
+
+    {Segs1, _Overwritten} = ra_log_segments:update_segments(Refs2, Segs0),
+
+    %% Check segment refs - the overwritten segments should be compacted out
+    SegRefs = ra_log_segments:segment_refs(Segs1),
+    ct:pal("Segment refs after overwrite: ~p", [SegRefs]),
+
+    %% Check files on disk - there should be more files than refs
+    %% because the old segment 2 and 3 files are orphaned
+    FilesAfterOverwrite = all_segment_files(Dir),
+    ct:pal("Files after overwrite: ~p", [FilesAfterOverwrite]),
+
+    %% The orphaned files (old segment 2 and 3) should still exist on disk
+    %% but not be in the segment refs
+    RefFiles = [F || {F, _} <- SegRefs],
+    OrphanedFiles = [F || F <- FilesAfterOverwrite,
+                          not lists:member(list_to_binary(filename:basename(F)), RefFiles)],
+    ct:pal("Orphaned files: ~p", [OrphanedFiles]),
+    ?assert(length(OrphanedFiles) > 0),
+
+    %% Create a symlink in the orphaned range to verify it's NOT deleted
+    %% This simulates a symlink left over from a previous compaction that
+    %% may still have pending readers.
+    %% We point to segment 1 which won't be deleted, so the symlink won't
+    %% become dangling (dangling symlinks are cleaned up separately).
+    SymlinkTarget = filename:join(Dir, "0000000000000001.segment"),
+    %% Create symlink with a name in the orphaned range (e.g., 0000000000000002.segment)
+    %% but we'll use a different name to avoid conflicts
+    SymlinkName = filename:join(Dir, "0000000000000002a.segment"),
+    ok = prim_file:make_symlink(filename:basename(SymlinkTarget), SymlinkName),
+    ct:pal("Created test symlink: ~p -> ~p", [SymlinkName, SymlinkTarget]),
+
+    %% Now run major compaction - this should delete the orphaned regular files
+    %% but preserve the symlink
+    LiveList = lists:seq(1, 128) ++ lists:seq(385, 512),
+    Live = ra_seq:from_list(LiveList),
+    {Segs2, Effs} = ra_log_segments:schedule_compaction(major, 512, Live, Segs1),
+
+    %% Execute the background work (compaction)
+    lists:foreach(fun ({bg_work, Fun, _}) -> Fun();
+                      (_) -> ok
+                  end, Effs),
+
+    %% Handle compaction result
+    CompRes = receive
+                  {ra_log_event, {compaction_result, Res}} ->
+                      ct:pal("Compaction result: ~p", [Res]),
+                      Res
+              after 5000 ->
+                        flush(),
+                        exit(compaction_timeout)
+              end,
+
+    {Segs3, Effs2} = ra_log_segments:handle_compaction_result(CompRes, Segs2),
+    %% Execute cleanup effects
+    lists:foreach(fun ({bg_work, Fun, _}) -> Fun();
+                      (_) -> ok
+                  end, Effs2),
+
+    %% Verify orphaned files are deleted
+    FilesAfterCompaction = all_segment_files(Dir),
+    ct:pal("Files after compaction: ~p", [FilesAfterCompaction]),
+
+    FinalSegRefs = ra_log_segments:segment_refs(Segs3),
+    FinalRefFiles = [F || {F, _} <- FinalSegRefs],
+    ct:pal("Final segment refs: ~p", [FinalSegRefs]),
+
+    %% All regular files on disk should now be referenced
+    %% Symlinks should be preserved (not deleted)
+    RemainingOrphans = [F || F <- FilesAfterCompaction,
+                             not lists:member(list_to_binary(filename:basename(F)), FinalRefFiles),
+                             not is_symlink(F)],
+    ct:pal("Remaining orphaned regular files: ~p", [RemainingOrphans]),
+
+    %% Verify no orphaned regular files remain
+    ?assertEqual([], RemainingOrphans),
+
+    %% Verify the symlink we created is still there
+    ?assert(filelib:is_file(SymlinkName)),
+    ?assert(is_symlink(SymlinkName)),
+    ct:pal("Symlink preserved: ~p", [SymlinkName]),
+
+    ra_log_segments:close(Segs3),
+    ok.
+
 
 
 %% Helpers
@@ -744,6 +867,22 @@ flush() ->
 is_regular(Filename) ->
     {ok, #file_info{type = T}} = file:read_link_info(Filename, [raw, {time, posix}]),
     T == regular.
+
+is_symlink(Filename) ->
+    case file:read_link_info(Filename, [raw, {time, posix}]) of
+        {ok, #file_info{type = symlink}} -> true;
+        _ -> false
+    end.
+
+all_segment_files(Dir) ->
+    case prim_file:list_dir(Dir) of
+        {ok, Files0} ->
+            [filename:join(Dir, F)
+             || F <- Files0,
+                filename:extension(F) == ".segment"];
+        {error, enoent} ->
+            []
+    end.
 
 run_scenario(_, Segs, []) ->
     Segs;

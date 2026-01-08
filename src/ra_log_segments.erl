@@ -709,6 +709,16 @@ list_dir(Dir) ->
             []
     end.
 
+%% Returns true if the file is a regular segment file (not a symlink).
+%% Symlinks are kept around for pending readers.
+is_regular_file(Filename) ->
+    case prim_file:read_link_info(Filename) of
+        {ok, #file_info{type = regular}} ->
+            true;
+        _ ->
+            false
+    end.
+
 major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
     %% Segments are processed from highest to lowest index (newest to oldest),
     %% so we progressively limit the LiveIndexes sequence after each check
@@ -734,12 +744,14 @@ major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
     %% ensure there are no remaining fully overwritten (unused) segments in
     %% the compacted range
     Lookup = maps:from_list(SegRefs),
-    {LastFn, {_, _}} = lists:last(SegRefs),
-    UnusedFiles = segment_files(Dir, fun (F) ->
-                                             Key = list_to_binary(F),
-                                             Key =< LastFn andalso
-                                             not maps:is_key(Key, Lookup)
-                                     end),
+    {FirstFn, {_, _}} = hd(SegRefs),
+    UnusedFiles = segment_files(Dir,
+                                fun (F) ->
+                                        Key = list_to_binary(F),
+                                        Key =< FirstFn andalso
+                                        not maps:is_key(Key, Lookup) andalso
+                                        is_regular_file(filename:join(Dir, F))
+                                end),
     [begin
          ok  = prim_file:delete(filename:join(Dir, F))
      end || F <- UnusedFiles],
