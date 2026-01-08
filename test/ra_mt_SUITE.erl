@@ -38,6 +38,7 @@ all_tests() ->
      range_overlap,
      stage_commit_2,
      perf,
+     perf_sparse_insert,
      sparse,
      sparse_after_non_sparse
     ].
@@ -526,6 +527,29 @@ perf(_Config) ->
      end || Mt <- InsertedMts
     ],
 
+    ok.
+
+perf_sparse_insert(_Config) ->
+    %% Sparse inserts create many separate entries in ra_seq,
+    %% making ra_seq:length/1 expensive. This benchmark validates
+    %% that the cached size field provides O(1) insert performance.
+    Num = 100_000,
+    Tid = ets:new(sparse_perf, [set, public]),
+    Mt0 = ra_mt:init(Tid),
+
+    %% Insert with gaps (every 3rd index) to create sparse sequence
+    {Taken, _Mt} = timer:tc(fun() ->
+        lists:foldl(
+            fun(I, Mt) ->
+                Idx = I * 3,  % gaps create sparse ra_seq
+                {ok, Mt1} = ra_mt:insert_sparse({Idx, 1, <<"data">>},
+                                                 case I of 0 -> undefined; _ -> (I-1)*3 end,
+                                                 Mt),
+                Mt1
+            end, Mt0, lists:seq(0, Num - 1))
+    end),
+    ct:pal("sparse insert ~b entries took ~bms (~.2f us/op)",
+           [Num, Taken div 1000, Taken / Num]),
     ok.
 
 %% TODO: expand sparse tests

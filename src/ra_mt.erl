@@ -45,6 +45,7 @@
 -record(?MODULE,
         {tid :: ets:tid(),
          indexes :: ra_seq:state(),
+         size = 0 :: non_neg_integer(),
          staged :: undefined | {NumStaged :: non_neg_integer(), [log_entry()]},
          prev :: undefined | #?MODULE{}
         }).
@@ -74,7 +75,8 @@ init(Tid, Mode) ->
                         ets:select(Tid, [{{'$1', '_', '_'}, [], ['$1']}]))
             end,
     #?MODULE{tid = Tid,
-             indexes = Seq}.
+             indexes = Seq,
+             size = ets:info(Tid, size)}.
 
 -spec init(ets:tid()) -> state().
 init(Tid) ->
@@ -89,15 +91,16 @@ init_successor(Tid, Mode, #?MODULE{} = State) ->
     {ok, state()} | {error, overwriting | limit_reached}.
 insert({Idx, _, _} = Entry,
        #?MODULE{tid = Tid,
-                indexes = Seq} = State)
+                indexes = Seq,
+                size = Size} = State)
   when ?IS_NEXT_IDX(Idx, Seq) ->
-    %% TODO ra_seq:length can be slow for sparse ra_seqs
-    case ra_seq:length(Seq) > ?MAX_MEMTBL_ENTRIES of
+    case Size > ?MAX_MEMTBL_ENTRIES of
         true ->
             {error, limit_reached};
         false ->
             true = ets:insert(Tid, Entry),
-            {ok, State#?MODULE{indexes = update_ra_seq(Idx, Seq)}}
+            {ok, State#?MODULE{indexes = update_ra_seq(Idx, Seq),
+                               size = Size + 1}}
     end;
 insert({Idx, _, _} = _Entry,
        #?MODULE{indexes = Seq}) ->
@@ -118,20 +121,23 @@ insert_sparse({Idx, _, _} = Entry, _LastIdx,
                        indexes = []} = State) ->
     %% when the indexes is empty always accept the next entry
     true = ets:insert(Tid, Entry),
-    {ok, State#?MODULE{indexes = ra_seq:append(Idx, [])}};
+    {ok, State#?MODULE{indexes = ra_seq:append(Idx, []),
+                       size = 1}};
 insert_sparse({Idx, _, _} = Entry, LastIdx,
               #?MODULE{tid = Tid,
-                       indexes = Seq} = State) ->
+                       indexes = Seq,
+                       size = Size} = State) ->
     LastSeq = ra_seq:last(Seq),
     IsOverwriting = Idx =< LastSeq andalso is_integer(LastSeq),
     case LastSeq == LastIdx andalso not IsOverwriting of
         true ->
-            case ra_seq:length(Seq) > ?MAX_MEMTBL_ENTRIES of
+            case Size > ?MAX_MEMTBL_ENTRIES of
                 true ->
                     {error, limit_reached};
                 false ->
                     true = ets:insert(Tid, Entry),
-                    {ok, State#?MODULE{indexes = ra_seq:append(Idx, Seq)}}
+                    {ok, State#?MODULE{indexes = ra_seq:append(Idx, Seq),
+                                       size = Size + 1}}
             end;
         false ->
             case IsOverwriting of
@@ -146,22 +152,26 @@ insert_sparse({Idx, _, _} = Entry, LastIdx,
     {ok, state()} | {error, overwriting | limit_reached}.
 stage({Idx, _, _} = Entry,
       #?MODULE{staged = {FstIdx, Staged},
-               indexes = Range} = State)
+               indexes = Range,
+               size = Size} = State)
   when ?IS_NEXT_IDX(Idx, Range) ->
     {ok, State#?MODULE{staged = {FstIdx, [Entry | Staged]},
-                       indexes = update_ra_seq(Idx, Range)}};
+                       indexes = update_ra_seq(Idx, Range),
+                       size = Size + 1}};
 stage({Idx, _, _} = Entry,
       #?MODULE{tid = _Tid,
                staged = undefined,
-               indexes = Seq} = State)
+               indexes = Seq,
+               size = Size} = State)
   when ?IS_NEXT_IDX(Idx, Seq) ->
-    case ra_seq:length(Seq) > ?MAX_MEMTBL_ENTRIES of
+    case Size > ?MAX_MEMTBL_ENTRIES of
         true ->
             %% the limit cannot be reached during transaction
             {error, limit_reached};
         false ->
             {ok, State#?MODULE{staged = {Idx, [Entry]},
-                               indexes = update_ra_seq(Idx, Seq)}}
+                               indexes = update_ra_seq(Idx, Seq),
+                               size = Size + 1}}
     end;
 stage({Idx, _, _} = _Entry,
        #?MODULE{indexes = Seq}) ->
@@ -417,8 +427,10 @@ record_flushed(TID = Tid, FlushedSeq,
                                {PSpecs, P} ->
                                    {{multi, [Spec0 | PSpecs]}, P}
                            end,
+            NewSeq = ra_seq:floor(End + 1, Seq),
             {Spec,
-             State#?MODULE{indexes = ra_seq:floor(End + 1, Seq),
+             State#?MODULE{indexes = NewSeq,
+                           size = ra_seq:length(NewSeq),
                            prev = Prev}};
         false ->
             {undefined, State}
@@ -449,8 +461,10 @@ set_first(Idx, #?MODULE{tid = Tid,
                     DeleteSeq = ra_seq:limit(Idx - 1, Seq),
                     [{indexes, Tid, DeleteSeq} | PrevSpecs]
             end,
+    NewSeq = ra_seq:floor(Idx, Seq),
     {Specs,
-     State#?MODULE{indexes = ra_seq:floor(Idx, Seq),
+     State#?MODULE{indexes = NewSeq,
+                   size = ra_seq:length(NewSeq),
                    prev = Prev}}.
 
 
