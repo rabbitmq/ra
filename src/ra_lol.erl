@@ -11,6 +11,8 @@
          append/2,
          search/2,
          takewhile/2,
+         foldl/3,
+         foldr/3,
          from_list/1,
          from_list/2,
          to_list/1,
@@ -186,6 +188,36 @@ len({list, _GtFun, List}) ->
 len({tuple, _GtFun, Len, _Data}) ->
     Len.
 
+%% @doc Fold left-to-right (from newest/largest to oldest/smallest).
+%% Since the structure stores items in descending order (newest first),
+%% this iterates from the beginning to the end.
+-spec foldl(fun((Item, Acc) -> Acc), Acc, state()) -> Acc
+      when Item :: term(), Acc :: term().
+foldl(Fun, Acc, {list, _GtFun, List}) ->
+    lists:foldl(Fun, Acc, List);
+foldl(Fun, Acc, {tuple, _GtFun, Len, Data}) ->
+    tuple_foldl(Fun, Acc, Data, 1, Len).
+
+tuple_foldl(_Fun, Acc, _Data, Pos, Len) when Pos > Len ->
+    Acc;
+tuple_foldl(Fun, Acc, Data, Pos, Len) ->
+    tuple_foldl(Fun, Fun(element(Pos, Data), Acc), Data, Pos + 1, Len).
+
+%% @doc Fold right-to-left (from oldest/smallest to newest/largest).
+%% Since the structure stores items in descending order (newest first),
+%% this iterates from the end to the beginning.
+-spec foldr(fun((Item, Acc) -> Acc), Acc, state()) -> Acc
+      when Item :: term(), Acc :: term().
+foldr(Fun, Acc, {list, _GtFun, List}) ->
+    lists:foldr(Fun, Acc, List);
+foldr(Fun, Acc, {tuple, _GtFun, Len, Data}) ->
+    tuple_foldr(Fun, Acc, Data, Len).
+
+tuple_foldr(_Fun, Acc, _Data, 0) ->
+    Acc;
+tuple_foldr(Fun, Acc, Data, Pos) ->
+    tuple_foldr(Fun, Fun(element(Pos, Data), Acc), Data, Pos - 1).
+
 %%% ===================
 %%% Internal functions
 %%% ===================
@@ -262,5 +294,55 @@ upgrade_test() ->
     L1 = ?MODULE:append(65, L0),
     {tuple, _, _, _} = L1,
     ?assertEqual(65, ?MODULE:len(L1)).
+
+%% Test foldl - iterates from newest to oldest (high to low)
+foldl_test() ->
+    %% Small list (uses list representation)
+    SmallItems = lists:seq(1, 20),
+    SmallLol = ?MODULE:from_list(SmallItems),
+    %% foldl iterates from newest (20) to oldest (1)
+    %% Prepending gives us [1, 2, ..., 20] (oldest to newest)
+    SmallFoldlResult = ?MODULE:foldl(fun(Item, Acc) -> [Item | Acc] end, [], SmallLol),
+    ?assertEqual(SmallItems, SmallFoldlResult),
+
+    %% Large list (uses tuple representation)
+    LargeItems = lists:seq(1, 100),
+    LargeLol = ?MODULE:from_list(LargeItems),
+    LargeFoldlResult = ?MODULE:foldl(fun(Item, Acc) -> [Item | Acc] end, [], LargeLol),
+    ?assertEqual(LargeItems, LargeFoldlResult),
+
+    %% Test with sum accumulator
+    SumResult = ?MODULE:foldl(fun(Item, Acc) -> Item + Acc end, 0, LargeLol),
+    ?assertEqual(lists:sum(LargeItems), SumResult),
+
+    %% Empty list
+    EmptyLol = ?MODULE:new(),
+    EmptyResult = ?MODULE:foldl(fun(Item, Acc) -> [Item | Acc] end, [], EmptyLol),
+    ?assertEqual([], EmptyResult).
+
+%% Test foldr - iterates from oldest to newest (low to high)
+foldr_test() ->
+    %% Small list (uses list representation)
+    SmallItems = lists:seq(1, 20),
+    SmallLol = ?MODULE:from_list(SmallItems),
+    %% foldr iterates from oldest (1) to newest (20)
+    %% Prepending gives us [20, 19, ..., 1] (newest to oldest, same as to_list)
+    SmallFoldrResult = ?MODULE:foldr(fun(Item, Acc) -> [Item | Acc] end, [], SmallLol),
+    ?assertEqual(?MODULE:to_list(SmallLol), SmallFoldrResult),
+
+    %% Large list (uses tuple representation)
+    LargeItems = lists:seq(1, 100),
+    LargeLol = ?MODULE:from_list(LargeItems),
+    LargeFoldrResult = ?MODULE:foldr(fun(Item, Acc) -> [Item | Acc] end, [], LargeLol),
+    ?assertEqual(?MODULE:to_list(LargeLol), LargeFoldrResult),
+
+    %% Test with sum accumulator
+    SumResult = ?MODULE:foldr(fun(Item, Acc) -> Item + Acc end, 0, LargeLol),
+    ?assertEqual(lists:sum(LargeItems), SumResult),
+
+    %% Empty list
+    EmptyLol = ?MODULE:new(),
+    EmptyResult = ?MODULE:foldr(fun(Item, Acc) -> [Item | Acc] end, [], EmptyLol),
+    ?assertEqual([], EmptyResult).
 
 -endif.

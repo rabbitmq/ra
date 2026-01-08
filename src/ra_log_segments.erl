@@ -791,23 +791,30 @@ minor_compaction(SegRefs, LiveIndexes) ->
                     end, {[], LiveIndexes}, SegRefs),
     #compaction_result{unreferenced = Delete}.
 
-compactable_segrefs(SnapIdx, State) ->
-    %% TODO: provide a ra_lol:foldr API to avoid creating a segref list
-    %% then filtering that
-    case segment_refs(State) of
-        [] ->
+compactable_segrefs(SnapIdx, #?STATE{segment_refs = SegRefs}) ->
+    %% Use foldr to iterate from oldest to newest, prepending matches.
+    %% This produces a high→low ordered result list (newest to oldest)
+    %% which enables efficient has_overlap + limit optimization in compaction.
+    %% Skip the newest segment (processed last in foldr) as we never compact
+    %% the current/active segment.
+    Len = ra_lol:len(SegRefs),
+    case Len of
+        N when N =< 1 ->
             [];
-        [_] ->
-            [];
-        [_ | Compactable] ->
-            %% never compact the current segment
-            %% only take those who have a range lower than the snapshot index as
-            %% we never want to compact more than that
-            %% Returns segments in high→low order (newest to oldest) to enable
-            %% efficient has_overlap + limit optimization in compaction functions
-            lists:filter(fun ({_Fn, {_Start, End}}) ->
-                                 End =< SnapIdx
-                         end, Compactable)
+        _ ->
+            {Result, _} = ra_lol:foldr(
+                fun({_Fn, {_Start, End}} = SegRef, {Acc, Pos}) ->
+                    case Pos of
+                        1 ->
+                            %% Skip the newest segment
+                            {Acc, 0};
+                        _ when End =< SnapIdx ->
+                            {[SegRef | Acc], Pos - 1};
+                        _ ->
+                            {Acc, Pos - 1}
+                    end
+                end, {[], Len}, SegRefs),
+            Result
     end.
 
 make_symlinks(Dir, To, From)
