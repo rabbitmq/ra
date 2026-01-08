@@ -29,7 +29,8 @@ all_tests() ->
      list_chunk,
      remove_prefix,
      remove_prefix_2,
-     from_list_with_duplicates
+     from_list_with_duplicates,
+     has_overlap
     ].
 
 groups() ->
@@ -206,5 +207,65 @@ from_list_with_duplicates(_Config) ->
     S4 = ra_seq:from_list([1, 2, 3, 3, 5, 6, 7, 7, 10, 11, 11]),
     [11, 10, {5, 7}, {1, 3}] = S4,
     [11, 10, 7, 6, 5, 3, 2, 1] = ra_seq:expand(S4),
+
+    ok.
+
+has_overlap(_Config) ->
+    %% Test with empty sequence
+    ?assertEqual(false, ra_seq:has_overlap({1, 10}, [])),
+
+    %% Test with undefined range
+    S = ra_seq:from_list([1, 2, 3, 5, 6, 7, 8, 9, 11]),
+    ?assertEqual(false, ra_seq:has_overlap(undefined, S)),
+
+    %% Test overlap with single integer elements
+    %% S = [11, {5, 9}, {1, 3}]
+    ?assertEqual(true, ra_seq:has_overlap({11, 11}, S)),
+    ?assertEqual(true, ra_seq:has_overlap({10, 12}, S)),
+    ?assertEqual(false, ra_seq:has_overlap({12, 15}, S)),
+
+    %% Test overlap with range elements
+    ?assertEqual(true, ra_seq:has_overlap({5, 5}, S)),
+    ?assertEqual(true, ra_seq:has_overlap({7, 8}, S)),
+    ?assertEqual(true, ra_seq:has_overlap({1, 3}, S)),
+    ?assertEqual(true, ra_seq:has_overlap({2, 2}, S)),
+
+    %% Test no overlap - gap in sequence
+    ?assertEqual(false, ra_seq:has_overlap({4, 4}, S)),
+    ?assertEqual(false, ra_seq:has_overlap({10, 10}, S)),
+
+    %% Test range at the very start of sequence (index 0 and 1)
+    ?assertEqual(true, ra_seq:has_overlap({0, 1}, S)),
+
+    %% Test range entirely above sequence
+    ?assertEqual(false, ra_seq:has_overlap({100, 200}, S)),
+
+    %% Test partial overlap at boundaries
+    ?assertEqual(true, ra_seq:has_overlap({0, 1}, S)),
+    ?assertEqual(true, ra_seq:has_overlap({9, 15}, S)),
+
+    %% Test range spanning entire sequence
+    ?assertEqual(true, ra_seq:has_overlap({0, 100}, S)),
+
+    %% Test with sequence containing only single integers (no ranges)
+    S2 = [10, 5, 2],
+    ?assertEqual(true, ra_seq:has_overlap({5, 5}, S2)),
+    ?assertEqual(true, ra_seq:has_overlap({1, 3}, S2)),
+    ?assertEqual(false, ra_seq:has_overlap({3, 4}, S2)),
+    ?assertEqual(false, ra_seq:has_overlap({6, 9}, S2)),
+
+    %% Test with sequence containing only ranges
+    S3 = [{100, 200}, {50, 75}, {1, 25}],
+    ?assertEqual(true, ra_seq:has_overlap({150, 160}, S3)),
+    ?assertEqual(true, ra_seq:has_overlap({60, 70}, S3)),
+    ?assertEqual(true, ra_seq:has_overlap({10, 20}, S3)),
+    ?assertEqual(false, ra_seq:has_overlap({26, 49}, S3)),
+    ?assertEqual(false, ra_seq:has_overlap({76, 99}, S3)),
+
+    %% Verify consistency with in_range (non-empty result means overlap)
+    ?assertEqual(true, ra_seq:has_overlap({5, 9}, S)),
+    ?assertNotEqual([], ra_seq:in_range({5, 9}, S)),
+    ?assertEqual(false, ra_seq:has_overlap({4, 4}, S)),
+    ?assertEqual([], ra_seq:in_range({4, 4}, S)),
 
     ok.

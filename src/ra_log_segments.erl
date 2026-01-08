@@ -681,21 +681,26 @@ list_dir(Dir) ->
     end.
 
 major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
-    {Compactable, Delete} =
-        lists:foldl(fun({Fn0, Range} = S,
-                        {Comps, Del}) ->
-                            case ra_seq:in_range(Range,
-                                                 LiveIndexes) of
+    %% Segments are processed from highest to lowest index (newest to oldest),
+    %% so we progressively limit the LiveIndexes sequence after each check
+    %% to improve performance for large sequences.
+    {Compactable, Delete, _} =
+        lists:foldl(fun({Fn0, {_Start, End} = Range} = S,
+                        {Comps, Del, Live}) ->
+                            case ra_seq:in_range(Range, Live) of
                                 [] ->
-                                    {Comps, [Fn0 | Del]};
+                                    {Comps, [Fn0 | Del], Live};
                                 Seq ->
                                     %% get the info map from each
                                     %% potential segment
                                     Fn = filename:join(Dir, Fn0),
                                     Info = ra_log_segment:info(Fn, Seq),
-                                    {[{Info, Seq, S} | Comps], Del}
+                                    %% Limit the sequence to remove entries above End
+                                    %% for faster subsequent checks
+                                    {[{Info, Seq, S} | Comps], Del,
+                                     ra_seq:limit(End, Live)}
                             end
-                    end, {[], []}, SegRefs),
+                    end, {[], [], LiveIndexes}, SegRefs),
 
     %% ensure there are no remaining fully overwritten (unused) segments in
     %% the compacted range
@@ -709,9 +714,9 @@ major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
     [begin
          ok  = prim_file:delete(filename:join(Dir, F))
      end || F <- UnusedFiles],
-    %% group compactable
-    CompactionGroups = compaction_groups(lists:reverse(Compactable), [],
-                                         CompConf),
+    %% group compactable - Compactable is now in low→high order (oldest to newest)
+    %% after the foldl reversal, which is what compaction_groups expects
+    CompactionGroups = compaction_groups(Compactable, [], CompConf),
     Compacted0 =
     [begin
          AllFns = [F || {_, _, {F, _}} <- All],
@@ -767,17 +772,23 @@ major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
                        compacted = Compacted}.
 
 minor_compaction(SegRefs, LiveIndexes) ->
-    %% identifies unreferences / unused segments with no live indexes
-    %% in them
-    Delete = lists:foldl(fun({Fn, Range}, Del) ->
-                                 case ra_seq:in_range(Range,
-                                                      LiveIndexes) of
-                                     [] ->
-                                         [Fn | Del];
-                                     _ ->
-                                         Del
-                                 end
-                         end, [], SegRefs),
+    %% identifies unreferenced / unused segments with no live indexes
+    %% in them. Segments are processed from highest to lowest index
+    %% (newest to oldest), so we progressively limit the LiveIndexes
+    %% sequence after each overlap check to improve performance for
+    %% large sequences.
+    {Delete, _} = lists:foldl(
+                    fun({Fn, {_Start, End} = Range}, {Del, Live}) ->
+                            case ra_seq:has_overlap(Range, Live) of
+                                false ->
+                                    {[Fn | Del], Live};
+                                true ->
+                                    %% Limit the sequence to remove entries above End.
+                                    %% This makes subsequent checks on lower-indexed
+                                    %% segments faster.
+                                    {Del, ra_seq:limit(End, Live)}
+                            end
+                    end, {[], LiveIndexes}, SegRefs),
     #compaction_result{unreferenced = Delete}.
 
 compactable_segrefs(SnapIdx, State) ->
@@ -792,12 +803,11 @@ compactable_segrefs(SnapIdx, State) ->
             %% never compact the current segment
             %% only take those who have a range lower than the snapshot index as
             %% we never want to compact more than that
-            lists:foldl(fun ({_Fn, {_Start, End}} = SR, Acc)
-                              when End =< SnapIdx ->
-                                [SR | Acc];
-                            (_, Acc) ->
-                                Acc
-                        end, [], Compactable)
+            %% Returns segments in high→low order (newest to oldest) to enable
+            %% efficient has_overlap + limit optimization in compaction functions
+            lists:filter(fun ({_Fn, {_Start, End}}) ->
+                                 End =< SnapIdx
+                         end, Compactable)
     end.
 
 make_symlinks(Dir, To, From)

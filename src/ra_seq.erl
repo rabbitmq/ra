@@ -36,7 +36,8 @@
          length/1,
          in/2,
          range/1,
-         in_range/2
+         in_range/2,
+         has_overlap/2
         ]).
 
 -spec append(ra:index(), state()) -> state().
@@ -234,8 +235,52 @@ in_range({Start, End}, Seq0) ->
     %% TODO: optimise
     floor(Start, limit(End, Seq0)).
 
+%% @doc Check if any element in the sequence overlaps with the given range.
+%% This is a pure query that does not modify the sequence and can terminate
+%% early as soon as an overlap is found.
+%% Sequences are ordered high -> low, so we traverse from highest to lowest.
+%% @end
+-spec has_overlap(ra:range(), state()) -> boolean().
+has_overlap(_Range, []) ->
+    false;
+has_overlap(undefined, _Seq) ->
+    false;
+has_overlap({Start, End}, Seq) ->
+    has_overlap0(Start, End, Seq).
 
 %% Internal functions
+
+%% Traverse the sequence (ordered high -> low) checking for overlap.
+%% - Skip elements entirely above End
+%% - Return true if any element overlaps [Start, End]
+%% - Return false once we pass below Start (no need to check further)
+has_overlap0(_Start, _End, []) ->
+    false;
+has_overlap0(Start, End, [Idx | Rem]) when is_integer(Idx) ->
+    if Idx > End ->
+           %% Element is above the range, skip it
+           has_overlap0(Start, End, Rem);
+       Idx >= Start ->
+           %% Element is within [Start, End], overlap found
+           true;
+       true ->
+           %% Idx < Start, and since sequence is ordered high->low,
+           %% all remaining elements are also < Start, no overlap possible
+           false
+    end;
+has_overlap0(Start, End, [{RStart, REnd} | Rem]) ->
+    %% Range element: check if it overlaps with [Start, End]
+    if RStart > End ->
+           %% Entire range is above End, skip it
+           has_overlap0(Start, End, Rem);
+       REnd < Start ->
+           %% Entire range is below Start, and since sequence is ordered
+           %% high->low, all remaining elements are also below Start
+           false;
+       true ->
+           %% Ranges overlap: RStart =< End and REnd >= Start
+           true
+    end.
 
 drop_prefix({IDX, PI}, {IDX, SI}) ->
     drop_prefix(next(PI), next(SI));
