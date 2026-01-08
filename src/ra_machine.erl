@@ -292,7 +292,7 @@
 
 -callback overview(state()) -> map().
 
--callback live_indexes(state()) -> [ra:index()].
+-callback live_indexes(state()) -> [ra:index()] | {ra_seq, ra_seq:state()}.
 
 -callback snapshot_module() -> module().
 
@@ -351,9 +351,16 @@ state_enter(Mod, RaftState, State) ->
 overview(Mod, State) ->
     ?OPT_CALL(Mod:overview(State), State).
 
--spec live_indexes(module(), state()) -> [ra:index()].
+-spec live_indexes(module(), state()) -> ra_seq:state().
 live_indexes(Mod, State) ->
-    ?OPT_CALL(Mod:live_indexes(State), []).
+    case ?OPT_CALL(Mod:live_indexes(State), []) of
+        {ra_seq, Seq} ->
+            %% Machine returned a pre-built ra_seq
+            Seq;
+        List ->
+            %% Plain list of indexes - convert to ra_seq
+            ra_seq:from_list(List)
+    end.
 
 %% @doc used to discover the latest machine version supported by the current
 %% code

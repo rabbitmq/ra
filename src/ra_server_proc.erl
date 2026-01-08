@@ -1604,8 +1604,8 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
                                                SnapState, Machine, LogId)
                         end),
             ok = incr_counter(Conf, ?C_RA_SRV_SNAPSHOTS_SENT, 1),
-            %% update the peer state so that no pipelined entries are sent during
-            %% the snapshot sending phase
+            %% update the peer state so that no pipelined entries are sent
+            %% during the snapshot sending phase
             SS = ra_server:update_peer(To, #{status =>
                                              {sending_snapshot, Pid,
                                               AttemptCount}}, SS0),

@@ -39,6 +39,7 @@ all_tests() ->
      init_multi,
      take_snapshot,
      take_snapshot_crash,
+     take_snapshot_with_ra_seq_live_indexes,
      init_recover,
      init_recover_voter_status,
      init_recover_multi_corrupt,
@@ -154,6 +155,56 @@ take_snapshot_crash(Config) ->
     %% if the snapshot process crashed we just have to consider the
     %% snapshot as faulty and clear it up
 
+    ok.
+
+%% Test that ra_machine:live_indexes/2 correctly handles the {ra_seq, Seq}
+%% return type from the machine callback, allowing machines to return
+%% pre-built ra_seq structures for efficiency.
+take_snapshot_with_ra_seq_live_indexes(Config) ->
+    UId = ?config(uid, Config),
+    SnapDir = ?config(snap_dir, Config),
+    State0 = init_state(Config),
+    Meta = meta(55, 2, [node()]),
+    MacState = ?FUNCTION_NAME,
+    %% Create a mock machine module that returns {ra_seq, Seq}
+    MockMod = ra_seq_test_machine,
+    meck:new(MockMod, [non_strict]),
+    meck:expect(MockMod, version, fun () -> 1 end),
+    meck:expect(MockMod, which_module, fun (_) -> MockMod end),
+    %% Return a pre-built ra_seq with ranges - this is the key test
+    %% The machine returns {ra_seq, Seq} to indicate it's already in ra_seq format
+    ExpectedSeq = [{10, 20}, 5, 3, 1],  %% ra_seq with a range and individual indexes
+    meck:expect(MockMod, live_indexes, fun (_) -> {ra_seq, ExpectedSeq} end),
+    try
+        {State1, [{bg_work, Fun, _}]} =
+             ra_snapshot:begin_snapshot(Meta, MockMod, MacState, snapshot, State0),
+        undefined = ra_snapshot:current(State1),
+        Fun(),
+        {{55, 2}, snapshot} = ra_snapshot:pending(State1),
+        receive
+            {ra_log_event,
+             {snapshot_written, {55, 2} = IdxTerm, Indexes, snapshot, _}} ->
+                %% Verify the indexes were correctly processed
+                ?assertEqual(ExpectedSeq, Indexes),
+                State = ra_snapshot:complete_snapshot(IdxTerm, snapshot,
+                                                      Indexes, State1),
+                undefined = ra_snapshot:pending(State),
+                {55, 2} = ra_snapshot:current(State),
+                55 = ra_snapshot:last_index_for(UId),
+                %% Verify the indexes file was written correctly
+                IndexFile = filename:join([SnapDir,
+                                          ra_lib:zpad_hex(2) ++ "_" ++ ra_lib:zpad_hex(55),
+                                          <<"indexes">>]),
+                {ok, ReadIndexes} = ra_snapshot:indexes(
+                                      filename:dirname(IndexFile)),
+                ?assertEqual(ExpectedSeq, ReadIndexes),
+                ok
+        after 1000 ->
+                  error(snapshot_event_timeout)
+        end
+    after
+        meck:unload(MockMod)
+    end,
     ok.
 
 init_recover(Config) ->

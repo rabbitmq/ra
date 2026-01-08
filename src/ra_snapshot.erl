@@ -400,8 +400,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
     PostPrepareEqualsMacState = Ref == MacState,
     LiveIndexes0 = case PostPrepareEqualsMacState of
                        false ->
-                           ra_seq:from_list(
-                             ra_machine:live_indexes(MacMod, MacState));
+                           ra_machine:live_indexes(MacMod, MacState);
                        true ->
                            []
                    end,
@@ -417,8 +416,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
                         LiveIndexes =
                             case PostPrepareEqualsMacState of
                                 true ->
-                                    ra_seq:from_list(
-                                      ra_machine:live_indexes(MacMod, Ref));
+                                    ra_machine:live_indexes(MacMod, Ref);
                                 false ->
                                     LiveIndexes0
                             end,
@@ -584,9 +582,7 @@ complete_accept(Chunk, Num, Machine,
                            current = IdxTerm},
     {ok, #{machine_version := SnapMacVer}, MacState} = recover(State),
     SnapMacMod  = ra_machine:which_module(Machine, SnapMacVer),
-    %% TODO: allow the ra machine to return a re_seq instead of a plain list
-    LiveIndexes = ra_seq:from_list(
-                    ra_machine:live_indexes(SnapMacMod, MacState)),
+    LiveIndexes = ra_machine:live_indexes(SnapMacMod, MacState),
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     ok = write_indexes(SnapDir, LiveIndexes),
     %% delete accepting marker file
