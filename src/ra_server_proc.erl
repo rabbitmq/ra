@@ -1006,6 +1006,8 @@ terminating_leader(EvtType, Msg, State0) ->
                                {S, A};
                            {keep_state, S, A} ->
                                {S, A};
+                           {stop, shutdown, S} ->
+                               {S, []};
                            {stop, {shutdown, delete}, S} ->
                                {S, []}
                        end,
