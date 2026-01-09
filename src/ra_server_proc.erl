@@ -1141,7 +1141,9 @@ handle_event(_EventType, EventContent, StateName, State) ->
     {next_state, StateName, State}.
 
 terminate(Reason, StateName,
-          #state{conf = #conf{name = Key, cluster_name = ClusterName},
+          #state{conf = #conf{name = Key,
+                              cluster_name = ClusterName,
+                              worker_pid = WorkerPid},
                  server_state = ServerState} = State) ->
     ?DEBUG("~ts: terminating with ~w in state ~w",
            [log_id(State), Reason, StateName]),
@@ -1152,6 +1154,12 @@ terminate(Reason, StateName,
     Id = id(State),
     case Reason of
         {shutdown, delete} ->
+            %% try to wait a bit for the worker to finish any pending work
+            %% before continuing
+            if is_pid(WorkerPid) ->
+                   _ = catch gen_server:call(WorkerPid, undefined, 1000);
+               true -> ok
+            end,
             Parent = ra_directory:where_is_parent(Names, UId),
             %% we need to unregister _before_ the log closes
             %% in the ra_server:terminate/2 function

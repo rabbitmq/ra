@@ -68,7 +68,14 @@ start_cluster(System, ClusterName, #{members := ServerIds})
                      uid => UId,
                      cluster_name => ClusterName,
                      log_init_args => #{uid => UId,
-                                        min_snapshot_interval => 0},
+                                        %% set to 0 to avoid any release_cursor
+                                        %% requests to be ignored (unless a snapshot
+                                        %% is currently in progress)
+                                        min_snapshot_interval => 0,
+                                        %% every 2 snapshots - minor compactions are
+                                        %% promoted to major
+                                        major_compaction_strategy =>
+                                        {num_minors, 2}},
                      initial_members => ServerIds,
                      machine => Machine}
                end || Id <- ServerIds],
@@ -171,7 +178,8 @@ get(ServerId, Key, Timeout) ->
                             #{last_applied := LastApplied}
                               when IsAlive andalso
                                    LastApplied >= Idx ->
-                                %% the local member has applied sufficient indexes
+                                %% the local member has applied sufficient
+                                %% indexes
                                 LocalMember;
                             _ ->
                                 %% fall back to leader for any other case
@@ -204,7 +212,7 @@ read_entry({_, Node} = ServerId, Idx, Members, Timeout)
     end;
 read_entry({_, Node} = ServerId, Idxs, Members, Timeout) ->
     try erpc:call(Node, ?MODULE, ?FUNCTION_NAME,
-              [ServerId, Idxs, Members, Timeout]) of
+                  [ServerId, Idxs, Members, Timeout]) of
         Res ->
             Res
     catch T:E:_S ->

@@ -839,7 +839,8 @@ handle_event({segments, TidRanges, NewSegs},
                       reader = Reader0,
                       pending = Pend0,
                       mem_table = Mt0} = State0) ->
-    {Reader, OverwrittenSegRefs} = ra_log_segments:update_segments(NewSegs, Reader0),
+    {Reader, OverwrittenSegRefs} =
+        ra_log_segments:update_segments(NewSegs, Reader0),
 
     put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
                 ra_log_segments:segment_ref_count(Reader)),

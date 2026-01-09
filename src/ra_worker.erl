@@ -32,7 +32,8 @@
 %%%===================================================================
 
 start_link(Config) ->
-    gen_server:start_link(?MODULE, Config, []).
+    gen_server:start_link(?MODULE, Config,
+                          [{hibernate_after, 30000}]).
 
 queue_work(Pid, FunOrMfa, ErrFun) when is_pid(Pid) ->
     gen_server:cast(Pid, {work, FunOrMfa, ErrFun}).
