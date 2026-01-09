@@ -73,7 +73,7 @@
         {type = minor :: major | minor,
          unreferenced = [] :: [file:filename_all()],
          linked = [] :: [file:filename_all()],
-         compacted = [] :: [segment_ref()]}).
+         compacted_segrefs = [] :: [segment_ref()]}).
 
 -opaque state() :: #?STATE{}.
 -type read_plan() :: [{BaseName :: file:filename_all(), [ra:index()]}].
@@ -116,7 +116,6 @@ init(UId, Dir, MaxOpen, AccessPattern, SegRefs0, Counter, CompConf, LogId)
                   _ ->
                       undefined
               end,
-    SegRefsRev = lists:reverse(SegRefs),
     reset_counter(Cfg, ?C_RA_LOG_OPEN_SEGMENTS),
     Result = recover_compaction(Dir),
     %% handle_compaction_result/2 will never return an effect here
@@ -124,8 +123,8 @@ init(UId, Dir, MaxOpen, AccessPattern, SegRefs0, Counter, CompConf, LogId)
     State0 = #?STATE{cfg = Cfg,
                      open_segments = ra_flru:new(MaxOpen, FlruHandler),
                      range = Range,
-                     segment_refs = ra_lol:from_list(
-                                      fun seg_ref_gt/2, SegRefsRev)},
+                     segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
+                                                     SegRefs)},
     {State, _} = handle_compaction_result(Result, State0),
     State.
 
@@ -159,11 +158,10 @@ update_segments(NewSegmentRefs, #?STATE{open_segments = Open0,
     %% capture segrefs removed by compact_segrefs/2 and delete them
     %% a major compaction will also remove these
     OverwrittenSegments = NewSegmentRefs -- SegmentRefsComp,
-    SegmentRefsCompRev = lists:reverse(SegmentRefsComp),
-    SegRefs = ra_lol:from_list(fun seg_ref_gt/2, SegmentRefsCompRev),
+    SegRefs = ra_lol:from_list(fun seg_ref_gt/2, SegmentRefsComp),
     Range = case SegmentRefsComp of
                 [{_, {_, L}} | _] ->
-                    [{_, {F, _}} | _] = SegmentRefsCompRev,
+                    {_, {F, _}} = lists:last(SegmentRefsComp),
                     ra_range:new(F, L);
                 _ ->
                     undefined
@@ -265,7 +263,7 @@ schedule_compaction(Type, SnapIdx, _LiveIndexes,
     {state(), [ra_server:effect()]}.
 handle_compaction_result(#compaction_result{unreferenced = [],
                                             linked = [],
-                                            compacted = []},
+                                            compacted_segrefs = []},
                          State) ->
     {State#?MODULE{compaction = undefined}, []};
 
@@ -273,7 +271,7 @@ handle_compaction_result(#compaction_result{unreferenced = [],
 %% Avoids expensive map conversions for the common case
 handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
                                             linked = [],
-                                            compacted = []},
+                                            compacted_segrefs = []},
                          #?STATE{cfg = #cfg{directory = Dir},
                                  open_segments = Open0,
                                  segment_refs = SegRefs0} = State)
@@ -296,22 +294,28 @@ handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
                   ok
           end,
     {State#?MODULE{segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
-                                                   lists:reverse(SegmentRefs)),
+                                                   SegmentRefs),
                    compaction = undefined,
                    open_segments = Open},
      [{bg_work, Fun, fun (_Err) -> ok end}]};
 %% General path: major compaction with linked/compacted segments
 handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
                                             linked = Linked,
-                                            compacted = Compacted},
+                                            compacted_segrefs = CompactedSegRefs},
                          #?STATE{cfg = #cfg{directory = Dir} = Cfg,
                                  open_segments = Open0,
                                  segment_refs = SegRefs0} = State) ->
-    SegRefs1 = maps:from_list(ra_lol:to_list(SegRefs0)),
-    SegRefs2 = maps:without(Unreferenced, SegRefs1),
-    SegRefs = maps:without(Linked, SegRefs2),
-    SegmentRefs0 = maps:merge(SegRefs, maps:from_list(Compacted)),
-    SegmentRefs = maps:to_list(maps:iterator(SegmentRefs0, ordered)),
+    %% Build exclusion set for O(1) lookups - include filenames from
+    %% CompactedSegRefs since they should override existing entries
+    CompactedFns = [Fn || {Fn, _} <- CompactedSegRefs],
+    ExcludeSet = sets:from_list(Unreferenced ++ Linked ++ CompactedFns,
+                                [{version, 2}]),
+    %% Filter segment refs in single pass (result is already sorted by filename desc)
+    FilteredRefs = [SR || {Fn, _} = SR <- ra_lol:to_list(SegRefs0),
+                          not sets:is_element(Fn, ExcludeSet)],
+    %% CompactedSegRefs is in ascending filename order, reverse to get descending
+    SegmentRefs = lists:merge(fun({Fn1, _}, {Fn2, _}) -> Fn1 >= Fn2 end,
+                              FilteredRefs, lists:reverse(CompactedSegRefs)),
     Open = ra_flru:evict_all(Open0),
     Fun = fun () ->
                   [prim_file:delete(filename:join(Dir, F))
@@ -319,10 +323,11 @@ handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
                   purge_dangling_symlinks(Dir),
                   ok
           end,
+    NumCompacted = length(CompactedSegRefs),
     ok = incr_counter(Cfg, ?C_RA_LOG_COMPACTIONS_SEGMENTS_WRITTEN,
-                      length(Compacted)),
+                      NumCompacted),
     ok = incr_counter(Cfg, ?C_RA_LOG_COMPACTIONS_SEGMENTS_COMPACTED,
-                      length(Linked) + length(Compacted)),
+                      length(Linked) + NumCompacted),
     {State#?MODULE{segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
                                                    SegmentRefs),
                    compaction = undefined,
@@ -352,8 +357,8 @@ update_first_index(FstIdx, #?STATE{segment_refs = SegRefs0,
                                                    end
                                            end, OpenSegs0, ObsoleteKeys),
                     {State#?STATE{open_segments = OpenSegs,
-                                  segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
-                                                                  lists:reverse(Active))},
+                                  segment_refs = ra_lol:from_list(
+                                                   fun seg_ref_gt/2, Active)},
                      Obsolete}
             end
     end.
@@ -810,7 +815,7 @@ major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
     #compaction_result{type = major,
                        unreferenced = Delete,
                        linked = lists:append(AddDelete),
-                       compacted = Compacted}.
+                       compacted_segrefs = Compacted}.
 
 minor_compaction(SegRefs, LiveIndexes) ->
     %% identifies unreferenced / unused segments with no live indexes
@@ -982,7 +987,7 @@ recover_compaction(Dir) ->
                             ok = prim_file:delete(CompactionGroupFn),
                             Compacted = [ra_log_segment:segref(Target)],
                             #compaction_result{type = major,
-                                               compacted = Compacted,
+                                               compacted_segrefs = Compacted,
                                                linked = LinkTargets};
                         {error, enoent} ->
                             %% segment does not exist indicates what exactly?
@@ -1078,7 +1083,6 @@ segrefs_to_read_test() ->
 
     SegRefs = ra_lol:from_list(
                 fun seg_ref_gt/2,
-                lists:reverse(
                   compact_segrefs(
                     [{"00000006.segment", {412, 499}},
                      {"00000005.segment", {284, 411}},
@@ -1086,7 +1090,7 @@ segrefs_to_read_test() ->
                      {"00000004.segment",{284, 500}},
                      {"00000003.segment",{200, 285}},
                      {"00000002.segment",{128, 255}},
-                     {"00000001.segment", {0, 127}}], []))),
+                     {"00000001.segment", {0, 127}}], [])),
 
 
     ?assertEqual([{"00000002.segment", {199, 199}},

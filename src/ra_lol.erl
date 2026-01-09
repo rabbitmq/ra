@@ -160,7 +160,7 @@ takewhile(Fun, {tuple, GtFun, _Len, Data}) ->
                end,
     {Taken, NewState}.
 
-%% @doc initialise from a list sorted in ascending order
+%% @doc initialise from a list sorted in descending order
 -spec from_list(list()) -> state().
 from_list(List) ->
     from_list(fun erlang:'>'/2, List).
@@ -170,10 +170,10 @@ from_list(GtFun, List) when is_list(List) ->
     Len = length(List),
     if Len >= ?TUPLE_THRESHOLD ->
            %% Store in descending order (newest/largest first) as tuple
-           {tuple, GtFun, Len, list_to_tuple(lists:reverse(List))};
+           {tuple, GtFun, Len, list_to_tuple(List)};
        true ->
            %% Store in descending order as list
-           {list, GtFun, lists:reverse(List)}
+           {list, GtFun, List}
     end.
 
 -spec to_list(state()) -> list().
@@ -241,7 +241,7 @@ maybe_upgrade(GtFun, List) ->
 
 basic_test() ->
     Items = lists:seq(1, 100),
-    L0 = ?MODULE:from_list(Items),
+    L0 = ?MODULE:from_list(lists:reverse(Items)),
     ?assertEqual(100, ?MODULE:len(L0)),
     ?assertEqual(Items, lists:reverse(?MODULE:to_list(L0))),
     ?assertMatch(out_of_order, ?MODULE:append(1, L0)),
@@ -279,17 +279,17 @@ basic_test() ->
 %% Test that small lists use simple list
 small_uses_list_test() ->
     Items = lists:seq(1, 20),
-    {list, _, _} = ?MODULE:from_list(Items).
+    {list, _, _} = ?MODULE:from_list(lists:reverse(Items)).
 
 %% Test that large lists use tuple
 large_uses_tuple_test() ->
     Items = lists:seq(1, 100),
-    {tuple, _, _, _} = ?MODULE:from_list(Items).
+    {tuple, _, _, _} = ?MODULE:from_list(lists:reverse(Items)).
 
 %% Test upgrade from list to tuple via append
 upgrade_test() ->
     Items = lists:seq(1, 64),
-    L0 = ?MODULE:from_list(Items),
+    L0 = ?MODULE:from_list(lists:reverse(Items)),
     {list, _, _} = L0,
     L1 = ?MODULE:append(65, L0),
     {tuple, _, _, _} = L1,
@@ -299,7 +299,7 @@ upgrade_test() ->
 foldl_test() ->
     %% Small list (uses list representation)
     SmallItems = lists:seq(1, 20),
-    SmallLol = ?MODULE:from_list(SmallItems),
+    SmallLol = ?MODULE:from_list(lists:reverse(SmallItems)),
     %% foldl iterates from newest (20) to oldest (1)
     %% Prepending gives us [1, 2, ..., 20] (oldest to newest)
     SmallFoldlResult = ?MODULE:foldl(fun(Item, Acc) -> [Item | Acc] end, [], SmallLol),
@@ -307,7 +307,7 @@ foldl_test() ->
 
     %% Large list (uses tuple representation)
     LargeItems = lists:seq(1, 100),
-    LargeLol = ?MODULE:from_list(LargeItems),
+    LargeLol = ?MODULE:from_list(lists:reverse(LargeItems)),
     LargeFoldlResult = ?MODULE:foldl(fun(Item, Acc) -> [Item | Acc] end, [], LargeLol),
     ?assertEqual(LargeItems, LargeFoldlResult),
 
@@ -324,7 +324,7 @@ foldl_test() ->
 foldr_test() ->
     %% Small list (uses list representation)
     SmallItems = lists:seq(1, 20),
-    SmallLol = ?MODULE:from_list(SmallItems),
+    SmallLol = ?MODULE:from_list(lists:reverse(SmallItems)),
     %% foldr iterates from oldest (1) to newest (20)
     %% Prepending gives us [20, 19, ..., 1] (newest to oldest, same as to_list)
     SmallFoldrResult = ?MODULE:foldr(fun(Item, Acc) -> [Item | Acc] end, [], SmallLol),
@@ -332,7 +332,7 @@ foldr_test() ->
 
     %% Large list (uses tuple representation)
     LargeItems = lists:seq(1, 100),
-    LargeLol = ?MODULE:from_list(LargeItems),
+    LargeLol = ?MODULE:from_list(lists:reverse(LargeItems)),
     LargeFoldrResult = ?MODULE:foldr(fun(Item, Acc) -> [Item | Acc] end, [], LargeLol),
     ?assertEqual(?MODULE:to_list(LargeLol), LargeFoldrResult),
 
