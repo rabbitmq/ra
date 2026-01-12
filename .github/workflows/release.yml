@@ -8,11 +8,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: CHECKOUT
-      uses: actions/checkout@v3
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
       with:
         path: ra
     - name: CONFIGURE OTP & ELIXIR
-      uses: erlef/setup-beam@v1
+      uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
       with:
         otp-version: 26
     - name: ASSERT VERSIONS
@@ -33,7 +33,7 @@ jobs:
           https://github.com/${{ github.repository }}/archive/${{ github.ref }}.tar.gz
     - name: CREATE RELEASE
       id: create-release
-      uses: ncipollo/release-action@v1.13.0
+      uses: ncipollo/release-action@b7eabc95ff50cbeeedec83973935c8f306dfcd0b # v1.20.0
       with:
         allowUpdates: true
         artifactErrorsFailBuild: true

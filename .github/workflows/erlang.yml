@@ -13,9 +13,9 @@ jobs:
         otp_version: [26, 27, 28]
     steps:
     - name: CHECKOUT
-      uses: actions/checkout@v2
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
     - name: CONFIGURE ERLANG
-      uses: erlef/setup-beam@v1
+      uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
       with:
         otp-version: ${{ matrix.otp_version }}
     - name: XREF
@@ -34,7 +34,7 @@ jobs:
     - name: PROPER
       run: make proper
     - name: CAPTURE TEST LOGS ON FAILURE
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       if: failure()
       with:
         name: ct-logs-${{matrix.otp_version}}
