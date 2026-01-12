@@ -152,7 +152,7 @@
             wal_cmd()) ->
     {ok, pid()} | {error, wal_down}.
 write(Wal, From, MtTid, Idx, Term, Cmd) ->
-    %% "normal opereation where we assume a contigious sequence
+    %% normal operation where we assume a contiguous sequence
     %% this may be removed at some point
     write(Wal, From, MtTid, Idx-1, Idx, Term, Cmd).
 
