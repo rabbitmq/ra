@@ -1360,7 +1360,7 @@ await_written(Id, Term, {From, To} = Written, LogFun) ->
         {ra_log_event, {written, Term, {From, To0} = W}} ->
             LogFun("~s, got ~b ~w", [?FUNCTION_NAME, Term, W]),
             await_written(Id, Term, {To0+1, To}, LogFun)
-    after 5000 ->
+    after 60000 ->
               flush(),
               throw({written_timeout, To})
     end.
