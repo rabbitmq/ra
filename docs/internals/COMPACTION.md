@@ -66,6 +66,11 @@ involves checking ranges and deleting files - no data copying.
 **Special case**: If `LiveIndexes == []` (standard Raft behaviour), ALL 
 compactable segments are deleted immediately without checking ranges.
 
+### Phase 2
+
+Not implemented. This is a space holder phase that could truncate and/or punch
+holes in existing segments for data that is no longer referenced.
+
 ### Major compaction (Phase 3)
 
 Major compaction consolidates multiple segments by copying only the live entries

@@ -1,3 +1,9 @@
+%% This Source Code Form is subject to the terms of the Mozilla Public
+%% License, v. 2.0. If a copy of the MPL was not distributed with this
+%% file, You can obtain one at https://mozilla.org/MPL/2.0/.
+%%
+%% Copyright (c) 2017-2026 Broadcom. All Rights Reserved. The term Broadcom
+%% refers to Broadcom Inc. and/or its subsidiaries.
 -module(ra_lol).
 %% Adaptive sorted list structure that uses:
 %% - Simple list for small collections (< 65 elements) - fast pattern matching

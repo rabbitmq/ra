@@ -224,7 +224,7 @@
 -define(SEGMENT_MAX_ENTRIES, 4096).
 -define(SEGMENT_MAX_PENDING, 1024).
 -define(SEGMENT_MAX_SIZE_B, 64_000_000). %% set an upper limit on segment sizing
--define(DEF_MAJOR_COIMPACTION_STRAT, {num_minors, 8}).
+-define(DEF_MAJOR_COMPACTION_STRAT, {num_minors, 8}).
 
 %% logging shim
 -define(DEBUG_IF(Bool, Fmt, Args),

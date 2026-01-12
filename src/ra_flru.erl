@@ -94,7 +94,7 @@ size(#?MODULE{items = Items}) ->
 
 -spec max_size(state()) -> non_neg_integer().
 max_size(#?MODULE{max_size = MaxSize}) ->
- MaxSize.
+    MaxSize.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

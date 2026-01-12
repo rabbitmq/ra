@@ -385,7 +385,7 @@ compaction(#?STATE{compaction = Conf}) ->
 
 -spec num_open_segments(state()) -> non_neg_integer().
 num_open_segments(#?STATE{open_segments = Open}) ->
-     ra_flru:size(Open).
+    ra_flru:size(Open).
 
 -spec fold(ra_index(), ra_index(), fun(), term(), state(),
                                        MissingKeyStrategy :: error | return) ->
