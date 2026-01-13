@@ -6,36 +6,38 @@ on:
   pull_request:
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: "build (${{ matrix.otp_version }} + ${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         otp_version: [26, 27, 28]
+        os: [ubuntu-latest, windows-latest]
     steps:
     - name: CHECKOUT
       uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
     - name: CONFIGURE ERLANG
-      uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
+      # Pin setup-beam to a version that works with Windows (not released at
+      # the time of commit).
+      uses: erlef/setup-beam@566deebc640988a494af16ecdf6f820fe0d3fea4
       with:
         otp-version: ${{ matrix.otp_version }}
+        rebar3-version: '3.25.1'
     - name: XREF
-      run: make xref
-    - name: DEPS
-      run: make test-deps
+      if: ${{ matrix.os == 'ubuntu-latest'}}
+      run: rebar3 xref
     - name: DIALYZE
-      if: ${{ matrix.otp_version == 27}}
-      run: make dialyze
+      if: ${{ matrix.otp_version == 27 && matrix.os == 'ubuntu-latest'}}
+      run: rebar3 dialyzer
     - name: BUILD
-      run: make test-build
+      run: rebar3 compile
     - name: EUNIT
-      run: make eunit
+      run: rebar3 eunit
     - name: COMMON TEST
-      run: make ct
-    - name: PROPER
-      run: make proper
+      run: rebar3 ct
     - name: CAPTURE TEST LOGS ON FAILURE
       uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       if: failure()
       with:
-        name: ct-logs-${{matrix.otp_version}}
-        path: logs/*
+        name: ct-logs-${{matrix.otp_version}}-${{matrix.os}}
+        path: _build/test/logs
