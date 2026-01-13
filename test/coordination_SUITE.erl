@@ -206,18 +206,22 @@ delete_two_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
     Peers = start_peers([s1,s2], PrivDir),
-    ServerIds = server_ids(ClusterName, Peers),
-    Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    {ok, _} = ra:delete_cluster(ServerIds),
-    await_condition(
-      fun () ->
-              lists:all(
-                fun ({Name, Node}) ->
-                        undefined == erpc:call(Node, erlang, whereis, [Name])
-                end, ServerIds)
-      end, 100),
-    stop_peers(Peers),
+    try
+        ServerIds = server_ids(ClusterName, Peers),
+        Machine = {module, ?MODULE, #{}},
+        {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+        timer:sleep(1000),
+        {ok, _} = ra:delete_cluster(ServerIds),
+        await_condition(
+          fun () ->
+                  lists:all(
+                    fun ({Name, Node}) ->
+                            undefined == erpc:call(Node, erlang, whereis, [Name])
+                    end, ServerIds)
+          end, 600)
+    after
+        stop_peers(Peers)
+    end,
     receive
         Anything ->
             ct:pal("got weird message ~p", [Anything]),
@@ -231,44 +235,52 @@ delete_three_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
     Peers = start_peers([s1,s2,s3], PrivDir),
-    ServerIds = server_ids(ClusterName, Peers),
-    Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    {ok, _} = ra:delete_cluster(ServerIds),
-    await_condition(
-      fun () ->
-              lists:all(
-                fun ({Name, Node}) ->
-                        undefined == erpc:call(Node, erlang, whereis, [Name])
-                end, ServerIds)
-      end, 100),
-    stop_peers(Peers),
+    try
+        ServerIds = server_ids(ClusterName, Peers),
+        Machine = {module, ?MODULE, #{}},
+        {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+        timer:sleep(1000),
+        {ok, _} = ra:delete_cluster(ServerIds),
+        await_condition(
+          fun () ->
+                  lists:all(
+                    fun ({Name, Node}) ->
+                            undefined == erpc:call(Node, erlang, whereis, [Name])
+                    end, ServerIds)
+          end, 600)
+    after
+        stop_peers(Peers)
+    end,
     ok.
 
 delete_three_server_cluster_parallel(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
     Peers = start_peers([s1,s2,s3], PrivDir),
-    ServerIds = server_ids(ClusterName, Peers),
-    Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    %% spawn a delete command to try cause it to commit more than
-    %% one delete command
-    spawn(fun () -> {ok, _} = ra:delete_cluster(ServerIds) end),
-    spawn(fun () -> {ok, _} = ra:delete_cluster(ServerIds) end),
-    {ok, _} = ra:delete_cluster(ServerIds),
-    await_condition(
-      fun () ->
-              lists:all(
-                fun ({Name, Node}) ->
-                        undefined == erpc:call(Node, erlang, whereis, [Name])
-                end, ServerIds)
-      end, 100),
-    [begin
-         true = rpc:call(S, ?MODULE, check_sup, [])
-     end || {_, S} <- ServerIds],
-    % assert all nodes are actually started
-    stop_peers(Peers),
+    try
+        ServerIds = server_ids(ClusterName, Peers),
+        Machine = {module, ?MODULE, #{}},
+        {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+        timer:sleep(1000),
+        %% spawn a delete command to try cause it to commit more than
+        %% one delete command
+        spawn(fun () -> {ok, _} = ra:delete_cluster(ServerIds) end),
+        spawn(fun () -> {ok, _} = ra:delete_cluster(ServerIds) end),
+        {ok, _} = ra:delete_cluster(ServerIds),
+        await_condition(
+          fun () ->
+                  lists:all(
+                    fun ({Name, Node}) ->
+                            undefined == erpc:call(Node, erlang, whereis, [Name])
+                    end, ServerIds)
+          end, 600),
+        [begin
+             true = rpc:call(S, ?MODULE, check_sup, [])
+         end || {_, S} <- ServerIds]
+        % assert all nodes are actually started
+    after
+        stop_peers(Peers)
+    end,
     ok.
 
 check_sup() ->
