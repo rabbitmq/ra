@@ -389,37 +389,40 @@ shrink_cluster_with_snapshot(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
     Peers = start_peers([s1,s2,s3], PrivDir),
-    ServerIds = server_ids(ClusterName, Peers),
-    [_A, _B, _C] = ServerIds,
+    try
+        ServerIds = server_ids(ClusterName, Peers),
+        [_A, _B, _C] = ServerIds,
 
-    Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    {ok, _, Leader1} = ra:members(ServerIds),
+        Machine = {module, ?MODULE, #{}},
+        {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+        {ok, _, Leader1} = ra:members(ServerIds),
 
-    %% run some activity to create a snapshot
-    [_ = ra:process_command(Leader1, {banana, I})
-      || I <- lists:seq(1, 5000)],
+        %% run some activity to create a snapshot
+        [_ = ra:process_command(Leader1, {banana, I})
+          || I <- lists:seq(1, 5000)],
 
-    Fun = fun F(L0) ->
-                  {ok, _, L} = ra:process_command(L0, banana),
-                  F(L)
-          end,
-    Pid = spawn(fun () -> Fun(Leader1) end),
-    timer:sleep(100),
+        Fun = fun F(L0) ->
+                      {ok, _, L} = ra:process_command(L0, banana),
+                      F(L)
+              end,
+        Pid = spawn(fun () -> Fun(Leader1) end),
+        timer:sleep(100),
 
-    exit(Pid, kill),
-    {ok, _, _} = ra:remove_member(Leader1, Leader1),
+        exit(Pid, kill),
+        {ok, _, _} = ra:remove_member(Leader1, Leader1),
 
+        await_condition(
+          fun () ->
+                  {ok, _, Leader2} = ra:members(ServerIds),
 
-    timer:sleep(500),
-
-    {ok, _, Leader2} = ra:members(ServerIds),
-
-    ct:pal("old leader ~p, new leader ~p", [Leader1, Leader2]),
-    {ok, O, _} = ra:member_overview(Leader2),
-    ct:pal("overview2 ~p", [O]),
-    stop_peers(Peers),
-    ?assertMatch(#{cluster_change_permitted := true}, O),
+                  ct:pal("old leader ~p, new leader ~p", [Leader1, Leader2]),
+                  {ok, O, _} = ra:member_overview(Leader2),
+                  ct:pal("overview2 ~p", [O]),
+                  maps:get(cluster_change_permitted, O, false)
+          end, 600)
+    after
+        stop_peers(Peers)
+    end,
     ok.
 
 send_local_msg(Config) ->
