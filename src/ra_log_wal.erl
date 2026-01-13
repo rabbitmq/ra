@@ -402,10 +402,6 @@ recover_wal(Dir, #conf{system = System,
                         Writers
                 end, #{}, WalFiles),
 
-    % FinalWriters = lists:foldl(fun (New, Acc) ->
-    %                                    maps:merge(Acc, New)
-    %                            end, #{}, AllWriters),
-
     ?DEBUG("WAL in ~ts: final writers recovered ~b",
            [System, map_size(FinalWriters)]),
 
@@ -809,7 +805,7 @@ recover_records(#conf{names = Names} = Conf, Fd,
             SmallestIdx = recover_smallest_idx(Conf, UId, Trunc == 1, Idx),
             case validate_checksum(Checksum, Idx, Term, EntryData) of
                 ok when Idx >= SmallestIdx ->
-                    State1 = handle_trunc(Trunc == 1, UId, Idx, State0),
+                    State1 = handle_trunc(Conf, Trunc == 1, UId, Idx, State0),
                     case recover_entry(Names, UId,
                                        {Idx, Term, binary_to_term(EntryData)},
                                        SmallestIdx, State1) of
@@ -848,7 +844,7 @@ recover_records(#conf{names = Names} = Conf, Fd,
             SmallestIdx = recover_smallest_idx(Conf, UId, Trunc == 1, Idx),
             case validate_checksum(Checksum, Idx, Term, EntryData) of
                 ok when Idx >= SmallestIdx ->
-                    State1 = handle_trunc(Trunc == 1, UId, Idx, State0),
+                    State1 = handle_trunc(Conf, Trunc == 1, UId, Idx, State0),
                     case recover_entry(Names, UId,
                                        {Idx, Term, binary_to_term(EntryData)},
                                        SmallestIdx, State1) of
@@ -1047,9 +1043,9 @@ recover_entry(Names, UId, {Idx, Term, _}, SmallestIdx,
                                 tables = Tables#{UId => Mt0}}}
     end.
 
-handle_trunc(false, _UId, _Idx, State) ->
+handle_trunc(_, false, _UId, _Idx, State) ->
     State;
-handle_trunc(true, UId, Idx, #recovery{mode = Mode,
+handle_trunc(#conf{names = Names}, true, UId, Idx, #recovery{mode = Mode,
                                        ranges = Ranges0,
                                        writers = Writers,
                                        tables = Tbls} = State) ->
@@ -1057,7 +1053,9 @@ handle_trunc(true, UId, Idx, #recovery{mode = Mode,
         #{UId := Mt0} when Mode == initial ->
             %% only meddle with mem table data in initial mode
             {Specs, Mt} = ra_mt:set_first(Idx-1, Mt0),
-            [_ = ra_mt:delete(Spec) || Spec <- Specs],
+            [begin
+                 ok = ra_log_ets:execute_delete(Names, UId, Spec)
+             end|| Spec <- Specs],
             Ranges = case Ranges0 of
                          #{UId := Seqs0} ->
                              Seqs = [{T, ra_seq:floor(Idx, Seq)}
