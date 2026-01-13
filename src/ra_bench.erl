@@ -153,9 +153,9 @@ prepare() ->
     _ = ra_system:start_default(),
     ra_env:configure_logger(logger),
     LogFile = filename:join(ra_env:data_dir(), "ra-" ++ atom_to_list(node()) ++ ".log"),
-    logger:set_primary_config(level, debug),
+    _ = logger:set_primary_config(level, debug),
     Config = #{config => #{file => LogFile}},
-    logger:add_handler(ra_handler, logger_std_h, Config),
+    _ = logger:add_handler(ra_handler, logger_std_h, Config),
     % application:load(sasl),
     % application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
     ok.
