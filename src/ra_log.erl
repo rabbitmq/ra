@@ -913,14 +913,16 @@ handle_event(major_compaction, #?MODULE{cfg = #cfg{log_id = LogId},
         _ ->
             {State, []}
     end;
-handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes, SnapKind, Duration},
+handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes,
+              SnapKind, Duration},
              #?MODULE{cfg = #cfg{uid = UId,
                                  log_id = LogId,
                                  names = Names} = Cfg,
                       range = {FstIdx, _} = Range,
                       mem_table = Mt0,
                       pending = Pend0,
-                      last_written_index_term = {LastWrittenIdx, _} = LWIdxTerm0,
+                      last_written_index_term =
+                          {LastWrittenIdx, _} = LWIdxTerm0,
                       snapshot_state = SnapState0} = State0)
 %% only update snapshot if it is newer than the last snapshot
   when SnapIdx >= FstIdx ->

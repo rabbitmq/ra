@@ -605,7 +605,8 @@ roll_over(#state{wal = Wal0, file_num = Num0,
         end,
 
     {Conf, Wal} = open_wal(NextFile, NextMaxBytes, Conf0),
-    ok = ra_lib:sync_dir(Dir),
+    %% ignore the result as not supported on windows
+    _ = ra_lib:sync_dir(Dir),
     State0#state{conf = Conf,
                  wal = Wal,
                  file_num = Num}.
@@ -1045,10 +1046,11 @@ recover_entry(Names, UId, {Idx, Term, _}, SmallestIdx,
 
 handle_trunc(_, false, _UId, _Idx, State) ->
     State;
-handle_trunc(#conf{names = Names}, true, UId, Idx, #recovery{mode = Mode,
-                                       ranges = Ranges0,
-                                       writers = Writers,
-                                       tables = Tbls} = State) ->
+handle_trunc(#conf{names = Names}, true, UId, Idx,
+             #recovery{mode = Mode,
+                       ranges = Ranges0,
+                       writers = Writers,
+                       tables = Tbls} = State) ->
     case Tbls of
         #{UId := Mt0} when Mode == initial ->
             %% only meddle with mem table data in initial mode

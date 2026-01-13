@@ -410,16 +410,6 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
     BgWorkFun = fun () ->
                         StartTime = erlang:monotonic_time(),
                         ok = ra_lib:make_dir(SnapDir),
-                        %% if the Ref returned by ra_snapshot:prepare/2 is
-                        %% the same as the mac state then indexes can be
-                        %% calculated here
-                        LiveIndexes =
-                            case PostPrepareEqualsMacState of
-                                true ->
-                                    ra_machine:live_indexes(MacMod, Ref);
-                                false ->
-                                    LiveIndexes0
-                            end,
                         case Mod:write(SnapDir, Meta, Ref, Sync) of
                             ok -> ok;
                             {ok, BytesWritten} ->
@@ -428,12 +418,22 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
                                 ok
                         end,
 
-                        case LiveIndexes of
-                            [] -> ok;
-                            _ ->
-                                ok = write_indexes(SnapDir, LiveIndexes),
-                                ok
-                        end,
+                        %% if the Ref returned by ra_snapshot:prepare/2 is
+                        %% the same as the mac state then indexes can be
+                        %% calculated here
+                        LiveIndexes =
+                            case PostPrepareEqualsMacState of
+                                true ->
+                                    case ra_machine:live_indexes(MacMod, Ref) of
+                                        [] ->
+                                            [];
+                                        LI ->
+                                            ok = write_indexes(SnapDir, LI),
+                                            LI
+                                    end;
+                                false ->
+                                    LiveIndexes0
+                            end,
 
                         EndTime = erlang:monotonic_time(),
                         Duration = erlang:convert_time_unit(EndTime - StartTime,
@@ -588,7 +588,7 @@ complete_accept(Chunk, Num, Machine,
     %% delete accepting marker file
     AcceptMarker = filename:join(SnapDir, <<"accepting">>),
     _ = prim_file:delete(AcceptMarker),
-    % ok = ra_lib:sync_dir(SnapDir),
+    _ = ra_lib:sync_dir(SnapDir),
     %% assert accepting marker is no longer there
     ?assertNot(filelib:is_file(AcceptMarker)),
     SmallestIdx = case ra_seq:first(LiveIndexes) of

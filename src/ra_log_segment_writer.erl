@@ -368,7 +368,7 @@ flush_mem_table_range(ServerUId, {Tid, Seq},
                               end,
 
                     _ = ra_log_segment:close(Segment),
-                    ok = ra_lib:sync_dir(Dir),
+                    _ = ra_lib:sync_dir(Dir),
                     SegRefs
             end
     end.
