@@ -370,9 +370,9 @@ send_segments(System, ServerUId, TidRanges, SegRefs) ->
                    "~ts. Reason: ~s",
                    [ServerUId, "No Pid"]),
             %% delete from the memtable on the non-running server's behalf
-            [begin
-                 _  = catch ra_mt:delete({range, Tid, Range})
-             end || {Tid, Range} <- TidRanges],
+            _ = [begin
+                     _  = catch ra_mt:delete({range, Tid, Range})
+                 end || {Tid, Range} <- TidRanges],
             ok;
         Pid ->
             Pid ! {ra_log_event, {segments, TidRanges, SegRefs}},
@@ -538,16 +538,16 @@ maybe_upgrade_segment_file_names(System, DataDir) ->
             ?INFO("segment_writer: upgrading segment file names to "
                   "new format in dirctory ~ts",
                   [DataDir]),
-            [begin
-                 Dir = filename:join(DataDir, UId),
-                 case prim_file:list_dir(Dir) of
-                     {ok, Files} ->
-                         [ra_lib:zpad_upgrade(Dir, F, ".segment")
-                          || F <- Files, filename:extension(F) =:= ".segment"];
-                     {error, enoent} ->
-                         ok
-                 end
-             end || {_, UId} <- ra_directory:list_registered(System)],
+            _ = [begin
+                     Dir = filename:join(DataDir, UId),
+                     case prim_file:list_dir(Dir) of
+                         {ok, Files} ->
+                             [ra_lib:zpad_upgrade(Dir, F, ".segment")
+                              || F <- Files, filename:extension(F) =:= ".segment"];
+                         {error, enoent} ->
+                             ok
+                     end
+                 end || {_, UId} <- ra_directory:list_registered(System)],
 
             ok = ra_lib:write_file(Marker, <<>>);
         true ->

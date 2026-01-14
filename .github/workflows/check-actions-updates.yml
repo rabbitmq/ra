@@ -1,10 +1,16 @@
 name: Check-Actions-Updates
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  # We have to use an unreleased version of the `setup-beam` action to benefit
+  # from a fix when it is used on Windows. Unfortunately, setup-beam still has
+  # no release with that fix, despite multiple requests.
+  #
+  # For now, disable this job for pull requests and pushes to the main branch.
+  #
+  # push:
+  #   branches:
+  #     - main
+  # pull_request:
   workflow_dispatch:
   schedule:
     - cron: '0 16 * * 2' # Runs Tuesdays at 16:00 UTC

@@ -60,9 +60,18 @@ groups() ->
     ].
 
 init_per_suite(Config) ->
+    ok = logger:set_primary_config(level, debug),
+    LogFile = filename:join(?config(priv_dir, Config), ?MODULE_STRING ++ "-ra.log"),
+    SaslFile = filename:join(?config(priv_dir, Config), ?MODULE_STRING ++ "-ra_sasl.log"),
+    logger:add_handler(ra_handler, logger_std_h, #{config => #{file => LogFile}}),
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
+    application:stop(sasl),
+    application:start(sasl),
     Config.
 
 end_per_suite(Config) ->
+    logger:remove_handler(ra_handler),
     Config.
 
 init_per_group(Group, Config) ->
@@ -86,24 +95,21 @@ init_per_group(Group, Config) ->
                message_queue_data => off_heap,
                data_dir => SysDir},
     ra_env:configure_logger(logger),
-    ok = logger:set_primary_config(level, debug),
-    LogFile = filename:join(?config(priv_dir, Config), "ra.log"),
-    SaslFile = filename:join(?config(priv_dir, Config), "ra_sasl.log"),
-    logger:add_handler(ra_handler, logger_std_h, #{config => #{file => LogFile}}),
-    application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
-    application:stop(sasl),
-    application:start(sasl),
     {ok, _} = ra_system:start(SysCfg),
     application:ensure_all_started(lg),
     [{sys_cfg, SysCfg} | Config].
 
-end_per_group(_, Config) ->
+end_per_group(Group, Config) ->
     application:stop(ra),
     application:unload(ra),
     PrivDir = ?config(priv_dir, Config),
-    ok = file:del_dir_r(PrivDir),
-    ok = file:make_dir(PrivDir),
+    ok = file:del_dir_r(filename:join(PrivDir, ?SYS)),
+    case Group of
+        tests_with_wal_data_dir ->
+            ok = file:del_dir_r(filename:join(PrivDir, "wal"));
+        _ ->
+            ok
+    end,
     Config.
 
 init_per_testcase(TestCase, Config) ->

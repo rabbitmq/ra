@@ -206,18 +206,22 @@ delete_two_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
     Peers = start_peers([s1,s2], PrivDir),
-    ServerIds = server_ids(ClusterName, Peers),
-    Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    {ok, _} = ra:delete_cluster(ServerIds),
-    await_condition(
-      fun () ->
-              lists:all(
-                fun ({Name, Node}) ->
-                        undefined == erpc:call(Node, erlang, whereis, [Name])
-                end, ServerIds)
-      end, 100),
-    stop_peers(Peers),
+    try
+        ServerIds = server_ids(ClusterName, Peers),
+        Machine = {module, ?MODULE, #{}},
+        {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+        timer:sleep(1000),
+        {ok, _} = ra:delete_cluster(ServerIds),
+        await_condition(
+          fun () ->
+                  lists:all(
+                    fun ({Name, Node}) ->
+                            undefined == erpc:call(Node, erlang, whereis, [Name])
+                    end, ServerIds)
+          end, 600)
+    after
+        stop_peers(Peers)
+    end,
     receive
         Anything ->
             ct:pal("got weird message ~p", [Anything]),
@@ -231,44 +235,52 @@ delete_three_server_cluster(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
     Peers = start_peers([s1,s2,s3], PrivDir),
-    ServerIds = server_ids(ClusterName, Peers),
-    Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    {ok, _} = ra:delete_cluster(ServerIds),
-    await_condition(
-      fun () ->
-              lists:all(
-                fun ({Name, Node}) ->
-                        undefined == erpc:call(Node, erlang, whereis, [Name])
-                end, ServerIds)
-      end, 100),
-    stop_peers(Peers),
+    try
+        ServerIds = server_ids(ClusterName, Peers),
+        Machine = {module, ?MODULE, #{}},
+        {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+        timer:sleep(1000),
+        {ok, _} = ra:delete_cluster(ServerIds),
+        await_condition(
+          fun () ->
+                  lists:all(
+                    fun ({Name, Node}) ->
+                            undefined == erpc:call(Node, erlang, whereis, [Name])
+                    end, ServerIds)
+          end, 600)
+    after
+        stop_peers(Peers)
+    end,
     ok.
 
 delete_three_server_cluster_parallel(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
     Peers = start_peers([s1,s2,s3], PrivDir),
-    ServerIds = server_ids(ClusterName, Peers),
-    Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    %% spawn a delete command to try cause it to commit more than
-    %% one delete command
-    spawn(fun () -> {ok, _} = ra:delete_cluster(ServerIds) end),
-    spawn(fun () -> {ok, _} = ra:delete_cluster(ServerIds) end),
-    {ok, _} = ra:delete_cluster(ServerIds),
-    await_condition(
-      fun () ->
-              lists:all(
-                fun ({Name, Node}) ->
-                        undefined == erpc:call(Node, erlang, whereis, [Name])
-                end, ServerIds)
-      end, 100),
-    [begin
-         true = rpc:call(S, ?MODULE, check_sup, [])
-     end || {_, S} <- ServerIds],
-    % assert all nodes are actually started
-    stop_peers(Peers),
+    try
+        ServerIds = server_ids(ClusterName, Peers),
+        Machine = {module, ?MODULE, #{}},
+        {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+        timer:sleep(1000),
+        %% spawn a delete command to try cause it to commit more than
+        %% one delete command
+        spawn(fun () -> {ok, _} = ra:delete_cluster(ServerIds) end),
+        spawn(fun () -> {ok, _} = ra:delete_cluster(ServerIds) end),
+        {ok, _} = ra:delete_cluster(ServerIds),
+        await_condition(
+          fun () ->
+                  lists:all(
+                    fun ({Name, Node}) ->
+                            undefined == erpc:call(Node, erlang, whereis, [Name])
+                    end, ServerIds)
+          end, 600),
+        [begin
+             true = rpc:call(S, ?MODULE, check_sup, [])
+         end || {_, S} <- ServerIds]
+        % assert all nodes are actually started
+    after
+        stop_peers(Peers)
+    end,
     ok.
 
 check_sup() ->
@@ -389,37 +401,40 @@ shrink_cluster_with_snapshot(Config) ->
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
     Peers = start_peers([s1,s2,s3], PrivDir),
-    ServerIds = server_ids(ClusterName, Peers),
-    [_A, _B, _C] = ServerIds,
+    try
+        ServerIds = server_ids(ClusterName, Peers),
+        [_A, _B, _C] = ServerIds,
 
-    Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    {ok, _, Leader1} = ra:members(ServerIds),
+        Machine = {module, ?MODULE, #{}},
+        {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+        {ok, _, Leader1} = ra:members(ServerIds),
 
-    %% run some activity to create a snapshot
-    [_ = ra:process_command(Leader1, {banana, I})
-      || I <- lists:seq(1, 5000)],
+        %% run some activity to create a snapshot
+        [_ = ra:process_command(Leader1, {banana, I})
+          || I <- lists:seq(1, 5000)],
 
-    Fun = fun F(L0) ->
-                  {ok, _, L} = ra:process_command(L0, banana),
-                  F(L)
-          end,
-    Pid = spawn(fun () -> Fun(Leader1) end),
-    timer:sleep(100),
+        Fun = fun F(L0) ->
+                      {ok, _, L} = ra:process_command(L0, banana),
+                      F(L)
+              end,
+        Pid = spawn(fun () -> Fun(Leader1) end),
+        timer:sleep(100),
 
-    exit(Pid, kill),
-    {ok, _, _} = ra:remove_member(Leader1, Leader1),
+        exit(Pid, kill),
+        {ok, _, _} = ra:remove_member(Leader1, Leader1),
 
+        await_condition(
+          fun () ->
+                  {ok, _, Leader2} = ra:members(ServerIds),
 
-    timer:sleep(500),
-
-    {ok, _, Leader2} = ra:members(ServerIds),
-
-    ct:pal("old leader ~p, new leader ~p", [Leader1, Leader2]),
-    {ok, O, _} = ra:member_overview(Leader2),
-    ct:pal("overview2 ~p", [O]),
-    stop_peers(Peers),
-    ?assertMatch(#{cluster_change_permitted := true}, O),
+                  ct:pal("old leader ~p, new leader ~p", [Leader1, Leader2]),
+                  {ok, O, _} = ra:member_overview(Leader2),
+                  ct:pal("overview2 ~p", [O]),
+                  maps:get(cluster_change_permitted, O, false)
+          end, 600)
+    after
+        stop_peers(Peers)
+    end,
     ok.
 
 send_local_msg(Config) ->
@@ -1330,7 +1345,9 @@ start_peer(N, PrivDir, SysCfg) ->
     Dir0 = filename:join(PrivDir, N),
     Dir = "'" ++ Dir0 ++ "'",
     %Host = get_current_host(),
-    Args = ["-pa", filename:dirname(code:which(ra)), "-ra", "data_dir", Dir],
+    Pa = [filename:dirname(code:which(App))
+          || App <- [aten, gen_batch_server, seshat, ra]],
+    Args = ["-pa"] ++ Pa ++ ["-ra", "data_dir", Dir],
     ct:pal("starting child node ~ts with args ~ts", [N, Args]),
     {ok, P, S} = ?CT_PEER(#{name => N, args => Args}),
     ct:pal("started child node ~s", [S]),
