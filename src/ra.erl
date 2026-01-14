@@ -61,8 +61,10 @@
          %% membership changes
          add_member/2,
          add_member/3,
+         pipeline_add_member/4,
          remove_member/2,
          remove_member/3,
+         pipeline_remove_member/4,
          leave_and_terminate/3,
          leave_and_terminate/4,
          leave_and_delete_server/3,
@@ -613,6 +615,38 @@ add_member(ServerLoc, ServerId, Timeout) ->
                            {'$ra_join', ServerId, after_log_append},
                            Timeout).
 
+%% @doc Asynchronously add a ra server id to a ra cluster's membership
+%% configuration.
+%%
+%% This is the same operation as {@link add_member/2} but the membership
+%% change is pipelined in the same way as {@link pipeline_command/4}.
+%%
+%% @param ServerRef the ra server or servers to send the command to
+%% @param ServerId the ra server id of the server to remove
+%% @param Correlation a correlation identifier to be included to receive an
+%%        async notification after the command is applied to the state machine. If the
+%%        Correlation is set to `no_correlation' then no notifications will be sent.
+%% @param Priority command priority. `low' priority commands will be held back
+%%        and appended to the Raft log in batches. NB: A `normal' priority command sent
+%%        from the same process can overtake a low priority command that was
+%%        sent before. There is no high priority.
+%%        Only use priority level of `low' with commands that
+%%        do not rely on total execution ordering.
+%% @see add_member/2
+%% @end
+-spec pipeline_add_member(ServerRef :: ra_server_id() | [ra_server_id()],
+                          ServerId :: ra_server_id(),
+                          Correlation :: ra_server:command_correlation() |
+                          no_correlation,
+                          Priority :: ra_server:command_priority()) -> ok.
+pipeline_add_member(ServerRef, ServerId, no_correlation, Priority) ->
+    Cmd = {'$ra_join', ServerId, noreply},
+    ra_server_proc:cast_command(ServerRef, Priority, Cmd);
+pipeline_add_member(ServerRef, ServerId, Correlation, Priority) ->
+    Cmd = {'$ra_join', ServerId, {notify, Correlation, self()}},
+    ra_server_proc:cast_command(ServerRef, Priority, Cmd).
+
+
 %% @doc Removes a server from the cluster's membership configuration.
 %% This function returns after appending a cluster membership change
 %% command to the log.
@@ -646,6 +680,37 @@ remove_member(ServerRef, ServerId, Timeout) ->
     ra_server_proc:command(ServerRef,
                            {'$ra_leave', ServerId, after_log_append},
                            Timeout).
+
+%% @doc Asynchronously remove a ra server id from a ra cluster's membership
+%% configuration.
+%%
+%% This is the same operation as {@link remove_member/2} but the membership
+%% change is pipelined in the same way as {@link pipeline_command/4}.
+%%
+%% @param ServerRef the ra server or servers to send the command to
+%% @param ServerId the ra server id of the server to remove
+%% @param Correlation a correlation identifier to be included to receive an
+%%        async notification after the command is applied to the state machine. If the
+%%        Correlation is set to `no_correlation' then no notifications will be sent.
+%% @param Priority command priority. `low' priority commands will be held back
+%%        and appended to the Raft log in batches. NB: A `normal' priority command sent
+%%        from the same process can overtake a low priority command that was
+%%        sent before. There is no high priority.
+%%        Only use priority level of `low' with commands that
+%%        do not rely on total execution ordering.
+%% @see remove_member/2
+%% @end
+-spec pipeline_remove_member(ServerRef :: ra_server_id() | [ra_server_id()],
+                             ServerId :: ra_server_id(),
+                             Correlation :: ra_server:command_correlation() |
+                             no_correlation,
+                             Priority :: ra_server:command_priority()) -> ok.
+pipeline_remove_member(ServerRef, ServerId, no_correlation, Priority) ->
+    Cmd = {'$ra_leave', ServerId, noreply},
+    ra_server_proc:cast_command(ServerRef, Priority, Cmd);
+pipeline_remove_member(ServerRef, ServerId, Correlation, Priority) ->
+    Cmd = {'$ra_leave', ServerId, {notify, Correlation, self()}},
+    ra_server_proc:cast_command(ServerRef, Priority, Cmd).
 
 %% @doc Makes the server enter a pre-vote state and attempt to become the leader.
 %% It is necessary to call this function when starting a new cluster as a
