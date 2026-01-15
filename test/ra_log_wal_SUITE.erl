@@ -114,7 +114,6 @@ init_per_testcase(TestCase, Config) ->
     Names = maps:get(names, Sys),
     WalConf = #{dir => Dir,
                 system => ?SYS,
-                system => default,
                 names => Names#{segment_writer => self()},
                 max_size_bytes => ?MAX_SIZE_BYTES},
     _ = ets:new(ra_log_snapshot_state,

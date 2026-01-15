@@ -873,7 +873,7 @@ make_symlinks(Dir, To, From)
          _ = prim_file:delete(SymFn),
          %% make a symlink from the compacted target segment to a new .link
          %% where the compacted indexes now can be found
-         ok = prim_file:make_symlink(filename:basename(To), SymFn),
+         ok = prim_file:make_symlink(To, SymFn),
          %% rename to link to replace original segment
          ok = prim_file:rename(SymFn, SegFn)
      end || FromFn <- From],

@@ -731,7 +731,7 @@ major_deletes_orphaned_segments(Config) ->
     %% Create symlink with a name in the orphaned range (e.g., 0000000000000002.segment)
     %% but we'll use a different name to avoid conflicts
     SymlinkName = filename:join(Dir, "0000000000000002a.segment"),
-    ok = prim_file:make_symlink(filename:basename(SymlinkTarget), SymlinkName),
+    ok = prim_file:make_symlink(SymlinkTarget, SymlinkName),
     ct:pal("Created test symlink: ~p -> ~p", [SymlinkName, SymlinkTarget]),
 
     %% Now run major compaction - this should delete the orphaned regular files
