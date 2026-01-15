@@ -411,7 +411,6 @@ info(#?MODULE{tid = Tid,
     {delete_spec(), state()}.
 record_flushed(TID = Tid, FlushedSeq,
                #?MODULE{tid = TID,
-
                         prev = Prev0,
                         indexes = Seq} = State) ->
     End = ra_seq:last(FlushedSeq),
@@ -438,14 +437,25 @@ record_flushed(TID = Tid, FlushedSeq,
 record_flushed(_Tid, _FlushedSeq, #?MODULE{prev = undefined} = State) ->
     {undefined, State};
 record_flushed(Tid, FlushedSeq, #?MODULE{prev = Prev0} = State) ->
-    %% TODO: test many levels deep flushes
-    {Spec, Prev} = record_flushed(Tid, FlushedSeq, Prev0),
+    {Spec0, Prev} = record_flushed(Tid, FlushedSeq, Prev0),
     case range(Prev) of
         undefined ->
+            Spec = case Spec0 of
+                       {multi, Specs} ->
+                           %% only emit delete full table specs
+                           {multi,
+                            [{delete, Tid} |
+                             [S || {delete, _} = S <- Specs]]};
+                       {_, Tid, _} ->
+                           {delete, Tid};
+                       _ ->
+                           Spec0
+                   end,
+
             %% the prev table is now empty and can be deleted,
-            {{delete, Tid}, State#?MODULE{prev = undefined}};
+            {Spec, State#?MODULE{prev = undefined}};
         _ ->
-            {Spec, State#?MODULE{prev = Prev}}
+            {Spec0, State#?MODULE{prev = Prev}}
     end.
 
 -spec set_first(ra:index(), state()) ->

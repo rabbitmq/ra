@@ -25,6 +25,7 @@ all_tests() ->
      record_flushed,
      record_flushed_missed,
      record_flushed_missed_prev,
+     record_flushed_missed_multi_prev,
      record_flushed_after_set_first,
      record_flushed_prev,
      set_first,
@@ -157,6 +158,38 @@ record_flushed_missed_prev(_Config) ->
     ?assertEqual({101, 105}, ra_mt:range(Mt4)),
     _ = ra_mt:delete(Spec3),
     ?assertMatch(#{size := 5}, ra_mt:info(Mt4)),
+    ok.
+
+record_flushed_missed_multi_prev(_Config) ->
+    %% test that a prior mem table is cleared up when the current one is
+    %% recorded flushed
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_mt:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 49)),
+
+    Tid2 = ets:new(t2, [set, public]),
+    Mt2 = ra_mt:init_successor(Tid2, read_write, Mt1),
+    Mt3 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 2, <<"apple">>}, Acc))
+            end, Mt2, lists:seq(25, 105)),
+
+    Tid3 = ets:new(t3, [set, public]),
+    Mt4 = ra_mt:init_successor(Tid3, read_write, Mt3),
+    Mt5 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 2, <<"apple">>}, Acc))
+            end, Mt4, lists:seq(106, 110)),
+
+    %% simulate missed flush for t1
+    {Spec3, Mt6} = ra_mt:record_flushed(Tid2, [{25, 105}], Mt5),
+    ?assertMatch(#{previous := undefined}, ra_mt:info(Mt6)),
+    ?assertMatch({multi, [{delete, Tid2},
+                          {delete, Tid}]}, Spec3),
+    ?assertEqual({106, 110}, ra_mt:range(Mt6)),
     ok.
 
 record_flushed_after_set_first(_Config) ->

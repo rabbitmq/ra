@@ -248,6 +248,17 @@ init(#{uid := UId,
     %% not do the right thing here as it requires a contiguous range
     Range = ra_range:combine(MtRange, SegmentRange),
 
+    case ra_range:overlap(MtRange, SegmentRange) of
+        {_, _} = Overlap ->
+            ?INFO("~ts: ra_log:init/1 mem table and segment ranges overlap ~w"
+                  "mem table range ~w, segment range ~w",
+                  [LogId, Overlap, MtRange, SegmentRange]);
+        _ -> ok
+    end,
+    %% TODO: if MtRange and SegmentRange overlaps check if the overlap exists in the
+    %% mt and if it is the same in the segments, if so we can set first on the
+    %% mt to match the end + 1 of the SegmentRange
+
     [begin
          ?DEBUG("~ts: deleting overwritten segment ~w",
                 [LogId, SR]),
@@ -831,7 +842,7 @@ handle_event({written, Term, WrittenSeq},
                     handle_event({written, Term, NewWrittenSeq}, State0)
             end
     end;
-handle_event({segments, TidRanges, NewSegs},
+handle_event({segments, TidSeqs, NewSegs},
              #?MODULE{cfg = #cfg{uid = UId,
                                  log_id = LogId,
                                  directory = Dir,
@@ -851,19 +862,22 @@ handle_event({segments, TidRanges, NewSegs},
                    {Spec, Acc} = ra_mt:record_flushed(Tid, Seq, Acc0),
                    ok = ra_log_ets:execute_delete(Names, UId, Spec),
                    Acc
-           end, Mt0, TidRanges),
+           end, Mt0, TidSeqs),
 
     %% it is theoretically possible that the segment writer flush _could_
     %% over take WAL notifications
     FstPend = ra_seq:first(Pend0),
     MtRange = ra_mt:range(Mt),
-    Pend = case MtRange  of
+    Pend = case MtRange of
                {Start, _End} when Start > FstPend ->
                    ra_seq:floor(Start, Pend0);
                _ ->
                    Pend0
            end,
-    ?DEBUG("~ts: ~b segments tidranges received ", [LogId, length(TidRanges)]),
+    SegRange = ra_log_segments:range(Reader),
+    ?DEBUG("~ts: ~b new segment(s) received - mem table range ~w"
+           " segment range ~w",
+           [LogId, length(TidSeqs), MtRange, SegRange]),
     State = State0#?MODULE{reader = Reader,
                            pending = Pend,
                            mem_table = Mt},
