@@ -850,12 +850,13 @@ handle_event({segments, TidSeqs, NewSegs},
                                  names = Names} = Cfg,
                       reader = Reader0,
                       pending = Pend0,
+                      last_written_index_term = LWIT0,
                       mem_table = Mt0} = State0) ->
-    {Reader, OverwrittenSegRefs} =
+    {Reader1, OverwrittenSegRefs} =
         ra_log_segments:update_segments(NewSegs, Reader0),
 
     put_counter(Cfg, ?C_RA_SVR_METRIC_NUM_SEGMENTS,
-                ra_log_segments:segment_ref_count(Reader)),
+                ra_log_segments:segment_ref_count(Reader1)),
     %% the tid ranges arrive in the reverse order they were written
     %% (new -> old) so we need to foldr here to process the oldest first
     Mt = lists:foldr(
@@ -869,18 +870,40 @@ handle_event({segments, TidSeqs, NewSegs},
     %% over take WAL notifications
     FstPend = ra_seq:first(Pend0),
     MtRange = ra_mt:range(Mt),
+    SegRange = ra_log_segments:range(Reader1),
     Pend = case MtRange of
-               {Start, _End} when Start > FstPend ->
+               {Start, _End} when is_integer(FstPend) andalso
+                                  Start > FstPend ->
+                   %% set the first pending item to that of the first mem
+                   %% table index
                    ra_seq:floor(Start, Pend0);
-               _ ->
-                   Pend0
+               {_, _} ->
+                   Pend0;
+               undefined ->
+                   %% if there are no mem entries, all pending items must be
+                   %% flushed
+                   []
            end,
-    SegRange = ra_log_segments:range(Reader),
+
+    %% if the last written index term is lower than the last segment index
+    %% we need to update this.
+    {LWIT, Reader} =
+        case LWIT0 of
+            {LWI, _} when is_tuple(SegRange) andalso
+                          element(2, SegRange) > LWI ->
+                {_, LastSegIdx} = SegRange,
+                {LWTerm, Reader2} = ra_log_segments:fetch_term(LastSegIdx,
+                                                               Reader1),
+                {{LastSegIdx, LWTerm}, Reader2};
+            _ ->
+                {LWIT0, Reader1}
+        end,
     ?DEBUG("~ts: ~b new segment(s) received - mem table range ~w"
            " segment range ~w",
-           [LogId, length(TidSeqs), MtRange, SegRange]),
+           [LogId, length(NewSegs), MtRange, SegRange]),
     State = State0#?MODULE{reader = Reader,
                            pending = Pend,
+                           last_written_index_term = LWIT,
                            mem_table = Mt},
     Fun = fun () ->
                   [begin
@@ -1522,7 +1545,19 @@ resend_pending(#?MODULE{cfg = Cfg,
                 end,
                 State#?MODULE{last_resend_time = {erlang:system_time(seconds),
                                                   whereis(Cfg#cfg.wal)}},
-                Pend).
+                Pend);
+resend_pending(#?MODULE{last_resend_time = {LastResend, WalPid},
+                        cfg = #cfg{resend_window_seconds = ResendWindow}} = State) ->
+    case erlang:system_time(seconds) > LastResend + ResendWindow orelse
+         (is_pid(WalPid) andalso not is_process_alive(WalPid)) of
+        true ->
+            % it has been more than the resend window since last resend
+            % _or_ the wal has been restarted since then
+            % ok to try again
+            resend_pending(State#?MODULE{last_resend_time = undefined});
+        false ->
+            State
+    end.
 
 resend_from0(Idx, #?MODULE{cfg = Cfg,
                            range = {_, LastIdx},

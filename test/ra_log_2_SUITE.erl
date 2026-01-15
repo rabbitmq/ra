@@ -47,6 +47,8 @@ all_tests() ->
      recovery_with_missing_config_file,
      wal_crash_recover,
      wal_crash_with_lost_message_and_log_init,
+     missed_written_then_write,
+     missed_written_then_segments_then_write,
      wal_down_read_availability,
      wal_down_append_throws,
      wal_down_write_returns_error_wal_down,
@@ -1169,6 +1171,55 @@ wal_crash_with_lost_message_and_log_init(Config) ->
     Log = ra_log_init(Config, #{wal => ra_log_wal}),
     ?assertEqual({9, 2}, ra_log:last_written(Log)),
 
+    ok.
+
+missed_written_then_write(Config) ->
+    Log0 = ra_log_init(Config, #{wal => ra_log_wal}),
+    {0, 0} = ra_log:last_index_term(Log0),
+    % write some entries
+    Log1 = append_n(1, 10, 2, Log0),
+
+    %% lose the written event
+    receive
+        {ra_log_event,{written, _, _}} -> ok
+    after 5000 ->
+              ct:fail("written event timeout")
+    end,
+
+    Log3 = append_n(10, 15, 2, Log1),
+    _Log4 = assert_log_events(Log3, fun (L) ->
+                                           {14, 2} == ra_log:last_written(L)
+                                   end),
+    ok.
+
+missed_written_then_segments_then_write(Config) ->
+    Log0 = ra_log_init(Config, #{wal => ra_log_wal}),
+    {0, 0} = ra_log:last_index_term(Log0),
+    % write some entries
+    Log1 = append_n(1, 10, 2, Log0),
+
+    %% lose the written event
+    receive
+        {ra_log_event,{written, _, _}} -> ok
+    after 5000 ->
+              ct:fail("written event timeout")
+    end,
+
+    ra_log_wal:force_roll_over(ra_log_wal),
+    Log2 = assert_log_events(Log1,
+                             fun (L) ->
+                                     #{segments_range := SR,
+                                       num_pending := Pnd,
+                                       last_written_index_term := LWIT} =
+                                         ra_log:overview(L),
+                                     SR == {0,9} andalso
+                                     Pnd == 0 andalso
+                                     LWIT == {9, 2}
+                             end),
+    Log3 = append_n(10, 15, 2, Log2),
+    _Log4 = assert_log_events(Log3, fun (L) ->
+                                           {14, 2} == ra_log:last_written(L)
+                                   end),
     ok.
 
 wal_down_read_availability(Config) ->
