@@ -2,7 +2,8 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2025 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
+%% Copyright (c) 2017-2026 Broadcom. All Rights Reserved. The term Broadcom
+%% refers to Broadcom Inc. and/or its subsidiaries.
 %%
 %% @doc The `ra_machine' behaviour.
 %%
@@ -72,6 +73,7 @@
          snapshot_installed/5,
          state_enter/3,
          overview/2,
+         live_indexes/2,
          query/3,
          module/1,
          init_aux/2,
@@ -133,6 +135,7 @@
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
     {timer, term(), non_neg_integer() | infinity} |
+    {timer, term(), non_neg_integer() | infinity, {abs, boolean()}} |
     {log, [ra_index()], fun(([user_command()]) -> effects())} |
 
     %% these are either conditional on the local configuration or
@@ -224,6 +227,7 @@
                      handle_aux/5,
                      handle_aux/6,
                      overview/1,
+                     live_indexes/1,
                      snapshot_module/0,
                      version/0,
                      which_module/1
@@ -289,6 +293,8 @@
 
 -callback overview(state()) -> map().
 
+-callback live_indexes(state()) -> [ra:index()] | {ra_seq, ra_seq:state()}.
+
 -callback snapshot_module() -> module().
 
 -callback version() -> version().
@@ -346,11 +352,24 @@ state_enter(Mod, RaftState, State) ->
 overview(Mod, State) ->
     ?OPT_CALL(Mod:overview(State), State).
 
+-spec live_indexes(module(), state()) -> ra_seq:state().
+live_indexes(Mod, State) ->
+    case ?OPT_CALL(Mod:live_indexes(State), []) of
+        {ra_seq, Seq} ->
+            %% Machine returned a pre-built ra_seq
+            Seq;
+        List ->
+            %% Plain list of indexes - convert to ra_seq
+            ra_seq:from_list(List)
+    end.
+
 %% @doc used to discover the latest machine version supported by the current
 %% code
--spec version(machine()) -> version().
+-spec version(machine() | module()) -> version().
+version(Mod) when is_atom(Mod) ->
+    ?OPT_CALL(assert_version(Mod:version()), ?DEFAULT_VERSION);
 version({machine, Mod, _}) ->
-    ?OPT_CALL(assert_version(Mod:version()), ?DEFAULT_VERSION).
+    version(Mod).
 
 -spec is_versioned(machine()) -> boolean().
 is_versioned({machine, Mod, _}) ->

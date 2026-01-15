@@ -75,7 +75,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 pre_init(System, UId) ->
     case ets:lookup(?ETSTBL, UId) of
-        [{_, _}] ->
+        [{_, _, _, _}] ->
             %% already initialised
             ok;
         [] ->

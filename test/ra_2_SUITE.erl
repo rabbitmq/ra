@@ -14,6 +14,7 @@
 -include_lib("eunit/include/eunit.hrl").
 % -define(info, true).
 -define(SYS, ?MODULE).
+-define(IDMFA, {ra_lib, id, []}).
 
 %% common ra_log tests to ensure behaviour is equivalent across
 %% ra_log backends
@@ -44,8 +45,6 @@ all_tests() ->
      custom_ra_event_formatter,
      config_modification_at_restart,
      segment_writer_handles_server_deletion,
-     %% TODO: mt decide on whether to support this
-     % external_reader,
      add_member_without_quorum,
      force_start_follower_as_single_member,
      force_start_follower_as_single_member_nonvoter,
@@ -538,19 +537,19 @@ recover_after_kill(Config) ->
     %% this should by the ?SYS release cursor interval of 128
     %% create a new snapshot
     {_F3, _AllDeq} = enq_deq_n(65, F2, Deqd),
-    {ok, MS, _} = ra:consistent_query(ServerId, fun (S) -> S end),
+    {ok, MS, _} = ra:consistent_query(ServerId, ?IDMFA),
     %% kill node again to trigger post snapshot recovery
     exit(whereis(Name), kill),
     timer:sleep(250),
     ra:members(ServerId),
     timer:sleep(200),
     % give leader time to commit noop
-    {ok, MS2, _} = ra:consistent_query(ServerId, fun (S) -> S end),
+    {ok, MS2, _} = ra:consistent_query(ServerId, ?IDMFA),
     ok = ra:stop_server(?SYS, ServerId),
     ?assertEqual(MS, MS2),
     ok = ra:restart_server(?SYS, ServerId),
     {ok, _, _} = ra:members(ServerId, 30000),
-    {ok, MS3, _} = ra:consistent_query(ServerId, fun (S) -> S end),
+    {ok, MS3, _} = ra:consistent_query(ServerId, ?IDMFA),
     ct:pal("~p ~p", [MS2, MS3]),
     ?assertEqual(MS2, MS3),
     ok.
@@ -666,33 +665,6 @@ segment_writer_handles_server_deletion(Config) ->
     after 1000 ->
               ok
     end,
-    ok.
-
-external_reader(Config) ->
-    ok = logger:set_primary_config(level, all),
-    ServerId = ?config(server_id, Config),
-    ClusterName = ?config(cluster_name, Config),
-    ok = start_cluster(ClusterName, [ServerId]),
-    ra:members(ServerId),
-    ok = enqueue(ServerId, msg1),
-    [begin
-         _ = ra:pipeline_command(ServerId, {enq, N}, no_correlation, normal)
-     end || N <- lists:seq(1, 1023)],
-    _ = enqueue(ServerId, final),
-    R0 = ra:register_external_log_reader(ServerId),
-    ok = force_roll_over(),
-    receive
-        {ra_event, _, {machine, {ra_log_update, _, _, _} = E}} ->
-            R1 = ra_log_reader:handle_log_update(E, R0),
-            {Entries, _R2} = ra_log_reader:sparse_read(R1, lists:seq(0, 1026), []),
-            ct:pal("read ~w ~w", [length(Entries), lists:last(Entries)]),
-            %% read all entries
-            ok
-    after 3000 ->
-              flush(),
-              exit(ra_log_update_timeout)
-    end,
-    ra:delete_cluster([ServerId]),
     ok.
 
 add_member_without_quorum(Config) ->

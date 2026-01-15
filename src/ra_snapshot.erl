@@ -8,6 +8,7 @@
 
 -include("ra.hrl").
 
+-include_lib("stdlib/include/assert.hrl").
 -type file_err() :: ra_lib:file_err().
 
 %% alias
@@ -28,26 +29,32 @@
          directory/2,
          last_index_for/1,
 
-         begin_snapshot/4,
+         begin_snapshot/5,
          promote_checkpoint/2,
-         complete_snapshot/3,
+         complete_snapshot/4,
 
          begin_accept/2,
-         accept_chunk/4,
+         accept_chunk/3,
+         complete_accept/4,
          abort_accept/1,
 
          context/2,
 
-         handle_down/3,
+         handle_error/3,
          current_snapshot_dir/1,
 
          latest_checkpoint/1,
 
          take_older_checkpoints/2,
-         take_extra_checkpoints/1
+         take_extra_checkpoints/1,
+
+         make_snapshot_dir/3,
+         write_indexes/2,
+         indexes/1
         ]).
 
--type effect() :: {monitor, process, snapshot_writer, pid()}.
+-type effect() :: {monitor, process, snapshot_writer, pid()} |
+                  {bg_work, fun(), fun()}.
 
 -type kind() :: snapshot | checkpoint.
 
@@ -65,6 +72,7 @@
 -record(accept, {%% the next expected chunk
                  next = 1 :: non_neg_integer(),
                  state :: term(),
+                 machine_version :: non_neg_integer(),
                  idxterm :: ra_idxterm()}).
 
 -record(?MODULE,
@@ -79,13 +87,17 @@
          %% like snapshots, these are also stored in subdirs
          %% as <data_dir>/checkpoints/Term_Index
          checkpoint_directory :: file:filename_all(),
-         pending :: option({pid(), ra_idxterm(), kind()}),
+         pending :: option({ra_idxterm(), kind()}),
          accepting :: option(#accept{}),
          current :: option(ra_idxterm()),
          checkpoints = [] :: list(checkpoint()),
          max_checkpoints :: pos_integer()}).
 
 -define(ETSTBL, ra_log_snapshot_state).
+
+%% Indexes file format constants
+-define(IDX_MAGIC, "RASI").  %% RA Snapshot Indexes
+-define(IDX_VERSION, 1).
 
 -opaque state() :: #?MODULE{}.
 
@@ -192,12 +204,22 @@ find_snapshots(#?MODULE{uid = UId,
             ok = delete_snapshots(SnapshotsDir, Snaps),
             %% initialise snapshots table even if no snapshots have been taken
             %% this ensure these is an entry when the WAL queries it
-            true = ets:insert(?ETSTBL, {UId, -1}),
+            ok = ra_log_snapshot_state:insert(?ETSTBL, UId, -1, 0, []),
             State;
         Current0 ->
             Current = filename:join(SnapshotsDir, Current0),
-            {ok, #{index := Idx, term := Term}} = Module:read_meta(Current),
-            true = ets:insert(?ETSTBL, {UId, Idx}),
+            {ok, #{index := Idx,
+                   term := Term}} = Module:read_meta(Current),
+            %% recover live indexes and record that
+            {ok, Indexes} = indexes(Current),
+            SmallestLiveIdx = case ra_seq:first(Indexes) of
+                                  undefined ->
+                                      Idx+1;
+                                  First ->
+                                      First
+                              end,
+            ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, SmallestLiveIdx,
+                                              Indexes),
 
             ok = delete_snapshots(SnapshotsDir, lists:delete(Current0, Snaps)),
             %% delete old snapshots if any
@@ -329,7 +351,7 @@ current(#?MODULE{current = Current}) -> Current.
 latest_checkpoint(#?MODULE{checkpoints = [Current | _]}) -> Current;
 latest_checkpoint(#?MODULE{checkpoints = _}) -> undefined.
 
--spec pending(state()) -> option({pid(), ra_idxterm(), kind()}).
+-spec pending(state()) -> option({ra_idxterm(), kind()}).
 pending(#?MODULE{pending = Pending}) ->
     Pending.
 
@@ -345,16 +367,17 @@ directory(#?MODULE{checkpoint_directory = Dir}, checkpoint) -> Dir.
 
 -spec last_index_for(ra_uid()) -> option(ra_index()).
 last_index_for(UId) ->
-    case ets:lookup(?ETSTBL, UId) of
-        [{_, Index}] when Index >= 0 ->
+    case ra_log_snapshot_state:snapshot(?ETSTBL, UId) of
+        Index when Index >= 0 ->
             Index;
         _ ->
             undefined
     end.
 
--spec begin_snapshot(meta(), ReleaseCursorRef :: term(), kind(), state()) ->
+-spec begin_snapshot(meta(), MacModule :: module(),
+                     MacState :: term(), kind(), state()) ->
     {state(), [effect()]}.
-begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
+begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
                #?MODULE{module = Mod,
                         counter = Counter,
                         snapshot_directory = SnapshotDir,
@@ -371,13 +394,21 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
     Sync = SnapKind =:= snapshot,
     %% create directory for this snapshot
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
-    %% call prepare then write_snapshot
     %% This needs to be called in the current process to "lock" potentially
     %% mutable machine state
-    Ref = Mod:prepare(Meta, MacRef),
+    Ref = Mod:prepare(Meta, MacState),
+    PostPrepareEqualsMacState = Ref == MacState,
+    LiveIndexes0 = case PostPrepareEqualsMacState of
+                       false ->
+                           ra_machine:live_indexes(MacMod, MacState);
+                       true ->
+                           []
+                   end,
     %% write the snapshot in a separate process
     Self = self(),
-    Pid = spawn(fun () ->
+    IdxTerm = {Idx, Term},
+    BgWorkFun = fun () ->
+                        StartTime = erlang:monotonic_time(),
                         ok = ra_lib:make_dir(SnapDir),
                         case Mod:write(SnapDir, Meta, Ref, Sync) of
                             ok -> ok;
@@ -386,15 +417,37 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacRef, SnapKind,
                                              BytesWritten),
                                 ok
                         end,
+
+                        %% if the Ref returned by ra_snapshot:prepare/2 is
+                        %% the same as the mac state then indexes can be
+                        %% calculated here
+                        LiveIndexes =
+                            case PostPrepareEqualsMacState of
+                                true ->
+                                    case ra_machine:live_indexes(MacMod, Ref) of
+                                        [] ->
+                                            [];
+                                        LI ->
+                                            ok = write_indexes(SnapDir, LI),
+                                            LI
+                                    end;
+                                false ->
+                                    LiveIndexes0
+                            end,
+
+                        EndTime = erlang:monotonic_time(),
+                        Duration = erlang:convert_time_unit(EndTime - StartTime,
+                                                            native, millisecond),
                         Self ! {ra_log_event,
-                                {snapshot_written, {Idx, Term}, SnapKind}},
+                                {snapshot_written, IdxTerm,
+                                 LiveIndexes, SnapKind, Duration}},
                         ok
-                end),
+                end,
 
     %% record snapshot in progress
     %% emit an effect that monitors the current snapshot attempt
-    {State#?MODULE{pending = {Pid, {Idx, Term}, SnapKind}},
-     [{monitor, process, snapshot_writer, Pid}]}.
+    {State#?MODULE{pending = {{Idx, Term}, SnapKind}},
+     [{bg_work, BgWorkFun, err_fun(IdxTerm, SnapKind)}]}.
 
 -spec promote_checkpoint(Idx :: ra_index(), State0 :: state()) ->
     {boolean(), State :: state(), Effects :: [effect()]}.
@@ -411,20 +464,31 @@ promote_checkpoint(PromotionIdx,
             Checkpoint = make_snapshot_dir(CheckpointDir, Idx, Term),
             Snapshot = make_snapshot_dir(SnapDir, Idx, Term),
             Self = self(),
-            Pid = spawn(fun() ->
-                                %% Checkpoints are created without calling
-                                %% fsync. Snapshots must be fsync'd though, so
-                                %% sync the checkpoint before promoting it
-                                %% into a snapshot.
-                                ok = Mod:sync(Checkpoint),
-                                ok = ra_file:rename(Checkpoint, Snapshot),
-                                Self ! {ra_log_event,
-                                        {snapshot_written,
-                                         {Idx, Term}, snapshot}}
-                        end),
-            State = State0#?MODULE{pending = {Pid, {Idx, Term}, snapshot},
+            Fun = fun() ->
+                          StartTime = erlang:monotonic_time(),
+                          %% Checkpoints are created without calling
+                          %% fsync. Snapshots must be fsync'd though, so
+                          %% sync the checkpoint before promoting it
+                          %% into a snapshot.
+                          ok = Mod:sync(Checkpoint),
+                          ok = ra_file:rename(Checkpoint, Snapshot),
+                          Indexes = case indexes(Snapshot) of
+                                        {ok, Idxs} ->
+                                            Idxs;
+                                        _ ->
+                                            []
+                                    end,
+                          EndTime = erlang:monotonic_time(),
+                          Duration = erlang:convert_time_unit(EndTime - StartTime,
+                                                              native, millisecond),
+                          Self ! {ra_log_event,
+                                  {snapshot_written, {Idx, Term},
+                                   Indexes, snapshot, Duration}}
+                  end,
+
+            State = State0#?MODULE{pending = {{Idx, Term}, snapshot},
                                    checkpoints = Checkpoints},
-            {true, State, [{monitor, process, snapshot_writer, Pid}]};
+            {true, State, [{bg_work, Fun, err_fun({Idx, Term}, snapshot)}]};
         undefined ->
             {false, State0, []}
     end.
@@ -448,63 +512,109 @@ find_promotable_checkpoint(Idx, [CP | Rest], Acc) ->
 find_promotable_checkpoint(_Idx, [], _Acc) ->
     undefined.
 
--spec complete_snapshot(ra_idxterm(), kind(), state()) ->
+-spec complete_snapshot(ra_idxterm(), kind(), ra_seq:state(), state()) ->
     state().
-complete_snapshot({Idx, _} = IdxTerm, snapshot,
+complete_snapshot(_IdxTerm, snapshot, _LiveIndexes,
+                  #?MODULE{pending = undefined} = State) ->
+    %% if pending=undefined it means and snapshot installation with a higher
+    %% index was accepted concurrently
+    State;
+complete_snapshot({Idx, _} = IdxTerm, snapshot, LiveIndexes,
                   #?MODULE{uid = UId} = State) ->
-    true = ets:insert(?ETSTBL, {UId, Idx}),
+    SmallestIdx = case ra_seq:first(LiveIndexes) of
+                      undefined ->
+                          Idx + 1;
+                      I ->
+                          I
+                  end,
+    %% live indexes
+    ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, SmallestIdx,
+                                      LiveIndexes),
     State#?MODULE{pending = undefined,
                   current = IdxTerm};
-complete_snapshot(IdxTerm, checkpoint,
+complete_snapshot(IdxTerm, checkpoint, _LiveIndexes,
                   #?MODULE{checkpoints = Checkpoints0} = State) ->
     State#?MODULE{pending = undefined,
                   checkpoints = [IdxTerm | Checkpoints0]}.
 
 -spec begin_accept(meta(), state()) ->
     {ok, state()}.
-begin_accept(#{index := Idx, term := Term} = Meta,
+begin_accept(#{index := Idx,
+               machine_version := SnapMacVer,
+               term := Term} = Meta,
              #?MODULE{module = Mod,
                       snapshot_directory = Dir} = State) ->
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     ok = ra_lib:make_dir(SnapDir),
     {ok, AcceptState} = Mod:begin_accept(SnapDir, Meta),
     {ok, State#?MODULE{accepting = #accept{idxterm = {Idx, Term},
+                                           machine_version = SnapMacVer,
                                            state = AcceptState}}}.
 
--spec accept_chunk(term(), non_neg_integer(), chunk_flag(), state()) ->
-    {ok, state()}.
-accept_chunk(Chunk, Num, last,
-             #?MODULE{uid = UId,
-                      module = Mod,
-                      snapshot_directory = Dir,
-                      current = Current,
-                      accepting = #accept{next = Num,
-                                          idxterm = {Idx, _} = IdxTerm,
-                                          state = AccState}} = State) ->
+-spec complete_accept(Chunk :: term(), Num :: non_neg_integer(),
+                      Machine :: ra_machine:machine(), state()) ->
+    {state(), MacState :: term(), ra_seq:state(), [effect()]}.
+complete_accept(Chunk, Num, Machine,
+                #?MODULE{uid = UId,
+                         module = Mod,
+                         snapshot_directory = Dir,
+                         current = Current,
+                         pending = Pending,
+                         accepting = #accept{next = Num,
+                                             idxterm = {Idx, Term} = IdxTerm,
+                                             state = AccState}} = State0) ->
     %% last chunk
     ok = Mod:complete_accept(Chunk, AccState),
     %% run validate here?
     %% delete the current snapshot if any
-    _ = spawn(fun () -> delete(Dir, Current) end),
-    %% update ets table
-    true = ets:insert(?ETSTBL, {UId, Idx}),
-    {ok, State#?MODULE{accepting = undefined,
-                       %% reset any pending snapshot writes
-                       pending = undefined,
-                       current = IdxTerm}};
-accept_chunk(Chunk, Num, next,
-             #?MODULE{module = Mod,
-                      accepting =
-                      #accept{state = AccState0,
-                              next = Num} = Accept} = State) ->
+    Dels = case Pending of
+               undefined ->
+                   [Current];
+               {PendIdxTerm, _} ->
+                   [Current, PendIdxTerm]
+           end,
+    Eff = {bg_work,
+           fun() -> [delete(Dir, Del) || Del <- Dels] end,
+           fun (_) -> ok end},
+    State = State0#?MODULE{accepting = undefined,
+                           %% reset any pending snapshot writes
+                           pending = undefined,
+                           current = IdxTerm},
+    {ok, #{machine_version := SnapMacVer}, MacState} = recover(State),
+    SnapMacMod  = ra_machine:which_module(Machine, SnapMacVer),
+    LiveIndexes = ra_machine:live_indexes(SnapMacMod, MacState),
+    SnapDir = make_snapshot_dir(Dir, Idx, Term),
+    ok = write_indexes(SnapDir, LiveIndexes),
+    %% delete accepting marker file
+    AcceptMarker = filename:join(SnapDir, <<"accepting">>),
+    _ = prim_file:delete(AcceptMarker),
+    _ = ra_lib:sync_dir(SnapDir),
+    %% assert accepting marker is no longer there
+    ?assertNot(filelib:is_file(AcceptMarker)),
+    SmallestIdx = case ra_seq:first(LiveIndexes) of
+                      undefined ->
+                          Idx + 1;
+                      I ->
+                          I
+                  end,
+    ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, SmallestIdx,
+                                      LiveIndexes),
+    {State, MacState, LiveIndexes, [Eff]}.
+
+-spec accept_chunk(Chunk :: term(), Num :: non_neg_integer(), state()) ->
+    state().
+accept_chunk(Chunk, Num, #?MODULE{module = Mod,
+                                  accepting =
+                                  #accept{state = AccState0,
+                                          next = Num} = Accept} = State) ->
     {ok, AccState} = Mod:accept_chunk(Chunk, AccState0),
-    {ok, State#?MODULE{accepting = Accept#accept{state = AccState,
-                                                 next = Num + 1}}};
-accept_chunk(_Chunk, Num, _ChunkFlag,
+    State#?MODULE{accepting = Accept#accept{state = AccState,
+                                            next = Num + 1}};
+accept_chunk(_Chunk, Num,
              #?MODULE{accepting = #accept{next = Next}} = State)
   when Next > Num ->
     %% this must be a resend - we can just ignore it
-    {ok, State}.
+    State.
 
 -spec abort_accept(state()) -> state().
 abort_accept(#?MODULE{accepting = undefined} = State) ->
@@ -527,27 +637,22 @@ context(#?MODULE{module = Mod}, Node) ->
 
 
 
--spec handle_down(pid(), Info :: term(), state()) ->
+-spec handle_error({ra:index(), ra_term()}, Error :: term(), state()) ->
     state().
-handle_down(_Pid, _Info, #?MODULE{pending = undefined} = State) ->
-    State;
-handle_down(_Pid, normal, State) ->
-    State;
-handle_down(_Pid, noproc, State) ->
-    %% this could happen if the monitor was set up after the process had
-    %% finished
-    State;
-handle_down(Pid, _Info,
+handle_error(IDX_TERM = IdxTerm, _Error,
             #?MODULE{snapshot_directory = SnapshotDir,
                      checkpoint_directory = CheckpointDir,
-                     pending = {Pid, IdxTerm, SnapKind}} = State) ->
+                     pending = {IDX_TERM, SnapKind}} = State) ->
     %% delete the pending snapshot/checkpoint directory
     Dir = case SnapKind of
               snapshot -> SnapshotDir;
               checkpoint -> CheckpointDir
           end,
     ok = delete(Dir, IdxTerm),
-    State#?MODULE{pending = undefined}.
+    State#?MODULE{pending = undefined};
+handle_error(_IdxTerm, _Error, #?MODULE{} = State) ->
+    %% ignore if not referring to the current pending, if any
+    State.
 
 delete(_, undefined) ->
     ok;
@@ -656,6 +761,59 @@ take_extra_checkpoints(#?MODULE{checkpoints = Checkpoints0,
             {State0, Checks}
     end.
 
+%% @doc
+%% Indexes file format:
+%% "RASI"           (4 bytes - magic)
+%% Version          (1 byte - unsigned)
+%% CRC32            (4 bytes - unsigned 32-bit integer)
+%% Data             (binary - term_to_binary of indexes)
+%% @end
+-spec write_indexes(file:filename_all(), ra_seq:state()) ->
+    ok | {error, file:posix()}.
+write_indexes(Dir, Indexes) ->
+    File = filename:join(Dir, <<"indexes">>),
+    Data = term_to_binary(Indexes),
+    Crc = erlang:crc32(Data),
+    ra_lib:write_file(File, [<<?IDX_MAGIC,
+                                ?IDX_VERSION:8/unsigned,
+                                Crc:32/unsigned>>,
+                              Data]).
+
+-spec indexes(file:filename_all()) ->
+    {ok, ra_seq:state()} |
+    {error, invalid_format |
+            {invalid_version, integer()} |
+            checksum_error |
+            file:posix()}.
+indexes(Dir) ->
+    File = filename:join(Dir, <<"indexes">>),
+    case prim_file:read_file(File) of
+        {ok, <<?IDX_MAGIC, ?IDX_VERSION:8/unsigned, Crc:32/unsigned, Data/binary>>} ->
+            case erlang:crc32(Data) of
+                Crc ->
+                    {ok, binary_to_term(Data)};
+                _ ->
+                    {error, checksum_error}
+            end;
+        {ok, <<?IDX_MAGIC, Version:8/unsigned, _Crc:32/unsigned, _Data/binary>>} ->
+            {error, {invalid_version, Version}};
+        {ok, Bin} ->
+            %% Backward compatibility: old format without header
+            %% Try to parse as plain term_to_binary data
+            try
+                {ok, binary_to_term(Bin)}
+            catch
+                _:_ ->
+                    {error, invalid_format}
+            end;
+        {error, enoent} ->
+            %% no indexes
+            {ok, []};
+        Err ->
+            Err
+    end.
+
+
 %% Utility
 
 -define(MAX_DIFF, 65_536).
@@ -683,7 +841,12 @@ counters_add(undefined, _, _) ->
 counters_add(Counter, Ix, Incr) ->
     counters:add(Counter, Ix, Incr).
 
-
+err_fun(IdxTerm, Kind) ->
+    Self = self(),
+    fun (Error) ->
+            Self ! {ra_log_event,
+                    {snapshot_error, IdxTerm, Kind, Error}}
+    end.
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 

@@ -11,6 +11,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+-define(IDMFA, {ra_lib, id, []}).
 all() ->
   [
     {group, tests}
@@ -91,7 +92,7 @@ execute_state_machine() ->
   {ok, {dequeue, {MsgId, _}}, _} = ra:process_command(Srv, {checkout, {dequeue, unsettled}, ConsumerId}),
 
   {ok, _, _} = ra:process_command(Srv, {settle, [MsgId], ConsumerId}),
-  {ok, FinalState, _} = ra:consistent_query(Srv, fun(State) -> State end),
+  {ok, FinalState, _} = ra:consistent_query(Srv, ?IDMFA),
   {Config, FinalState}.
 
 wal_file() ->

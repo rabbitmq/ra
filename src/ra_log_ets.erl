@@ -141,7 +141,12 @@ handle_cast({exec_delete, UId, Spec},
     %% delete from open mem tables if {delete, tid()}
     case Spec of
         {delete, Tid} ->
-            ets:delete_object(MemTables, {UId, Tid});
+            _ = ets:delete_object(MemTables, {UId, Tid}),
+            ok;
+        {multi, Specs} ->
+            _ = [ets:delete_object(MemTables, {UId, Tid}) ||
+                 {delete, Tid} <- Specs],
+            ok;
         _ ->
             ok
     end,

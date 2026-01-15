@@ -145,7 +145,7 @@ where_is_parent(#{directory := Dir}, UId) when is_binary(UId) ->
 
 -spec name_of(atom() | ra_system:names(), ra_uid()) -> option(atom()).
 name_of(SystemOrNames, UId) ->
-    Tbl = get_name(SystemOrNames),
+    Tbl = get_tbl(SystemOrNames),
     case ets:lookup(Tbl, UId) of
         [{_, _, _, ServerName, _}] -> ServerName;
         [] ->
@@ -155,7 +155,7 @@ name_of(SystemOrNames, UId) ->
 -spec cluster_name_of(ra_system:names() | atom(), ra_uid()) ->
     option(ra_cluster_name()).
 cluster_name_of(SystemOrNames, UId) ->
-    Tbl = get_name(SystemOrNames),
+    Tbl = get_tbl(SystemOrNames),
     case ets:lookup(Tbl, UId) of
         [{_, _, _, _, ClusterName}]
           when ClusterName /= undefined ->
@@ -166,7 +166,7 @@ cluster_name_of(SystemOrNames, UId) ->
 
 -spec pid_of(atom() | ra_system:names(), ra_uid()) -> option(pid()).
 pid_of(SystemOrNames, UId) ->
-    case ets:lookup(get_name(SystemOrNames), UId) of
+    case ets:lookup(get_tbl(SystemOrNames), UId) of
         [{_, Pid, _, _, _}] when is_pid(Pid) -> Pid;
         _ -> undefined
     end.
@@ -191,7 +191,10 @@ overview(System) when is_atom(System) ->
                      end,
                      ets:tab2list(ra_state)),
     States = maps:from_list(Rows),
-    Snaps = maps:from_list(ets:tab2list(ra_log_snapshot_state)),
+    Snaps = lists:foldl(
+              fun (T, Acc) ->
+                      Acc#{element(1, T) => erlang:delete_element(1, T)}
+              end, #{}, ets:tab2list(ra_log_snapshot_state)),
     lists:foldl(fun ({UId, Pid, Parent, ServerName, ClusterName}, Acc) ->
                         {S, V} = maps:get(ServerName, States, {undefined, undefined}),
                         Acc#{ServerName =>
@@ -219,9 +222,9 @@ is_registered_uid(SystemOrNames, UId)
        is_binary(UId) ->
     name_of(SystemOrNames, UId) =/= undefined.
 
-get_name(#{directory := Tbl}) ->
+get_tbl(#{directory := Tbl}) ->
     Tbl;
-get_name(System) when is_atom(System) ->
+get_tbl(System) when is_atom(System) ->
     {ok, Tbl} = ra_system:lookup_name(System, directory),
     Tbl.
 
