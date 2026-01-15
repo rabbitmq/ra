@@ -163,7 +163,7 @@ start_in(DataDir) ->
     ok = logger:add_handler(ra_handler, logger_std_h, Config),
     _ = application:load(sasl),
     ok = application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
-    ok = application:stop(sasl),
+    _ = application:stop(sasl),
     ok = application:start(sasl),
     _ = error_logger:tty(false),
     start([{data_dir, DataDir}]).

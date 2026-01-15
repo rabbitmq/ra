@@ -397,7 +397,8 @@ meta_data(Config) ->
                             end),
     ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
-    T = os:system_time(millisecond),
+    T = erlang:system_time(millisecond),
+    timer:sleep(100),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     {ok, {metadata, Idx, Term, Ts}, ServerId} =
         ra:process_command(ServerId, any_command),
