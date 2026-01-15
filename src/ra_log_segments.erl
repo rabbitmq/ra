@@ -288,7 +288,7 @@ handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
                                end
                        end, Open0, Unreferenced),
     Fun = fun () ->
-                  [prim_file:delete(filename:join(Dir, F))
+                  [ok = prim_file:delete(filename:join(Dir, F))
                    || F <- Unreferenced],
                   purge_dangling_symlinks(Dir),
                   ok
@@ -318,7 +318,7 @@ handle_compaction_result(#compaction_result{unreferenced = Unreferenced,
                               FilteredRefs, lists:reverse(CompactedSegRefs)),
     Open = ra_flru:evict_all(Open0),
     Fun = fun () ->
-                  [prim_file:delete(filename:join(Dir, F))
+                  [ok = prim_file:delete(filename:join(Dir, F))
                    || F <- Unreferenced],
                   purge_dangling_symlinks(Dir),
                   ok

@@ -262,7 +262,8 @@ init(#{uid := UId,
     [begin
          ?DEBUG("~ts: deleting overwritten segment ~w",
                 [LogId, SR]),
-         catch prim_file:delete(filename:join(Dir, F))
+         _ = catch prim_file:delete(filename:join(Dir, F)),
+         ok
      end
      || {F, _} = SR <- SegRefs -- ra_log_segments:segment_refs(Reader)],
 
@@ -885,7 +886,8 @@ handle_event({segments, TidSeqs, NewSegs},
                   [begin
                     ?DEBUG("~ts: deleting overwritten segment ~w",
                            [LogId, SR]),
-                    catch prim_file:delete(filename:join(Dir, F))
+                    _ = catch prim_file:delete(filename:join(Dir, F)),
+                    ok
                    end
                    || {F, _} = SR <- OverwrittenSegRefs],
                   ok

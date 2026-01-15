@@ -80,11 +80,14 @@ run(NumOperations) ->
     run(NumOperations, #{}).
 
 read_all_keys() ->
-        [_ = ra_kv:get({?CLUSTER_NAME,
+    [begin
+         _ = ra_kv:get({?CLUSTER_NAME,
                         node()},
-                       <<"key_",(integer_to_binary(N))/binary>>, 1000)
-         || N <- lists:seq(1, ?MAX_KEY)],
-        ok.
+                       <<"key_",(integer_to_binary(N))/binary>>, 1000),
+         ok
+     end
+     || N <- lists:seq(1, ?MAX_KEY)],
+    ok.
 
 read_all_keys_loop(Members0) when is_list(Members0) ->
     receive
@@ -114,9 +117,9 @@ read_all_keys_loop(Members0) when is_list(Members0) ->
 run(NumOperations, Options) when NumOperations > 0 ->
     % Start with a random number of nodes between 1 and 7
     NumNodes = rand:uniform(7),
-    logger:set_primary_config(level, warning),
-    application:set_env(sasl, sasl_error_logger, false),
-    application:stop(sasl),
+    ok = logger:set_primary_config(level, warning),
+    ok = application:set_env(sasl, sasl_error_logger, false),
+    ok = application:stop(sasl),
     log("~s Starting cluster with ~p nodes~n", [timestamp(), NumNodes]),
     case setup_cluster(NumNodes, Options) of
         {ok, Members, PeerNodes} ->
@@ -705,8 +708,9 @@ execute_operation(State, {network_partition}) ->
                     % Block communication between partitioned node and other nodes
                     % The harness node (current node) maintains access to all nodes
                     [begin
-                         erpc:call(NodeToPartitionName, inet_tcp_proxy_dist, block, [OtherNode]),
-                         erpc:call(OtherNode, inet_tcp_proxy_dist, block, [NodeToPartitionName])
+                         _ = erpc:call(NodeToPartitionName, inet_tcp_proxy_dist, block, [OtherNode]),
+                         _ = erpc:call(OtherNode, inet_tcp_proxy_dist, block, [NodeToPartitionName]),
+                         ok
                      end || OtherNode <- OtherNodes],
 
             State#{operations_count => OpCount + 1,
@@ -799,7 +803,7 @@ perform_consistency_check(State, MembersToValidate) ->
 
             % Write full details to log file with difference analysis
             LogEntry = format_consistency_failure(MembersToValidate, ValidationResults),
-            file:write_file("ra_kv_harness.log", LogEntry, [append]),
+            ok = file:write_file("ra_kv_harness.log", LogEntry, [append]),
 
             FailedOps = maps:get(failed_ops, State),
             State#{failed_ops => FailedOps + 1, remaining_ops => 0, consistency_failed => true}

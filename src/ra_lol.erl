@@ -262,7 +262,8 @@ basic_test() ->
                         end
                 end,
     [begin
-         {T, _} = ?MODULE:search(SearchFun(T), L1)
+         {T, _} = ?MODULE:search(SearchFun(T), L1),
+         ok
      end || T <- Items ++ [101]],
 
     %% test searching with a continuation
