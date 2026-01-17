@@ -60,6 +60,7 @@ all_tests() ->
      snapshot_installation,
      snapshot_installation_with_call_crash,
      add_member,
+     pipeline_membership_changes,
      queue_example,
      ramp_up_and_ramp_down,
      start_and_join_then_leave_and_terminate,
@@ -876,6 +877,31 @@ add_member(Config) ->
     {ok, _, _Leader} = ra:add_member(Leader, C),
     {ok, 9, Leader} = ra:consistent_query(C, fun(S) -> S end),
     terminate_cluster([C | Cluster]).
+
+pipeline_membership_changes(Config) ->
+    Name = ?config(test_name, Config),
+    [A, B, C] = Cluster0 = start_local_cluster(3, Name, add_machine()),
+    {ok, _, Leader0} = ra:process_command(A, 9),
+    Corr1 = make_ref(),
+    ok = ra:pipeline_remove_member(Leader0, C, Corr1, normal),
+    [{Corr1, ok}] = gather_applied([], 0),
+    stop_server(C),
+    {ok, Members, Leader} = ra:members(A),
+    ?assertEqual(lists:sort(Members), lists:sort([A, B])),
+    %% Process a command to ensure that the cluster change command has
+    %% been committed - this prevents spurious failures of
+    %% `cluster_change_not_permitted` from the next leave command:
+    {ok, _, Leader} = ra:process_command(Leader, 4),
+    Corr2 = make_ref(),
+    ok = ra:pipeline_remove_member(Leader, C, Corr2, normal),
+    [{Corr2, {error, not_member}}] = gather_applied([], 0),
+    ok = ra:start_server(default, Name, C, add_machine(), [A, B]),
+    Corr3 = make_ref(),
+    ok = ra:pipeline_add_member(Leader, C, Corr3, normal),
+    [{Corr3, ok}] = gather_applied([], 0),
+    {ok, Members1, _Leader} = ra:members(Leader),
+    ?assertEqual(lists:sort(Members1), lists:sort(Cluster0)),
+    terminate_cluster(Cluster0).
 
 server_catches_up(Config) ->
     N1 = nth_server_name(Config, 1),
