@@ -543,18 +543,28 @@ incr_batch(#batch{num_writes = Writes,
                   #{Pid := #batch_writer{term = TERM,
                                          tid = MT_TID,
                                          seq = Seq0} = W} ->
-                      %% The Tid and term is the same so add to current batch_writer
-                      Seq = ra_seq:append(Idx, Seq0),
+                      %% The Tid and term is the same so add to
+                      %% current batch_writer
+                      Seq = case Idx > ra_seq:last(Seq0) of
+                                true ->
+                                    ra_seq:append(Idx, Seq0);
+                                false ->
+                                    %% this is a rewrite / resend
+                                    %% we need to limit the seq before
+                                    %% appending
+                                    ra_seq:append(Idx, ra_seq:limit(Idx - 1,
+                                                                    Seq0))
+                            end,
                       Waiting0#{Pid => W#batch_writer{seq = Seq,
                                                       smallest_live_idx = SmallestLiveIdx,
                                                       term = Term}};
                   _ ->
-                      %% The tid is different, open a new batch writer for the
-                      %% new tid and term
+                      %% The tid or term is different
+                      %% open a new batch writer for the new tid and term
                       PrevBatchWriter = maps:get(Pid, Waiting0, undefined),
                       Writer = #batch_writer{smallest_live_idx = SmallestLiveIdx,
                                              tid = MtTid,
-                                             seq = [Idx],
+                                             seq = ra_seq:append(Idx, []),
                                              uid = UId,
                                              term = Term,
                                              old = PrevBatchWriter},
@@ -968,9 +978,9 @@ should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
 smallest_live_index(#conf{ra_log_snapshot_state_tid = Tid}, ServerUId) ->
     ra_log_snapshot_state:smallest(Tid, ServerUId).
 
-update_ranges(Ranges, UId, MtTid, _SmallestIdx, AddSeq) ->
+update_ranges(Ranges, UId, MtTid = MT_TID, _SmallestIdx, AddSeq) ->
     case Ranges of
-        #{UId := [{MtTid, Seq0} | Seqs]} ->
+        #{UId := [{MT_TID, Seq0} | Seqs]} ->
             %% limit the old range by the add end start as in some resend
             %% cases we may have got back before the prior range.
             Seq = ra_seq:add(AddSeq, Seq0),

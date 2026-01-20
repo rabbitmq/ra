@@ -36,6 +36,7 @@ all_tests() ->
      successor,
      successor_below,
      stage_commit,
+     stage_abort,
      range_overlap,
      stage_commit_2,
      perf,
@@ -461,6 +462,31 @@ stage_commit(_Config) ->
     ?assertEqual(10, length(Entries)),
     ?assertMatch([{1, 1, _} | _], Entries),
     [{I, _, _} = ra_mt:lookup(I, Mt2)
+    || I <- lists:seq(1, 10)],
+    ok.
+
+stage_abort(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    {ok, Mt0} = ra_mt:insert({0, 0, hi}, ra_mt:init(Tid)),
+    ?assertMatch({0, 0}, ra_mt:range(Mt0)),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:stage({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 10)),
+    ?assertMatch({0, 10}, ra_mt:range(Mt1)),
+    [{I, _, _} = ra_mt:lookup(I, Mt1)
+    || I <- lists:seq(1, 10)],
+    Mt2 = ra_mt:abort(Mt1),
+    ?assertMatch({0, 0}, ra_mt:range(Mt2)),
+    Mt3 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:stage({I, 1, <<"banana">>}, Acc))
+            end, Mt2, lists:seq(1, 10)),
+    {Entries, Mt4}= ra_mt:commit(Mt3),
+    ?assertMatch({0, 10}, ra_mt:range(Mt4)),
+    ?assertEqual(10, length(Entries)),
+    ?assertMatch([{1, 1, _} | _], Entries),
+    [{I, _, _} = ra_mt:lookup(I, Mt4)
     || I <- lists:seq(1, 10)],
     ok.
 

@@ -24,6 +24,7 @@ all() ->
 all_tests() ->
     [
      basic_log_writes,
+     rewrite,
      sparse_writes,
      sparse_write_same_batch,
      sparse_write_overwrite,
@@ -152,6 +153,22 @@ basic_log_writes(Config) ->
               flush(),
               ct:fail("receiving mem table ranges timed out")
     end,
+    proc_lib:stop(Pid),
+    meck:unload(),
+    ok.
+
+rewrite(Config) ->
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    Conf = ?config(wal_conf, Config),
+    {_UId, _} = WriterId = ?config(writer_id, Config),
+    Tid = ets:new(?FUNCTION_NAME, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    suspend_process(Pid),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 12, 1, "value"),
+    {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, 12, 1, "value"),
+    erlang:resume_process(Pid),
+    flush(),
     proc_lib:stop(Pid),
     meck:unload(),
     ok.

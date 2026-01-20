@@ -388,9 +388,12 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
                               wal = Wal} = Cfg,
                    tx = {true, TxRange},
                    range = Range,
+                   pending = Pend0,
                    mem_table = Mt1} = State) ->
-    {Entries, Mt} = ra_mt:commit(Mt1),
-    Tid = ra_mt:tid(Mt),
+    %% TODO: staged could contain entries from previous? I don't think that is
+    %% ever the case as that would mean overwriting withing a single append batch
+    Entries = ra_mt:staged(Mt1),
+    Tid = ra_mt:tid(Mt1),
     WriterId = {UId, self()},
     PrevIdx = previous_wal_index(State),
     {WalCommands, Num, _} =
@@ -403,15 +406,21 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
 
     case ra_log_wal:write_batch(Wal, lists:reverse(WalCommands)) of
         {ok, Pid} ->
+            %% commit after send to WAL, else abort
+            {_, Mt} = ra_mt:commit(Mt1),
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, Num),
             {ok, State#?MODULE{tx = false,
                                range = ra_range:add(TxRange, Range),
                                last_wal_write = {Pid, now_ms(), LastIdx},
                                mem_table = Mt}};
         {error, wal_down} ->
+            {Idx, _, _} = hd(Entries),
+            Mt = ra_mt:abort(Mt1),
             %% TODO: review this -  still need to return the state here
-            {error, wal_down, State#?MODULE{tx = false,
-                                            mem_table = Mt}}
+            {error, wal_down,
+             State#?MODULE{tx = false,
+                           pending = ra_seq:limit(Idx - 1, Pend0),
+                           mem_table = Mt}}
     end;
 commit_tx(#?MODULE{tx = false} = State) ->
     State.
@@ -815,7 +824,7 @@ handle_event({written, Term, WrittenSeq},
                     {State#?MODULE{last_written_index_term = {LastWrittenIdx, Term},
                                    pending = Pend}, []};
                 {error, not_prefix} ->
-                    ?DEBUG("~ts: ~p not prefix of ~p",
+                    ?DEBUG("~ts: ~w not prefix of ~w",
                            [Cfg#cfg.log_id, WrittenSeq, Pend0]),
                     {resend_pending(State0), []}
             end;

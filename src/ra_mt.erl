@@ -16,7 +16,7 @@
          insert_sparse/3,
          stage/2,
          commit/1,
-         % abort/1,
+         abort/1,
          lookup/2,
          lookup_term/2,
          tid_for/3,
@@ -182,6 +182,19 @@ stage({Idx, _, _} = _Entry,
             exit({unexpected_sparse_stage, Idx, Seq})
     end.
 
+-spec staged(state()) -> [log_entry()].
+staged(#?MODULE{staged = undefined}) ->
+    [];
+staged(#?MODULE{staged = {_, Staged0},
+                prev = Prev0}) ->
+    PrevStaged = case Prev0 of
+                     undefined ->
+                         [];
+                     _ ->
+                         staged(Prev0)
+                 end,
+    PrevStaged ++ lists:reverse(Staged0).
+
 -spec commit(state()) -> {[log_entry()], state()}.
 commit(#?MODULE{staged = undefined} = State) ->
     {[], State};
@@ -199,6 +212,16 @@ commit(#?MODULE{tid = Tid,
     %% TODO: mt: could prev contain overwritten entries?
     {PrevStaged ++ Staged, State#?MODULE{staged = undefined,
                                          prev = Prev}}.
+
+-spec abort(state()) -> state().
+abort(#?MODULE{staged = undefined} = State) ->
+    State;
+abort(#?MODULE{indexes = Seq,
+               staged = {_, Staged0}} = State) ->
+    {Idx, _, _} = lists:last(Staged0),
+    State#?MODULE{staged = undefined,
+                  indexes = ra_seq:limit(Idx - 1, Seq)}.
+
 
 -spec lookup(ra:index(), state()) ->
     log_entry() | undefined.
@@ -375,11 +398,11 @@ range(_State) ->
 tid(#?MODULE{tid = Tid}) ->
     Tid.
 
--spec staged(state()) -> [log_entry()].
-staged(#?MODULE{staged = {_, Staged}}) ->
-    Staged;
-staged(#?MODULE{staged = undefined}) ->
-    [].
+% -spec staged(state()) -> [log_entry()].
+% staged(#?MODULE{staged = {_, Staged}}) ->
+%     Staged;
+% staged(#?MODULE{staged = undefined}) ->
+%     [].
 
 -spec is_active(ets:tid(), state()) -> boolean().
 is_active(Tid, State) ->

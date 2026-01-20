@@ -1709,6 +1709,9 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapIndex),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
+            %% TODO: consider waiting until all pending WAL writes (sparse)
+            %% have been confirmed written by the WAL or segment writer until
+            %% returning to follower state
             {follower, persist_last_applied(State), [{reply, Reply} |
                                                      Effs0 ++ Effs ++
                                                      SnapInstalledEffs]}

@@ -93,6 +93,8 @@ limit(_CeilIdxIncl, Seq) ->
 
 %% @doc adds two sequences together where To is
 %% the "lower" sequence
+%% TODO: optimise to avoid the fold which could be expensive
+%% for very large sequences containing large ranges
 -spec add(Add :: state(), To :: state()) -> state().
 add([], To) ->
     To;

@@ -22,6 +22,7 @@ all_tests() ->
      resend_write_lost_in_wal_crash,
      resend_after_written_event_lost_in_wal_crash,
      resend_write_after_tick,
+     snapshot_before_written,
      handle_overwrite,
      handle_overwrite_append,
      receive_segment,
@@ -52,7 +53,7 @@ all_tests() ->
      wal_down_read_availability,
      wal_down_append_throws,
      wal_down_write_returns_error_wal_down,
-
+     wal_down_stage,
      detect_lost_written_range,
      snapshot_installation,
      snapshot_written_after_installation,
@@ -141,6 +142,39 @@ end_per_testcase(_, Config) ->
 -define(N2, {n2, node()}).
 % -define(N3, {n3, node()}).
 
+snapshot_before_written(Config) ->
+    %% snapshot_written comes in before written event for lower entries.
+
+    Log0 = write_n(1, 6, 1,
+                   ra_log_init(Config, #{min_snapshot_interval => 0})),
+    receive
+        {ra_log_event, {written, 1, _}} -> ok
+    after 2000 ->
+              exit(written_timeout)
+    end,
+    %% write 10 entries
+    Log1 = write_n(6, 20, 1, Log0),
+    SnapIdx = 10,
+    %% do snapshot in
+    {Log2, Effs} = ra_log:update_release_cursor(SnapIdx, #{}, macctx(),
+                                                [10, 4], Log1),
+    run_effs(Effs),
+    {Log3, Effs3} = receive
+                        {ra_log_event, {snapshot_written, {10, 1}, _,
+                                        snapshot, _} = Evt} ->
+                            ra_log:handle_event(Evt, Log2)
+                    after 5000 ->
+                              flush(),
+                              exit(snapshot_written_timeout)
+                    end,
+    run_effs(Effs3),
+
+    _Log4 = assert_log_events(Log3,
+                              fun (L) ->
+                                      {19, 1} == ra_log:last_written(L)
+                              end),
+    ok.
+
 handle_overwrite(Config) ->
     Log0 = ra_log_init(Config),
     {ok, Log1} = ra_log:write([{1, 1, "value"},
@@ -154,9 +188,11 @@ handle_overwrite(Config) ->
     % ensure immediate truncation
     {1, 2} = ra_log:last_index_term(Log3),
     {ok, Log4} = ra_log:write([{2, 2, "value"}], Log3),
+
     % simulate the first written event coming after index 20 has already
     % been written in a new term
     {Log, _} = ra_log:handle_event({written, 1, [2, 1]}, Log4),
+    ct:pal("Log ~p", [Log]),
     % ensure last written has not been incremented
     {0, 0} = ra_log:last_written(Log),
     {2, 2} = ra_log:last_written(
@@ -1251,6 +1287,26 @@ wal_down_write_returns_error_wal_down(Config) ->
                      <- supervisor:which_children(ra_log_sup)],
     ok = supervisor:terminate_child(SupPid, ra_log_wal),
     {error, wal_down} = ra_log:write([{1, 1, hi}], Log0),
+    ok.
+
+wal_down_stage(Config) ->
+    [SupPid] = [P || {ra_log_wal_sup, P, _, _}
+                     <- supervisor:which_children(ra_log_sup)],
+
+    Log0 = ra_log:begin_tx(ra_log_init(Config)),
+    Log1 = ra_log:append({2, 1, ho},
+                         ra_log:append({1, 1, hi}, Log0)),
+    ok = supervisor:terminate_child(SupPid, ra_log_wal),
+    {error, wal_down, Log2} = ra_log:commit_tx(Log1),
+    {ok, _} = supervisor:restart_child(SupPid, ra_log_wal),
+    %% check it is possible to write the next  entries
+    ?assertEqual(1, ra_log:next_index(Log2)),
+    Log3 = ra_log:append({1, 1, hi}, ra_log:begin_tx(Log2)),
+    {ok, Log4} = ra_log:commit_tx(Log3),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    _Log = assert_log_events(Log4, fun (L) ->
+                                           {1, 1} == ra_log:last_written(L)
+                                   end),
     ok.
 
 detect_lost_written_range(Config) ->
