@@ -34,6 +34,7 @@ all_tests() ->
      stage_commit,
      range_overlap,
      stage_commit_abort,
+     commit_after_table_deleted,
      perf
     ].
 
@@ -465,6 +466,25 @@ perf(_Config) ->
          ok
      end || Mt <- InsertedMts
     ],
+
+    ok.
+
+commit_after_table_deleted(_Config) ->
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_mt:init(Tid),
+
+    %% Stage some entries
+    {ok, Mt1} = ra_mt:stage({1, 1, <<"data1">>}, Mt0),
+    {ok, Mt2} = ra_mt:stage({2, 1, <<"data2">>}, Mt1),
+
+    %% Simulate table deletion
+    true = ets:delete(Tid),
+
+    %% Should return empty list since table is deleted
+    {Entries, _Mt3} = ra_mt:commit(Mt2),
+
+    %% Should return empty entries since table was deleted
+    ?assertEqual([], Entries),
 
     ok.
 
