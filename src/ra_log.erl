@@ -297,6 +297,18 @@ init(#{uid := UId,
                                 [LogId]),
                          exit(wal_down)
                      end,
+    %% TODO: recover the pending seq by ra_seq:floor/2 the max of
+    %% last segment index and LastWalIdx
+    MaxConfirmedWrittenIdx = case SegmentRange of
+                                 {_, LastSegIdx} ->
+                                     max(LastWalIdx, LastSegIdx);
+                                 _ ->
+                                     max(LastWalIdx, 0)
+                             end,
+    Pending = ra_seq:floor(MaxConfirmedWrittenIdx + 1, ra_mt:indexes(Mt)),
+    ?DEBUG_IF(Pending =/= [],
+              "~ts: recovered pending indexes ~w",
+              [LogId, Pending]),
     Cfg = #cfg{directory = Dir,
                uid = UId,
                log_id = LogId,
@@ -315,7 +327,8 @@ init(#{uid := UId,
                       snapshot_state = SnapshotState,
                       current_snapshot = ra_snapshot:current(SnapshotState),
                       last_wal_write = {whereis(Wal), now_ms(), LastWalIdx},
-                      live_indexes = LiveIndexes
+                      live_indexes = LiveIndexes,
+                      pending = Pending
                      },
     put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
     LastIdx = case Range of
@@ -369,7 +382,7 @@ init(#{uid := UId,
            [LogId, last_index_term(State), {SnapIdx, SnapTerm},
             State#?MODULE.last_written_index_term
            ]),
-    assert(State).
+    assert(resend_pending(State)).
 
 -spec close(state()) -> ok.
 close(#?MODULE{cfg = #cfg{uid = _UId},
@@ -1539,6 +1552,8 @@ resend_from(Idx, #?MODULE{cfg = #cfg{uid = UId}} = State0) ->
             State0
     end.
 
+resend_pending(#?MODULE{pending = []} = State) ->
+    State;
 resend_pending(#?MODULE{cfg = Cfg,
                         last_resend_time = undefined,
                         pending = Pend,

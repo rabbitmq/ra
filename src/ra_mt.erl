@@ -30,6 +30,7 @@
          staged/1,
          is_active/2,
          prev/1,
+         indexes/1,
          info/1,
          range/1,
          range_overlap/2
@@ -44,7 +45,7 @@
 
 -record(?MODULE,
         {tid :: ets:tid(),
-         indexes :: ra_seq:state(),
+         indexes = [] :: ra_seq:state(),
          size = 0 :: non_neg_integer(),
          staged :: undefined | {NumStaged :: non_neg_integer(), [log_entry()]},
          prev :: undefined | #?MODULE{}
@@ -398,12 +399,6 @@ range(_State) ->
 tid(#?MODULE{tid = Tid}) ->
     Tid.
 
-% -spec staged(state()) -> [log_entry()].
-% staged(#?MODULE{staged = {_, Staged}}) ->
-%     Staged;
-% staged(#?MODULE{staged = undefined}) ->
-%     [].
-
 -spec is_active(ets:tid(), state()) -> boolean().
 is_active(Tid, State) ->
     Tid =:= tid(State).
@@ -411,6 +406,10 @@ is_active(Tid, State) ->
 -spec prev(state()) -> undefined | state().
 prev(#?MODULE{prev = Prev}) ->
     Prev.
+
+-spec indexes(state()) -> ra_seq:state().
+indexes(#?MODULE{indexes = Seq}) ->
+    Seq.
 
 -spec info(state()) -> map().
 info(#?MODULE{tid = Tid,

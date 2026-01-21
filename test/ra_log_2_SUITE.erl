@@ -54,6 +54,7 @@ all_tests() ->
      wal_down_append_throws,
      wal_down_write_returns_error_wal_down,
      wal_down_stage,
+     wal_loses_writer_state,
      detect_lost_written_range,
      snapshot_installation,
      snapshot_written_after_installation,
@@ -1307,6 +1308,44 @@ wal_down_stage(Config) ->
     _Log = assert_log_events(Log4, fun (L) ->
                                            {1, 1} == ra_log:last_written(L)
                                    end),
+    ok.
+
+wal_loses_writer_state(Config) ->
+    %% this test simulate a double WAL crash, which is enough for th WAL to
+    %% lose it's current writer gap tracking state (as it is recovered from
+    %% the wal itself. If this is combined with a ra server crash, some writes
+    %% may never materialise
+    [SupPid] = [P || {ra_log_wal_sup, P, _, _}
+                     <- supervisor:which_children(ra_log_sup)],
+
+    Log0 = ra_log:append({1, 1, hi}, ra_log_init(Config)),
+    true = ra_log_wal_SUITE:suspend_process(whereis(ra_log_wal)),
+    Log1 = ra_log:append({2, 1, ho}, Log0),
+    exit(whereis(ra_log_wal), kill),
+    timer:sleep(100),
+    ra_log_segment_writer:await(ra_log_segment_writer),
+    ok = supervisor:terminate_child(SupPid, ra_log_wal),
+    {ok, _} = supervisor:restart_child(SupPid, ra_log_wal),
+    ra_log:close(Log1),
+    ra_log_segment_writer:await(ra_log_segment_writer),
+    flush(),
+    Log2 = ra_log_init(Config),
+    Log3 = ra_log:append({3, 1, hum}, Log2),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    Log4 = assert_log_events(Log3,
+                             fun (L) ->
+                                     #{last_written_index_term := LW,
+                                       segments_range := SR} =
+                                         ra_log:overview(L),
+                                     {3, 1} == LW andalso
+                                     {0, 3} == SR
+                             end),
+    %% assert all written entries can be read
+    {Entries, _Log} = ra_log:sparse_read([1,2,3], Log4),
+    ?assertMatch([{1, _, _},
+                  {2, _, _},
+                  {3, _, _}], Entries),
+
     ok.
 
 detect_lost_written_range(Config) ->
