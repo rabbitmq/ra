@@ -56,7 +56,8 @@ all_tests() ->
      server_recovery_strategy,
      stopped_wal_causes_leader_change_registered,
      stopped_wal_causes_leader_change_mfa,
-     ra_kv
+     ra_kv,
+     no_commit_with_wal_down
     ].
 
 groups() ->
@@ -1283,6 +1284,31 @@ ra_kv(Config) ->
     timer:sleep(100),
     [{ok, _, <<"value1">>} = ra_kv:get(ServerId, <<"k1">>, 5000)
      || ServerId <- ServerIds],
+
+    stop_peers(Peers),
+    ok.
+
+no_commit_with_wal_down(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
+    {ok, Started, []} = ra_kv:start_cluster(?SYS, ?FUNCTION_NAME,
+                                            #{members => ServerIds}),
+    %% synchronously get leader
+    {ok, _, Leader} = ra:members(hd(Started)),
+    {ok, _} = ra_kv:put(Leader, <<"k1">>, <<"value1">>, 5000),
+
+    %% roll wall on all nodeso
+    [begin
+
+         [SupPid] = [P || {ra_log_wal_sup, P, _, _}
+                          <- supervisor:which_children({ra_log_sup, N})],
+         ok = supervisor:terminate_child(SupPid, ra_log_wal)
+     end
+     || {_, N} <- ServerIds -- [Leader]],
+    timer:sleep(100),
+    {timeout, _} = ra_kv:put(Leader, <<"k2">>, <<"value2">>, 500),
 
     stop_peers(Peers),
     ok.
