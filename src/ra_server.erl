@@ -45,7 +45,7 @@
          machine_query/2,
          % TODO: hide behind a handle_leader
          make_rpcs/1,
-         update_release_cursor/3,
+         update_release_cursor/4,
          promote_checkpoint/2,
          checkpoint/3,
          persist_last_applied/1,
@@ -99,7 +99,8 @@
                                                  consistent_query_ref()}),
       pending_consistent_queries := [consistent_query_ref()],
       commit_latency => option(non_neg_integer()),
-      snapshot_phase => chunk_flag()
+      snapshot_phase => chunk_flag(),
+      pending_release_cursor => {ra_index(), term(), [ra_machine:release_cursor_condition()]}
      }.
 
 -type state() :: ra_server_state().
@@ -743,7 +744,10 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
                            _ -> []
                        end,
 
-            {State, _, Effects} = make_pipelined_rpc_effects(State1, Effects0),
+            %% Check if pending release cursor can now proceed
+            %% (no_snapshot_sends condition may now be satisfied)
+            {State2, Effects1} = maybe_emit_pending_release_cursor(State1, Effects0),
+            {State, _, Effects} = make_pipelined_rpc_effects(State2, Effects1),
             {leader, State, Effects}
     end;
 handle_leader(pipeline_rpcs, State0) ->
@@ -1393,13 +1397,14 @@ handle_follower({ra_log_event, Evt}, #{log := Log0,
     LW = ra_log:last_written(Log0),
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     State = State0#{log => Log},
+    {State1, Effects1} = maybe_emit_pending_release_cursor(State, Effects),
     case LW =/= ra_log:last_written(Log) of
         true when LeaderId =/= undefined ->
             %% last written has changed so we need to send an AER reply
-            Reply = append_entries_reply(Term, true, State),
-            {follower, State, [cast_reply(Id, LeaderId, Reply) | Effects]};
+            Reply = append_entries_reply(Term, true, State1),
+            {follower, State1, [cast_reply(Id, LeaderId, Reply) | Effects1]};
         _ ->
-            {follower, State, Effects}
+            {follower, State1, Effects1}
     end;
 handle_follower(#pre_vote_rpc{},
                 #{cfg := #cfg{log_id = LogId},
@@ -2148,13 +2153,14 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
             {delete_and_terminate, State1,
              [cast_reply(Id, LeaderId, Reply) | Effects]};
         {#{last_applied := LastApplied} = State, Effects} ->
+            {State1, Effects1} = maybe_emit_pending_release_cursor(State, Effects),
             case LastApplied > LastApplied0 of
                 true ->
                     %% entries were applied, append eval_aux effect
-                    {follower, State, [{aux, eval} | Effects]};
+                    {follower, State1, [{aux, eval} | Effects1]};
                 false ->
                     %% no entries were applied
-                    {follower, State, Effects}
+                    {follower, State1, Effects1}
             end
     end;
 evaluate_commit_index_follower(State, Effects) ->
@@ -2322,12 +2328,38 @@ log_fold_cache(From, _To, _Cache, Acc) ->
 
 % stores the cluster config at an index such that we can later snapshot
 % at this index.
--spec update_release_cursor(ra_index(), term(), ra_server_state()) ->
+-spec update_release_cursor(ra_index(), term(), map(), ra_server_state()) ->
     {ra_server_state(), effects()}.
-update_release_cursor(Index, MacState,
-                      #{cfg := #cfg{machine = Machine},
-                        log := Log0,
-                        cluster := Cluster} = State) ->
+update_release_cursor(Index, MacState, #{condition := Conds}, State)
+  when is_list(Conds) ->
+    case check_release_cursor_conditions(Conds, State) of
+        true ->
+            do_update_release_cursor(Index, MacState, State);
+        false ->
+            %% stash until conditions are met
+            {State#{pending_release_cursor => {Index, MacState, Conds}}, []}
+    end;
+update_release_cursor(Index, MacState, _Opts, State) ->
+    %% no conditions specified, process immediately
+    do_update_release_cursor(Index, MacState, State).
+
+check_release_cursor_conditions(Conds, State) ->
+    lists:all(fun(Cond) -> check_release_cursor_condition(Cond, State) end, Conds).
+
+check_release_cursor_condition({written, WrittenIdx}, #{log := Log}) ->
+    {LastWrittenIdx, _} = ra_log:last_written(Log),
+    WrittenIdx =< LastWrittenIdx;
+check_release_cursor_condition(no_snapshot_sends, #{cluster := Cluster}) ->
+    not maps:fold(fun(_PeerId, #{status := {sending_snapshot, _, _}}, _Acc) ->
+                          true;
+                     (_PeerId, _Peer, Acc) ->
+                          Acc
+                  end, false, Cluster).
+
+do_update_release_cursor(Index, MacState,
+                         #{cfg := #cfg{machine = Machine},
+                           log := Log0,
+                           cluster := Cluster} = State) ->
     MacVersion = index_machine_version(Index, State),
     MacMod = ra_machine:which_module(Machine, MacVersion),
     % simply pass on release cursor index to log
@@ -2335,6 +2367,29 @@ update_release_cursor(Index, MacState,
                                                   {MacVersion, MacMod},
                                                   MacState, Log0),
     {State#{log => Log}, Effects}.
+
+maybe_emit_pending_release_cursor(#{pending_release_cursor :=
+                                    {Index, MacState, Conds}} = State,
+                                  Effects) ->
+    case check_release_cursor_conditions(Conds, State) of
+        true ->
+            %% can now process the stashed release cursor
+            case do_update_release_cursor(Index, MacState,
+                                          maps:remove(pending_release_cursor,
+                                                      State))
+            of
+                {State1, []} ->
+                    {State1, Effects};
+                {State1, [Eff]} ->
+                    {State1, [Eff | Effects ]};
+                {State1, Effects1} ->
+                    {State1, Effects1 ++ Effects}
+            end;
+        false ->
+            {State, Effects}
+    end;
+maybe_emit_pending_release_cursor(State, Effects) ->
+    {State, Effects}.
 
 -spec checkpoint(ra_index(), term(), ra_server_state()) ->
       {ra_server_state(), effects()}.
@@ -2462,7 +2517,10 @@ handle_down(RaftState, snapshot_sender, Pid, Info,
         normal ->
             %% Success - handled by install_snapshot_result, just clean up
             State = peer_snapshot_process_exited(Pid, State0),
-            {RaftState, State, []};
+            %% Check if pending release cursor can now proceed
+            %% (no_snapshot_sends condition may now be satisfied)
+            {State1, Effects} = maybe_emit_pending_release_cursor(State, []),
+            {RaftState, State1, Effects};
         _Error ->
             ?DEBUG("~ts: Snapshot sender process ~w exited with ~W",
                    [LogId, Pid, Info, 10]),
@@ -3327,7 +3385,8 @@ evaluate_quorum(#{cfg := Cfg,
                   false ->
                       Effects0
               end,
-    apply_to(CI, State, Effects).
+    {State1, Effects1} = apply_to(CI, State, Effects),
+    maybe_emit_pending_release_cursor(State1, Effects1).
 
 increment_commit_index(State0 = #{current_term := CurrentTerm}) ->
     PotentialNewCommitIndex = agreed_commit(match_indexes(State0)),

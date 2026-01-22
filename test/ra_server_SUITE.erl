@@ -94,6 +94,8 @@ all() ->
      wal_down_condition_leader,
      wal_down_condition_leader_commands,
      update_release_cursor,
+     update_release_cursor_with_written_condition,
+     update_release_cursor_with_no_snapshot_sends_condition,
 
      follower_heartbeat,
      follower_heartbeat_reply,
@@ -119,7 +121,8 @@ all() ->
 
      snapshot_sender_exponential_backoff,
      snapshot_backoff_prevents_immediate_retry,
-     snapshot_backoff_reset_on_nodeup
+     snapshot_backoff_reset_on_nodeup,
+     snapshot_sender_down_triggers_pending_release_cursor
     ].
 
 -define(MACFUN, fun (E, _) -> E end).
@@ -1079,7 +1082,50 @@ update_release_cursor(_Config) ->
     State0 = State00#{cfg => Cfg#cfg{machine_versions = [{1, 1}, {0, 0}]}},
     %% need to match on something for this macro
     ?assertMatch({#{cfg := #cfg{machine_version = 0}}, []},
-                 ra_server:update_release_cursor(2, some_state, State0)),
+                 ra_server:update_release_cursor(2, some_state, #{}, State0)),
+    ok.
+
+update_release_cursor_with_written_condition(_Config) ->
+    State00 = #{cfg := Cfg} = (base_state(3, ?FUNCTION_NAME)),
+    meck:expect(?FUNCTION_NAME, version, fun () -> 1 end),
+    State0 = State00#{cfg => Cfg#cfg{machine_versions = [{1, 1}, {0, 0}]}},
+    %% Mock last_written to return index 1
+    meck:expect(ra_log, last_written, fun (_) -> {1, 5} end),
+    %% Try to update release cursor at index 2 with written condition at index 2
+    %% Since last_written is 1, this should be stashed
+    Opts = #{condition => [{written, 2}]},
+    {State1, []} = ra_server:update_release_cursor(2, some_state, Opts, State0),
+    ?assertMatch(#{pending_release_cursor := {2, some_state, [{written, 2}]}}, State1),
+    %% Now mock last_written to return index 2
+    meck:expect(ra_log, last_written, fun (_) -> {2, 5} end),
+    %% Try again with same condition - should process immediately
+    {State2, _Effects} = ra_server:update_release_cursor(2, some_state, Opts, State0),
+    ?assertNot(maps:is_key(pending_release_cursor, State2)),
+    ok.
+
+update_release_cursor_with_no_snapshot_sends_condition(_Config) ->
+    State00 = #{cfg := Cfg} = (base_state(3, ?FUNCTION_NAME)),
+    meck:expect(?FUNCTION_NAME, version, fun () -> 1 end),
+    State0 = State00#{cfg => Cfg#cfg{machine_versions = [{1, 1}, {0, 0}]}},
+    %% Add a peer with sending_snapshot status
+    N2 = ?N2,
+    Cluster = #{N2 => #{status => {sending_snapshot, self(), 1},
+                        match_index => 0,
+                        next_index => 1}},
+    State1 = State0#{cluster => Cluster},
+    %% Try to update release cursor with no_snapshot_sends condition
+    %% Since there's a peer sending snapshot, this should be stashed
+    Opts = #{condition => [no_snapshot_sends]},
+    {State2, []} = ra_server:update_release_cursor(2, some_state, Opts, State1),
+    ?assertMatch(#{pending_release_cursor := {2, some_state, [no_snapshot_sends]}}, State2),
+    %% Now change peer status to normal
+    Cluster2 = #{N2 => #{status => normal,
+                         match_index => 0,
+                         next_index => 1}},
+    State3 = State0#{cluster => Cluster2},
+    %% Try again - should process immediately
+    {State4, _Effects} = ra_server:update_release_cursor(2, some_state, Opts, State3),
+    ?assertNot(maps:is_key(pending_release_cursor, State4)),
     ok.
 
 candidate_handles_append_entries_rpc(_Config) ->
@@ -3655,6 +3701,37 @@ snapshot_backoff_reset_on_nodeup(_Config) ->
     State5 = State0#{cluster => Cluster3},
     State6 = ra_server:update_disconnected_peers(other_node, nodeup, State5),
     #{cluster := #{N2 := #{status := {snapshot_backoff, 2}}}} = State6,
+    ok.
+
+snapshot_sender_down_triggers_pending_release_cursor(_Config) ->
+    %% Test that when a snapshot sender process exits normally,
+    %% pending release cursors with no_snapshot_sends condition are evaluated
+    N2 = ?N2,
+    State00 = #{cfg := Cfg} = base_state(3, ?FUNCTION_NAME),
+    meck:expect(?FUNCTION_NAME, version, fun () -> 1 end),
+    State0 = State00#{cfg => Cfg#cfg{machine_versions = [{1, 1}, {0, 0}]}},
+    #{cluster := Cluster0} = State0,
+
+    %% Set up N2 with sending_snapshot status
+    SnapshotPid = spawn(fun() -> receive stop -> ok end end),
+    Peer2 = maps:get(N2, Cluster0),
+    Cluster1 = Cluster0#{N2 => Peer2#{status => {sending_snapshot, SnapshotPid, 1}}},
+    State1 = State0#{cluster => Cluster1},
+
+    %% Try to update release cursor with no_snapshot_sends condition
+    %% Since there's a peer sending snapshot, this should be stashed
+    Opts = #{condition => [no_snapshot_sends]},
+    {State2, []} = ra_server:update_release_cursor(2, some_state, Opts, State1),
+    ?assertMatch(#{pending_release_cursor := {2, some_state, [no_snapshot_sends]}}, State2),
+
+    %% Now simulate the snapshot sender process exiting normally
+    {leader, State3, _Effects} =
+        ra_server:handle_down(leader, snapshot_sender, SnapshotPid, normal, State2),
+
+    %% The pending release cursor should have been processed
+    ?assertNot(maps:is_key(pending_release_cursor, State3)),
+    %% Peer status should be normal
+    #{cluster := #{N2 := #{status := normal}}} = State3,
     ok.
 
 % %%% helpers

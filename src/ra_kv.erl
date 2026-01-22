@@ -278,10 +278,9 @@ init_aux(_) ->
 handle_aux(_RaState, {call, _From}, take_snapshot, Aux, Internal) ->
     MacState = ra_aux:machine_state(Internal),
     LastAppliedIdx = ra_aux:last_applied(Internal),
-    %% TODO: replace release cursor with simpler snapshot effect that is always
-    %% attempted?
+    Opts = #{condition => [{written, LastAppliedIdx}]},
     {reply, ok, Aux, Internal,
-     [{release_cursor, LastAppliedIdx, MacState}]};
+     [{release_cursor, LastAppliedIdx, MacState, Opts}]};
 handle_aux(_RaState, {call, _}, {get, Key}, Aux, Internal) ->
     #?STATE{keys = Keys} = ra_aux:machine_state(Internal),
     Members = maps:keys(ra_aux:members_info(Internal)),

@@ -86,6 +86,9 @@
          is_versioned/1
         ]).
 
+-export_type([release_cursor_condition/0,
+              release_cursor_opts/0]).
+
 -type state() :: term().
 %% The state for a given machine implementation.
 
@@ -121,6 +124,9 @@
 -type send_msg_opts() :: send_msg_opt() | [send_msg_opt()].
 -type locator() :: pid() | atom() | {atom(), node()}.
 
+-type release_cursor_condition() :: {written, ra_index()} | no_snapshot_sends.
+-type release_cursor_opts() :: #{condition => [release_cursor_condition()]}.
+
 -type version() :: non_neg_integer().
 
 -type effect() ::
@@ -144,6 +150,7 @@
     {log, [ra_index()], fun(([user_command()]) -> effects()), {local, node()}} |
     {log_ext, [ra_index()], fun(([ra_log:read_plan()]) -> effects()), {local, node()}} |
     {release_cursor, ra_index(), state()} |
+    {release_cursor, ra_index(), state(), release_cursor_opts()} |
     {release_cursor, ra_index()} |
     {checkpoint, ra_index(), state()} |
     {aux, term()} |
@@ -189,7 +196,10 @@
 %% <dd> demonitor a process or erlang node</dd>
 %% <dt><b>release_cursor</b></dt>
 %% <dd> indicate to Ra that none of the preceding entries contribute to the
-%% current machine state</dd>
+%% current machine state. The 4-tuple variant accepts options:
+%% `#{condition => [Condition]}' where Condition can be:
+%% `{written, Index}' - wait until the index has been written to disk,
+%% `no_snapshot_sends' - wait until no peers are receiving snapshots</dd>
 %% </dl>
 
 -type effects() :: [effect()].

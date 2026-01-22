@@ -1650,10 +1650,14 @@ handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType
      end || {ServerId, Request} <- VoteRequests],
     {State, Actions};
 handle_effect(RaftState, {release_cursor, Index, MacState}, EvtType,
+              State, Actions) ->
+    handle_effect(RaftState, {release_cursor, Index, MacState, #{}}, EvtType,
+                  State, Actions);
+handle_effect(RaftState, {release_cursor, Index, MacState, Opts}, EvtType,
               #state{server_state = ServerState0} = State0, Actions0) ->
     incr_counter(State0#state.conf, ?C_RA_SRV_RELEASE_CURSORS, 1),
     {ServerState, Effects} = ra_server:update_release_cursor(Index, MacState,
-                                                             ServerState0),
+                                                             Opts, ServerState0),
     State1 = State0#state{server_state = ServerState},
     handle_effects(RaftState, Effects, EvtType, State1, Actions0);
 handle_effect(RaftState, {release_cursor, Index}, EvtType,
