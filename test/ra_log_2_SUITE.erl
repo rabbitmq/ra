@@ -35,6 +35,7 @@ all_tests() ->
      last_written_overwrite,
      last_written_overwrite_2,
      last_index_reset,
+     set_last_index_with_pending,
      fold_after_sparse_mem_table,
      fold_after_sparse_segments,
      write_sparse_re_init,
@@ -80,6 +81,7 @@ all_tests() ->
      open_segments_limit,
      write_config,
      sparse_write,
+     sparse_write_resend,
      overwritten_segment_is_cleared,
      overwritten_segment_is_cleared_on_init,
      concurrent_snapshot_install_and_compaction,
@@ -148,17 +150,14 @@ snapshot_before_written(Config) ->
 
     Log0 = write_n(1, 6, 1,
                    ra_log_init(Config, #{min_snapshot_interval => 0})),
-    receive
-        {ra_log_event, {written, 1, _}} -> ok
-    after 2000 ->
-              exit(written_timeout)
-    end,
+    {ok, 5} = ra_log_wal:last_writer_seq(ra_log_wal, ?config(uid, Config)),
     %% write 10 entries
     Log1 = write_n(6, 20, 1, Log0),
     SnapIdx = 10,
     %% do snapshot in
     {Log2, Effs} = ra_log:update_release_cursor(SnapIdx, #{}, macctx(),
-                                                [10, 4], Log1),
+                                                [10, 4],
+                                                Log1),
     run_effs(Effs),
     {Log3, Effs3} = receive
                         {ra_log_event, {snapshot_written, {10, 1}, _,
@@ -169,12 +168,15 @@ snapshot_before_written(Config) ->
                               exit(snapshot_written_timeout)
                     end,
     run_effs(Effs3),
-
-    _Log4 = assert_log_events(Log3,
-                              fun (L) ->
-                                      {19, 1} == ra_log:last_written(L)
-                              end),
+    assert_log_events(Log3,
+                      fun (L) ->
+                              #{last_written_index_term := LW,
+                                num_pending := NP} = ra_log:overview(L),
+                              {19, 1} == LW andalso
+                              NP == 0
+                      end),
     ok.
+
 
 handle_overwrite(Config) ->
     Log0 = ra_log_init(Config),
@@ -799,6 +801,25 @@ last_index_reset(Config) ->
     ?assertMatch(#{range := {0, 4},
                    mem_table_range := {0, 4}},
                  O2),
+    ok.
+
+set_last_index_with_pending(Config) ->
+    Log0 = ra_log_init(Config),
+    Log2 = write_n(1, 6, 1, Log0),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    {ok, Log3} = ra_log:set_last_index(3, Log2),
+    {LastIdx, _} = ra_log:last_index_term(Log3),
+    {ok, Log4} = ra_log:write_sparse({5, 1, 5}, LastIdx, Log3),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log5 = assert_log_events(Log4, Pred, 2000),
+    {5, 1} = ra_log:last_written(Log5),
+    6 = ra_log:next_index(Log5),
+    {5, 1} = ra_log:last_index_term(Log5),
+
     ok.
 
 fold_after_sparse_mem_table(Config) ->
@@ -2056,6 +2077,39 @@ sparse_write(Config) ->
                   {5, _, _},
                   {7, _, _},
                   {9, _, _}], ResReInit),
+    ok.
+
+sparse_write_resend(Config) ->
+    Log00 = ra_log_init(Config),
+    Indexes = lists:seq(1, 10, 2),
+    Log0 = write_sparse(Indexes, 0, Log00),
+    Log1 = assert_log_events(Log0,
+                             fun (L) ->
+                                     #{num_pending := Num} = ra_log:overview(L),
+                                     Num == 0
+                             end),
+    WalPid = whereis(ra_log_wal),
+    true = ra_log_wal_SUITE:suspend_process(WalPid),
+    Log2 = write_sparse([11, 15], 9, Log1),
+    exit(WalPid, kill),
+    await_cond(fun () ->
+                       P = whereis(ra_log_wal),
+                       is_pid(P) andalso P =/= WalPid
+               end, 100),
+
+    Log3 = write_sparse([20], 15, Log2),
+    Log4 = assert_log_events(Log3,
+                             fun (L) ->
+                                     #{num_pending := Num} = ra_log:overview(L),
+                                     Num == 0
+                             end),
+    ct:pal("o ~p", [ra_log:overview(Log4)]),
+    % {Res0, _Log} = ra_log:sparse_read(Indexes, Log2),
+    % ?assertMatch([{1, _, _},
+    %               {3, _, _},
+    %               {5, _, _},
+    %               {7, _, _},
+    %               {9, _, _}], Res0),
     ok.
 
 overwritten_segment_is_cleared(Config) ->

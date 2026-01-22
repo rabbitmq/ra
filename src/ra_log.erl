@@ -292,13 +292,15 @@ init(#{uid := UId,
                      {ok, Idx} ->
                          Idx;
                      {error, wal_down} ->
+                         %% TODO: we could enter a condition loop here to
+                         %% wait for the WAL to come back
                          ?ERROR("~ts: ra_log:init/1 cannot complete as wal"
                                 " process is down.",
                                 [LogId]),
                          exit(wal_down)
                      end,
-    %% TODO: recover the pending seq by ra_seq:floor/2 the max of
-    %% last segment index and LastWalIdx
+
+    %% recover the pending seq
     MaxConfirmedWrittenIdx = case SegmentRange of
                                  {_, LastSegIdx} ->
                                      max(LastWalIdx, LastSegIdx);
@@ -382,7 +384,7 @@ init(#{uid := UId,
            [LogId, last_index_term(State), {SnapIdx, SnapTerm},
             State#?MODULE.last_written_index_term
            ]),
-    assert(resend_pending(State)).
+    assert(resend_pending(LastWalIdx, State)).
 
 -spec close(state()) -> ok.
 close(#?MODULE{cfg = #cfg{uid = _UId},
@@ -546,6 +548,7 @@ write_sparse({Idx, Term, _} = Entry, PrevIdx0,
              #?MODULE{cfg = #cfg{uid = UId,
                                  wal = Wal} = Cfg,
                       range = Range,
+                      pending = Pend0,
                       mem_table = Mt0} = State0)
   when PrevIdx0 == undefined orelse
        Range == undefined orelse
@@ -565,9 +568,11 @@ write_sparse({Idx, Term, _} = Entry, PrevIdx0,
                            {S, _} ->
                                ra_range:new(S, Idx)
                        end,
+            Pend = ra_seq:limit(Idx - 1, Pend0),
             {ok, State0#?MODULE{range = NewRange,
                                 last_term = Term,
                                 mem_table = Mt,
+                                pending = ra_seq:append(Idx, Pend),
                                 last_wal_write = {Pid, now_ms(), Idx}}};
         {error, wal_down} = Err->
             Err
@@ -820,6 +825,7 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
     {state(), [effect()]}.
 handle_event({written, Term, WrittenSeq},
              #?MODULE{cfg = Cfg,
+                      last_written_index_term = {PrevIdx, _},
                       snapshot_state = SnapState,
                       pending = Pend0} = State0) ->
     CurSnap = ra_snapshot:current(SnapState),
@@ -839,7 +845,7 @@ handle_event({written, Term, WrittenSeq},
                 {error, not_prefix} ->
                     ?DEBUG("~ts: ~w not prefix of ~w",
                            [Cfg#cfg.log_id, WrittenSeq, Pend0]),
-                    {resend_pending(State0), []}
+                    {resend_pending(PrevIdx, State0), []}
             end;
         {undefined, State} when LastWrittenIdx =< element(1, CurSnap) ->
             % A snapshot happened before the written event came in
@@ -1474,13 +1480,13 @@ release_resources(MaxOpenSegments, AccessPattern,
 wal_rewrite(#?MODULE{cfg = #cfg{uid = UId,
                                 wal = Wal} = Cfg,
                      last_wal_write = {_, _, _}} = State,
-            Tid, {Idx, Term, Cmd}) ->
-    case ra_log_wal:write(Wal, {UId, self()}, Tid, Idx, Term, Cmd) of
+            Tid, PrevIdx, {Idx, Term, Cmd}) ->
+    case ra_log_wal:write(Wal, {UId, self()}, Tid,
+                          PrevIdx, Idx, Term, Cmd) of
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
-            State#?MODULE{%last_index = Idx,
-                          last_term = Term,
+            State#?MODULE{last_term = Term,
                           last_wal_write = {Pid, now_ms(), Idx}
                          };
         {error, wal_down} ->
@@ -1543,7 +1549,9 @@ maybe_append_first_entry(State) ->
     State.
 
 resend_from(Idx, #?MODULE{cfg = #cfg{uid = UId}} = State0) ->
-    try resend_from0(Idx, State0) of
+    %% the wal will always request the next sequential
+    %% index before the last one it got
+    try resend_from0(Idx, Idx - 1, State0) of
         State -> State
     catch
         error:wal_down ->
@@ -1552,54 +1560,34 @@ resend_from(Idx, #?MODULE{cfg = #cfg{uid = UId}} = State0) ->
             State0
     end.
 
-resend_pending(#?MODULE{pending = []} = State) ->
+resend_pending(_, #?MODULE{pending = []} = State) ->
     State;
-resend_pending(#?MODULE{cfg = Cfg,
-                        last_resend_time = undefined,
-                        pending = Pend,
-                        mem_table = Mt} = State) ->
-    ?DEBUG("~ts: ra_log: resending from ~b to ~b mt ~p",
-           [State#?MODULE.cfg#cfg.log_id, ra_seq:first(Pend),
-            ra_seq:last(Pend), ra_mt:range(Mt)]),
-    ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_RESENDS, ra_seq:length(Pend)),
-    ra_seq:fold(fun (I, Acc) ->
-                        {I, T, C} = ra_mt:lookup(I, Mt),
-                        Tid = ra_mt:tid_for(I, T, Mt),
-                        wal_rewrite(Acc, Tid, {I, T, C})
-                end,
-                State#?MODULE{last_resend_time = {erlang:system_time(seconds),
-                                                  whereis(Cfg#cfg.wal)}},
-                Pend);
-resend_pending(#?MODULE{last_resend_time = {LastResend, WalPid},
-                        cfg = #cfg{resend_window_seconds = ResendWindow}} = State) ->
-    case erlang:system_time(seconds) > LastResend + ResendWindow orelse
-         (is_pid(WalPid) andalso not is_process_alive(WalPid)) of
-        true ->
-            % it has been more than the resend window since last resend
-            % _or_ the wal has been restarted since then
-            % ok to try again
-            resend_pending(State#?MODULE{last_resend_time = undefined});
-        false ->
-            State
-    end.
+resend_pending(PrevIdx, #?MODULE{pending = Pend} = State) ->
+    resend_from0(ra_seq:first(Pend), PrevIdx, State).
 
-resend_from0(Idx, #?MODULE{cfg = Cfg,
-                           range = {_, LastIdx},
-                           last_resend_time = undefined,
-                           mem_table = Mt} = State) ->
-    ?DEBUG("~ts: ra_log: resending from ~b to ~b",
-           [State#?MODULE.cfg#cfg.log_id, Idx, LastIdx]),
-    ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_RESENDS, LastIdx - Idx + 1),
-    lists:foldl(fun (I, Acc) ->
-                        {I, T, C} = ra_mt:lookup(I, Mt),
-                        Tid = ra_mt:tid_for(I, T, Mt),
-                        wal_rewrite(Acc, Tid, {I, T, C})
-                end,
-                State#?MODULE{last_resend_time = {erlang:system_time(seconds),
-                                                  whereis(Cfg#cfg.wal)}},
-                lists:seq(Idx, LastIdx));
-resend_from0(Idx, #?MODULE{last_resend_time = {LastResend, WalPid},
-                           cfg = #cfg{resend_window_seconds = ResendWindow}} = State) ->
+resend_from0(Idx, PrevIdx,
+             #?MODULE{cfg = Cfg,
+                      last_resend_time = undefined,
+                      pending = Pend0,
+                      mem_table = Mt} = State0) ->
+    ?DEBUG("~ts: ra_log: resending pending range ~w from ~b prev idx ~b",
+           [State0#?MODULE.cfg#cfg.log_id, ra_seq:range(Pend0), Idx, PrevIdx]),
+    Pend = ra_seq:floor(Idx, Pend0),
+    ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_RESENDS, ra_seq:length(Pend)),
+    State1 = State0#?MODULE{last_resend_time = {erlang:system_time(seconds),
+                                                whereis(Cfg#cfg.wal)},
+                            pending = Pend},
+    {_, State} = ra_seq:fold(fun (I, {P, Acc}) ->
+                                     {I, T, C} = ra_mt:lookup(I, Mt),
+                                     Tid = ra_mt:tid_for(I, T, Mt),
+                                     {I, wal_rewrite(Acc, Tid, P, {I, T, C})}
+                             end,
+                             {PrevIdx, State1},
+                             Pend),
+    State;
+resend_from0(Idx, _PrevIdx,
+             #?MODULE{last_resend_time = {LastResend, WalPid},
+                      cfg = #cfg{resend_window_seconds = ResendWindow}} = State) ->
     case erlang:system_time(seconds) > LastResend + ResendWindow orelse
          (is_pid(WalPid) andalso not is_process_alive(WalPid)) of
         true ->

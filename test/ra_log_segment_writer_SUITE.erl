@@ -42,7 +42,8 @@ all_tests() ->
      upgrade_segment_name_format,
      skip_entries_lower_than_snapshot_index,
      skip_all_entries_lower_than_snapshot_index,
-     live_indexes_1
+     live_indexes_1,
+     live_indexes_2
     ].
 
 groups() ->
@@ -879,6 +880,34 @@ live_indexes_1(Config) ->
               ok = gen_server:stop(TblWriterPid),
               throw(ra_log_event_timeout)
     end,
+    ok.
+
+live_indexes_2(Config) ->
+    Dir = ?config(wal_dir, Config),
+    UId = ?config(uid, Config),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
+                                                            name => ?SEGWR,
+                                                            data_dir => Dir}),
+    Mt1 = make_mem_table(UId, [{5, 1, a}]),
+    Mt2 = make_mem_table(UId, [
+                               {7, 1, b},
+                               {8, 1, b},
+                               {9, 1, b}
+                              ]),
+    Ranges = #{UId => [{ra_mt:tid(Mt1), [ra_mt:range(Mt1)]},
+                       {ra_mt:tid(Mt2), [ra_mt:range(Mt2)]}]},
+    ra_log_snapshot_state:insert(ra_log_snapshot_state, UId, 40, 1, [{7, 9}, 1]),
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
+    receive
+        {ra_log_event, {segments, _Tid, [{_, {7, 9}}]}} ->
+            ok
+    after 3000 ->
+              flush(),
+              ok = gen_server:stop(TblWriterPid),
+              throw(ra_log_event_timeout)
+    end,
+    ok = gen_server:stop(TblWriterPid),
     ok.
 
 %%% Internal

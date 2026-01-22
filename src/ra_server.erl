@@ -1501,6 +1501,10 @@ handle_follower(#install_snapshot_rpc{term = Term,
     {ok, SS} = ra_snapshot:begin_accept(Meta, SnapState0),
     Log1 = ra_log:set_snapshot_state(SS, Log0),
 
+    %% TODO: just resetting to lastapplied may not be enough if all prior
+    %% entries are not fully written
+    {_LastWrittenIdx, _} = ra_log:last_written(Log1),
+
     %% if the snaphost includes pre entries (live entries) then we need
     %% to reset the log to the last applied index to avoid issues
     Log = case ChunkFlag of

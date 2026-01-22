@@ -77,7 +77,8 @@ limit(CeilIdxIncl, [Last | Rem])
   when is_integer(Last) andalso
        Last > CeilIdxIncl ->
     limit(CeilIdxIncl, Rem);
-limit(CeilIdxIncl, [{_, _} = T | Rem]) ->
+limit(CeilIdxIncl, [{_, _} = T | Rem])
+  when is_integer(CeilIdxIncl) ->
     case ra_range:limit(CeilIdxIncl + 1, T) of
         undefined ->
             limit(CeilIdxIncl, Rem);
