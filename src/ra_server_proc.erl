@@ -163,7 +163,9 @@
                 pending_notifys = #{} :: #{pid() => [term()]},
                 pending_queries = [] :: [{ra:query_condition(),
                                           gen_statem:from(),
-                                          query_fun()}]
+                                          query_fun()}],
+                %% {LeakyIntegrator, LastCommitIndex, LastIntervalRate} for commit rate tracking
+                commit_rate :: {ra_li:state(), non_neg_integer(), float()}
                }).
 
 %%%===================================================================
@@ -389,6 +391,7 @@ do_init(#{id := Id,
     %% monitor worker process, it is easier to handle than linking as we're
     %% already processing all downs
     _ = monitor(process, WorkerPid),
+    #{commit_index := CommitIndex} = ServerState,
     State = #state{conf = #conf{log_id = LogId,
                                 cluster_name = ClusterName,
                                 name = Key,
@@ -403,7 +406,8 @@ do_init(#{id := Id,
                                 counter = Counter,
                                 worker_pid = WorkerPid},
                    low_priority_commands = ra_ets_queue:new(),
-                   server_state = ServerState},
+                   server_state = ServerState,
+                   commit_rate = {ra_li:new(TickTime * 6), CommitIndex, 0.0}},
     ok = net_kernel:monitor_nodes(true, [nodedown_reason]),
     State.
 
@@ -602,13 +606,17 @@ leader(info, {unsuspend_peer, PeerId}, State0) ->
                     State0
             end,
     {keep_state, State, []};
-leader(_, tick_timeout, State0) ->
+leader(_, tick_timeout,
+       #state{conf = #conf{tick_timeout = TickTimeMs},
+              commit_rate = CommitRate0} = State0) ->
     {State1, RpcEffs} = make_rpcs(State0),
     ServerState0 = State1#state.server_state,
+    CommitRate = update_commit_rate(CommitRate0, ServerState0, TickTimeMs),
     Effects = ra_server:tick(ServerState0),
     ServerState = ra_server:log_tick(ServerState0),
     {State2, Actions} = ?HANDLE_EFFECTS(RpcEffs ++ Effects ++ [{aux, tick}],
-                                        cast, State1#state{server_state = ServerState}),
+                                        cast, State1#state{server_state = ServerState,
+                                                           commit_rate = CommitRate}),
     %% try sending any pending applied notifications again
     State = send_applied_notifications(#{}, State2),
     {keep_state, State,
@@ -694,8 +702,12 @@ candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
 candidate(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
-candidate(_, tick_timeout, State0) ->
-    State = maybe_persist_last_applied(State0),
+candidate(_, tick_timeout,
+          #state{conf = #conf{tick_timeout = TickTimeMs},
+                 commit_rate = CommitRate0,
+                 server_state = ServerState} = State0) ->
+    CommitRate = update_commit_rate(CommitRate0, ServerState, TickTimeMs),
+    State = maybe_persist_last_applied(State0#state{commit_rate = CommitRate}),
     {keep_state, State, set_tick_timer(State, [])};
 candidate({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
@@ -756,8 +768,12 @@ pre_vote(info, {Status, Node, InfoList}, State0)
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
 pre_vote(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
     handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
-pre_vote(_, tick_timeout, State0) ->
-    State = maybe_persist_last_applied(State0),
+pre_vote(_, tick_timeout,
+         #state{conf = #conf{tick_timeout = TickTimeMs},
+                commit_rate = CommitRate0,
+                server_state = ServerState} = State0) ->
+    CommitRate = update_commit_rate(CommitRate0, ServerState, TickTimeMs),
+    State = maybe_persist_last_applied(State0#state{commit_rate = CommitRate}),
     {keep_state, State, set_tick_timer(State, [])};
 pre_vote({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok}]};
@@ -898,10 +914,15 @@ follower(info, {node_event, Node, up}, State) ->
 follower(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
-follower(_, tick_timeout, #state{server_state = ServerState0} = State0) ->
+follower(_, tick_timeout,
+         #state{conf = #conf{tick_timeout = TickTimeMs},
+                commit_rate = CommitRate0,
+                server_state = ServerState0} = State0) ->
+    CommitRate = update_commit_rate(CommitRate0, ServerState0, TickTimeMs),
     ServerState = ra_server:log_tick(ServerState0),
     {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast,
-                                       State0#state{server_state = ServerState}),
+                                       State0#state{server_state = ServerState,
+                                                    commit_rate = CommitRate}),
     {keep_state, State, set_tick_timer(State, Actions)};
 follower({call, From}, {read_entries, Indexes}, State) ->
     read_entries0(From, Indexes, State);
@@ -941,8 +962,12 @@ receive_snapshot(enter, OldState, State0 = #state{conf = Conf}) ->
     {keep_state, State,
      [{state_timeout, ReceiveSnapshotTimeout, receive_snapshot_timeout}
       | Actions]};
-receive_snapshot(_, tick_timeout, State0) ->
-    {keep_state, State0, set_tick_timer(State0, [])};
+receive_snapshot(_, tick_timeout,
+                 #state{commit_rate = CommitRate0,
+                        server_state = ServerState} = State0) ->
+    %% Reset the integrator to avoid counting snapshot index jump as throughput
+    CommitRate = reset_commit_rate(CommitRate0, ServerState),
+    {keep_state, State0#state{commit_rate = CommitRate}, set_tick_timer(State0, [])};
 receive_snapshot({call, From}, {leader_call, Msg}, State) ->
     maybe_redirect(From, Msg, State);
 receive_snapshot(EventType, {local_call, Msg}, State) ->
@@ -1100,8 +1125,13 @@ await_condition(info, {node_event, Node, down}, State) ->
 await_condition(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
-await_condition(_, tick_timeout, State0) ->
-    {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast, State0),
+await_condition(_, tick_timeout,
+                #state{conf = #conf{tick_timeout = TickTimeMs},
+                       commit_rate = CommitRate0,
+                       server_state = ServerState} = State0) ->
+    CommitRate = update_commit_rate(CommitRate0, ServerState, TickTimeMs),
+    {State, Actions} = ?HANDLE_EFFECTS([{aux, tick}], cast,
+                                       State0#state{commit_rate = CommitRate}),
     {keep_state, State, set_tick_timer(State, Actions)};
 await_condition({timeout, {snapshot_retry, _}}, {snapshot_retry, _}, _State) ->
     %% Postpone snapshot retry until we transition back to leader
@@ -1908,8 +1938,25 @@ gen_statem_safe_call(ServerId, Msg, Timeout) ->
             {error, Reason}
     end.
 
+do_state_query(overview, #state{server_state = ServerState,
+                                commit_rate = {CommitRateLI, _, LastRate}}) ->
+    Overview = ra_server:state_query(overview, ServerState),
+    Rate = ra_li:rate(erlang:system_time(millisecond), CommitRateLI),
+    Overview#{commit_rate => Rate,
+              commit_rate_last => LastRate};
 do_state_query(QueryName, #state{server_state = State}) ->
     ra_server:state_query(QueryName, State).
+
+update_commit_rate({LI0, LastCI, _LastRate}, ServerState, TickTimeMs) ->
+    #{commit_index := CI} = ServerState,
+    Now = erlang:system_time(millisecond),
+    Delta = CI - LastCI,
+    LastRate = Delta / TickTimeMs * 1000,
+    {ra_li:update(Delta, Now, LI0), CI, LastRate}.
+
+reset_commit_rate({LI, _LastCI, _LastRate}, ServerState) ->
+    #{commit_index := CI} = ServerState,
+    {ra_li:reset(LI), CI, 0.0}.
 
 config_defaults(ServerId, MetricLabels) ->
     Counter = case ra_counters:fetch(ServerId) of

@@ -85,7 +85,6 @@
       commit_index := ra_index(),
       last_applied := ra_index(),
       persisted_last_applied => ra_index(),
-      stop_after => ra_index(),
       machine_state := term(),
       aux_state => term(),
       condition => #{predicate_fun := ra_await_condition_fun(),

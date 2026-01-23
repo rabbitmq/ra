@@ -114,7 +114,7 @@ run(#{name := Name,
     [begin
          receive
              {done, P} ->
-                 io:format("~w is done ", [P]),
+                 io:format("~w is done", [P]),
                  ok
          after  Wait ->
                    exit({timeout, P})
@@ -122,9 +122,11 @@ run(#{name := Name,
      end || P <- Pids],
     End = erlang:system_time(millisecond),
     Taken = End - Start,
+    {ok, O, _} = ra:member_overview(Leader),
+    O1 = maps:with([commit_rate], O),
     exit(CounterPrinter, kill),
-    io:format("benchmark completed: ~b ops in ~bms rate ~.2f ops/sec~n",
-              [TotalOps, Taken, TotalOps / (Taken / 1000)]),
+    io:format("benchmark completed: ~b ops in ~bms rate ~.2f ops/sec~n overview ~p~n",
+              [TotalOps, Taken, TotalOps / (Taken / 1000), O1]),
 
     BName = atom_to_binary(Name, utf8),
     _ = [rpc:call(N, ?MODULE, print_metrics, [BName])
