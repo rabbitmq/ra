@@ -27,7 +27,7 @@ jobs:
       if: ${{ matrix.os == 'ubuntu-latest'}}
       run: rebar3 xref
     - name: DIALYZE
-      if: ${{ matrix.otp_version == 27 && matrix.os == 'ubuntu-latest'}}
+      if: ${{ matrix.otp_version == 28 && matrix.os == 'ubuntu-latest'}}
       run: rebar3 dialyzer
     - name: BUILD
       run: rebar3 compile

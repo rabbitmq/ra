@@ -1,148 +1,242 @@
+%% This Source Code Form is subject to the terms of the Mozilla Public
+%% License, v. 2.0. If a copy of the MPL was not distributed with this
+%% file, You can obtain one at https://mozilla.org/MPL/2.0/.
+%%
+%% Copyright (c) 2017-2026 Broadcom. All Rights Reserved. The term Broadcom
+%% refers to Broadcom Inc. and/or its subsidiaries.
 -module(ra_lol).
-%% sorted list of list
+%% Adaptive sorted list structure that uses:
+%% - Simple list for small collections (< 65 elements) - fast pattern matching
+%% - Tuple with binary search for larger collections (>= 65 elements)
+%%
+%% This provides optimal performance across all sizes.
 
 -export([
          new/0,
+         new/1,
          append/2,
          search/2,
          takewhile/2,
+         foldl/3,
+         foldr/3,
          from_list/1,
          from_list/2,
          to_list/1,
          len/1
         ]).
 
--define(MAX_ROW_LEN, 64).
+%% Threshold at or above which we use tuple, below we use simple list
+-define(TUPLE_THRESHOLD, 65).
 
--type row() :: [term()].
 -type gt_fun() :: fun((Item, Item) -> boolean()).
 
--record(?MODULE, {len = 0 :: non_neg_integer(),
-                  append_row_len = 0 :: non_neg_integer(),
-                  gt_fun :: gt_fun(),
-                  rows = [] :: [row()]}).
+%% State is either:
+%% - {list, GtFun, List} where List is stored in descending order (newest first)
+%% - {tuple, GtFun, Len, Data} where Data is a tuple in descending order
+-opaque state() :: {list, gt_fun(), list()}
+                 | {tuple, gt_fun(), non_neg_integer(), tuple()}.
 
--opaque state() :: #?MODULE{}.
-
-%% a search continuation
--opaque cont() :: [row()].
-
+%% Continuation is either:
+%% - A simple list (remaining elements to search)
+%% - Tuple continuation {Data, Pos, High}
+-opaque cont() :: list() | {tuple(), pos_integer(), non_neg_integer()}.
 
 -export_type([state/0,
               cont/0]).
 
 -spec new() -> state().
 new() ->
-    #?MODULE{gt_fun = fun erlang:'>'/2}.
+    {list, fun erlang:'>'/2, []}.
 
 -spec new(gt_fun()) -> state().
 new(GtFun) ->
-    #?MODULE{gt_fun = GtFun}.
+    {list, GtFun, []}.
 
 %% @doc append an item that is greater than the last appended item
 -spec append(Item, state()) ->
     state() | out_of_order
   when Item :: term().
-append(Item, #?MODULE{rows = []} = State) ->
-    State#?MODULE{rows = [[Item]],
-                  len = 1,
-                  append_row_len = 0};
-append(Item,
-       #?MODULE{len = Len,
-                gt_fun = GtFun,
-                append_row_len = RowLen,
-                rows = [[LastItem | _] = Row | Rows]} = State) ->
-  case GtFun(Item, LastItem) of
-      true ->
-          case RowLen of
-              ?MAX_ROW_LEN ->
-                  %% time for a new row
-                  State#?MODULE{rows = [[Item], Row | Rows],
-                                len = Len + 1,
-                                append_row_len = 1};
-              _ ->
-                  State#?MODULE{rows = [[Item | Row] | Rows],
-                                len = Len + 1,
-                                append_row_len = RowLen + 1}
-          end;
-      false ->
-          out_of_order
-  end.
-
+append(Item, {list, GtFun, []}) ->
+    {list, GtFun, [Item]};
+append(Item, {list, GtFun, [Last | _] = List}) ->
+    case GtFun(Item, Last) of
+        true ->
+            NewList = [Item | List],
+            maybe_upgrade(GtFun, NewList);
+        false ->
+            out_of_order
+    end;
+append(Item, {tuple, GtFun, Len, Data}) ->
+    %% Last appended item is at index 1 (newest first)
+    LastItem = element(1, Data),
+    case GtFun(Item, LastItem) of
+        true ->
+            %% Prepend by converting to list and back - O(N)
+            NewData = list_to_tuple([Item | tuple_to_list(Data)]),
+            {tuple, GtFun, Len + 1, NewData};
+        false ->
+            out_of_order
+    end.
 
 -spec search(fun((term()) -> higher | lower | equal),
-                 state() | cont()) ->
+             state() | cont()) ->
     {term(), cont()} | undefined.
-search(SearchFun, #?MODULE{rows = Rows}) ->
-    search(SearchFun, Rows);
-search(SearchFun, Rows) when is_list(Rows) ->
-    case find_row(SearchFun, Rows) of
-        [] ->
-            undefined;
-        [SearchRow | RemRows] ->
-            case search_row(SearchFun, SearchRow) of
-                undefined ->
-                    undefined;
-                {Item, Rem} ->
-                    {Item, [Rem | RemRows]}
-            end
+search(_SearchFun, {list, _GtFun, []}) ->
+    undefined;
+search(SearchFun, {list, _GtFun, List}) ->
+    list_search(SearchFun, List);
+search(_SearchFun, {tuple, _GtFun, 0, _Data}) ->
+    undefined;
+search(SearchFun, {tuple, _GtFun, Len, Data}) ->
+    %% Use binary search for tuple
+    binary_search(SearchFun, Data, 1, Len);
+search(SearchFun, Cont) when is_list(Cont) ->
+    %% List continuation - continue searching the remaining list
+    list_search(SearchFun, Cont);
+search(SearchFun, {Data, Pos, High}) when is_tuple(Data), Pos =< High ->
+    %% Tuple continuation - use linear scan for sequential access
+    tuple_linear_search(SearchFun, Data, Pos, High);
+search(_SearchFun, {Data, _Pos, _High}) when is_tuple(Data) ->
+    undefined.
+
+%% Simple list search with fast pattern matching
+list_search(_SearchFun, []) ->
+    undefined;
+list_search(SearchFun, [Item | Rest]) ->
+    case SearchFun(Item) of
+        equal ->
+            %% Found! Return item and remaining list as continuation
+            {Item, Rest};
+        lower ->
+            %% Keep searching (toward smaller/older items)
+            list_search(SearchFun, Rest);
+        higher ->
+            %% We've gone past where the item would be
+            undefined
     end.
+
+%% Binary search for tuple - O(log N)
+%% Data is sorted descending (index 1 = largest/newest)
+binary_search(_SearchFun, _Data, Low, High) when Low > High ->
+    undefined;
+binary_search(SearchFun, Data, Low, High) ->
+    Mid = (Low + High) div 2,
+    Item = element(Mid, Data),
+    case SearchFun(Item) of
+        equal ->
+            %% Found! Continuation points to next element
+            {Item, {Data, Mid + 1, tuple_size(Data)}};
+        higher ->
+            %% Target is "higher" - in descending order, at lower indices
+            binary_search(SearchFun, Data, Low, Mid - 1);
+        lower ->
+            %% Target is "lower" - in descending order, at higher indices
+            binary_search(SearchFun, Data, Mid + 1, High)
+    end.
+
+%% Linear search on tuple for continuations - O(1) amortized for sequential access
+tuple_linear_search(SearchFun, Data, Pos, High) when Pos =< High ->
+    Item = element(Pos, Data),
+    case SearchFun(Item) of
+        equal ->
+            {Item, {Data, Pos + 1, High}};
+        lower ->
+            tuple_linear_search(SearchFun, Data, Pos + 1, High);
+        higher ->
+            undefined
+    end;
+tuple_linear_search(_SearchFun, _Data, _Pos, _High) ->
+    undefined.
 
 -spec takewhile(fun((Item) -> boolean()), state()) ->
     {[Item], state()}
       when Item :: term().
-takewhile(Fun, #?MODULE{gt_fun = GtFun} = State) ->
-    %% not the most efficient but rarely used
-    {Taken, Left} = lists:splitwith(Fun, to_list(State)),
-    {Taken, from_list(GtFun, lists:reverse(Left))}.
+takewhile(Fun, {list, GtFun, List}) ->
+    {Taken, Left} = lists:splitwith(Fun, List),
+    {Taken, {list, GtFun, Left}};
+takewhile(Fun, {tuple, GtFun, _Len, Data}) ->
+    List = tuple_to_list(Data),
+    {Taken, Left} = lists:splitwith(Fun, List),
+    %% Rebuild appropriate structure based on remaining size
+    LeftLen = length(Left),
+    NewState = if LeftLen >= ?TUPLE_THRESHOLD ->
+                      {tuple, GtFun, LeftLen, list_to_tuple(Left)};
+                  true ->
+                      {list, GtFun, Left}
+               end,
+    {Taken, NewState}.
 
-
-%% @doc initialise from a list sorted in ascending order
+%% @doc initialise from a list sorted in descending order
 -spec from_list(list()) -> state().
 from_list(List) ->
     from_list(fun erlang:'>'/2, List).
 
 -spec from_list(gt_fun(), list()) -> state().
-from_list(GtFun, List)
-  when is_list(List) ->
-    lists:foldl(fun append/2, new(GtFun), List).
-
--spec to_list(state()) -> list().
-to_list(#?MODULE{rows = Rows}) ->
-    lists:append(Rows).
-
--spec len(state()) -> non_neg_integer().
-len(#?MODULE{len = Len}) ->
-    Len.
-
-
-%% Internals
-
-search_row(_SearchFun, []) ->
-    undefined;
-search_row(SearchFun, [Item | Rem]) ->
-    case SearchFun(Item) of
-        equal ->
-            {Item, Rem};
-        lower ->
-            search_row(SearchFun, Rem);
-        higher ->
-            undefined
+from_list(GtFun, List) when is_list(List) ->
+    Len = length(List),
+    if Len >= ?TUPLE_THRESHOLD ->
+           %% Store in descending order (newest/largest first) as tuple
+           {tuple, GtFun, Len, list_to_tuple(List)};
+       true ->
+           %% Store in descending order as list
+           {list, GtFun, List}
     end.
 
+-spec to_list(state()) -> list().
+to_list({list, _GtFun, List}) ->
+    List;
+to_list({tuple, _GtFun, _Len, Data}) ->
+    tuple_to_list(Data).
 
-find_row(SearchFun, [_Row, Row | Rem] = Rows) ->
-    %% if last item of the second rows is higher than searching for
-    %% then return all rows
-    case SearchFun(hd(Row)) of
-        higher ->
-            Rows;
-        _ ->
-            %% else keep searching
-            find_row(SearchFun, [Row | Rem])
-    end;
-find_row(_SearchFun, Rows) ->
-    Rows.
+-spec len(state()) -> non_neg_integer().
+len({list, _GtFun, List}) ->
+    length(List);
+len({tuple, _GtFun, Len, _Data}) ->
+    Len.
+
+%% @doc Fold left-to-right (from newest/largest to oldest/smallest).
+%% Since the structure stores items in descending order (newest first),
+%% this iterates from the beginning to the end.
+-spec foldl(fun((Item, Acc) -> Acc), Acc, state()) -> Acc
+      when Item :: term(), Acc :: term().
+foldl(Fun, Acc, {list, _GtFun, List}) ->
+    lists:foldl(Fun, Acc, List);
+foldl(Fun, Acc, {tuple, _GtFun, Len, Data}) ->
+    tuple_foldl(Fun, Acc, Data, 1, Len).
+
+tuple_foldl(_Fun, Acc, _Data, Pos, Len) when Pos > Len ->
+    Acc;
+tuple_foldl(Fun, Acc, Data, Pos, Len) ->
+    tuple_foldl(Fun, Fun(element(Pos, Data), Acc), Data, Pos + 1, Len).
+
+%% @doc Fold right-to-left (from oldest/smallest to newest/largest).
+%% Since the structure stores items in descending order (newest first),
+%% this iterates from the end to the beginning.
+-spec foldr(fun((Item, Acc) -> Acc), Acc, state()) -> Acc
+      when Item :: term(), Acc :: term().
+foldr(Fun, Acc, {list, _GtFun, List}) ->
+    lists:foldr(Fun, Acc, List);
+foldr(Fun, Acc, {tuple, _GtFun, Len, Data}) ->
+    tuple_foldr(Fun, Acc, Data, Len).
+
+tuple_foldr(_Fun, Acc, _Data, 0) ->
+    Acc;
+tuple_foldr(Fun, Acc, Data, Pos) ->
+    tuple_foldr(Fun, Fun(element(Pos, Data), Acc), Data, Pos - 1).
+
+%%% ===================
+%%% Internal functions
+%%% ===================
+
+%% Upgrade from list to tuple if we've crossed the threshold
+maybe_upgrade(GtFun, List) ->
+    Len = length(List),
+    if Len >= ?TUPLE_THRESHOLD ->
+           %% Convert to tuple
+           {tuple, GtFun, Len, list_to_tuple(List)};
+       true ->
+           {list, GtFun, List}
+    end.
 
 %%% ===================
 %%% Internal unit tests
@@ -153,12 +247,12 @@ find_row(_SearchFun, Rows) ->
 
 basic_test() ->
     Items = lists:seq(1, 100),
-    L0 = ra_lol:from_list(Items),
-    ?assertEqual(100, ra_lol:len(L0)),
-    ?assertEqual(Items, lists:reverse(ra_lol:to_list(L0))),
-    ?assertMatch(out_of_order, ra_lol:append(1, L0)),
-    L1 = ra_lol:append(101, L0),
-    ?assertEqual(101, ra_lol:len(L1)),
+    L0 = ?MODULE:from_list(lists:reverse(Items)),
+    ?assertEqual(100, ?MODULE:len(L0)),
+    ?assertEqual(Items, lists:reverse(?MODULE:to_list(L0))),
+    ?assertMatch(out_of_order, ?MODULE:append(1, L0)),
+    L1 = ?MODULE:append(101, L0),
+    ?assertEqual(101, ?MODULE:len(L1)),
     SearchFun = fun (T) ->
                         fun (Item) ->
                                 if T == Item -> equal;
@@ -168,25 +262,94 @@ basic_test() ->
                         end
                 end,
     [begin
-         {T, _} = ra_lol:search(SearchFun(T), L1)
+         {T, _} = ?MODULE:search(SearchFun(T), L1),
+         ok
      end || T <- Items ++ [101]],
 
     %% test searching with a continuation
     _ = lists:foldl(fun (T, Acc) ->
-                            {T, Cont} = ra_lol:search(SearchFun(T), Acc),
+                            {T, Cont} = ?MODULE:search(SearchFun(T), Acc),
                             Cont
                     end, L1, lists:reverse(Items ++ [101])),
 
     TakeFun = fun(Item) -> Item > 50 end,
 
     {Taken, L2} = takewhile(TakeFun, L1),
-    ?assertEqual(50, ra_lol:len(L2)),
+    ?assertEqual(50, ?MODULE:len(L2)),
     ?assertEqual(51, length(Taken)),
-    ?assertMatch(out_of_order, ra_lol:append(50, L2)),
-    L3 = ra_lol:append(51, L2),
-    ?assertEqual(51, ra_lol:len(L3)),
+    ?assertMatch(out_of_order, ?MODULE:append(50, L2)),
+    L3 = ?MODULE:append(51, L2),
+    ?assertEqual(51, ?MODULE:len(L3)),
 
     ok.
 
+%% Test that small lists use simple list
+small_uses_list_test() ->
+    Items = lists:seq(1, 20),
+    {list, _, _} = ?MODULE:from_list(lists:reverse(Items)).
+
+%% Test that large lists use tuple
+large_uses_tuple_test() ->
+    Items = lists:seq(1, 100),
+    {tuple, _, _, _} = ?MODULE:from_list(lists:reverse(Items)).
+
+%% Test upgrade from list to tuple via append
+upgrade_test() ->
+    Items = lists:seq(1, 64),
+    L0 = ?MODULE:from_list(lists:reverse(Items)),
+    {list, _, _} = L0,
+    L1 = ?MODULE:append(65, L0),
+    {tuple, _, _, _} = L1,
+    ?assertEqual(65, ?MODULE:len(L1)).
+
+%% Test foldl - iterates from newest to oldest (high to low)
+foldl_test() ->
+    %% Small list (uses list representation)
+    SmallItems = lists:seq(1, 20),
+    SmallLol = ?MODULE:from_list(lists:reverse(SmallItems)),
+    %% foldl iterates from newest (20) to oldest (1)
+    %% Prepending gives us [1, 2, ..., 20] (oldest to newest)
+    SmallFoldlResult = ?MODULE:foldl(fun(Item, Acc) -> [Item | Acc] end, [], SmallLol),
+    ?assertEqual(SmallItems, SmallFoldlResult),
+
+    %% Large list (uses tuple representation)
+    LargeItems = lists:seq(1, 100),
+    LargeLol = ?MODULE:from_list(lists:reverse(LargeItems)),
+    LargeFoldlResult = ?MODULE:foldl(fun(Item, Acc) -> [Item | Acc] end, [], LargeLol),
+    ?assertEqual(LargeItems, LargeFoldlResult),
+
+    %% Test with sum accumulator
+    SumResult = ?MODULE:foldl(fun(Item, Acc) -> Item + Acc end, 0, LargeLol),
+    ?assertEqual(lists:sum(LargeItems), SumResult),
+
+    %% Empty list
+    EmptyLol = ?MODULE:new(),
+    EmptyResult = ?MODULE:foldl(fun(Item, Acc) -> [Item | Acc] end, [], EmptyLol),
+    ?assertEqual([], EmptyResult).
+
+%% Test foldr - iterates from oldest to newest (low to high)
+foldr_test() ->
+    %% Small list (uses list representation)
+    SmallItems = lists:seq(1, 20),
+    SmallLol = ?MODULE:from_list(lists:reverse(SmallItems)),
+    %% foldr iterates from oldest (1) to newest (20)
+    %% Prepending gives us [20, 19, ..., 1] (newest to oldest, same as to_list)
+    SmallFoldrResult = ?MODULE:foldr(fun(Item, Acc) -> [Item | Acc] end, [], SmallLol),
+    ?assertEqual(?MODULE:to_list(SmallLol), SmallFoldrResult),
+
+    %% Large list (uses tuple representation)
+    LargeItems = lists:seq(1, 100),
+    LargeLol = ?MODULE:from_list(lists:reverse(LargeItems)),
+    LargeFoldrResult = ?MODULE:foldr(fun(Item, Acc) -> [Item | Acc] end, [], LargeLol),
+    ?assertEqual(?MODULE:to_list(LargeLol), LargeFoldrResult),
+
+    %% Test with sum accumulator
+    SumResult = ?MODULE:foldr(fun(Item, Acc) -> Item + Acc end, 0, LargeLol),
+    ?assertEqual(lists:sum(LargeItems), SumResult),
+
+    %% Empty list
+    EmptyLol = ?MODULE:new(),
+    EmptyResult = ?MODULE:foldr(fun(Item, Acc) -> [Item | Acc] end, [], EmptyLol),
+    ?assertEqual([], EmptyResult).
 
 -endif.

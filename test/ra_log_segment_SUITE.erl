@@ -38,7 +38,18 @@ all_tests() ->
      corrupted_segment,
      large_segment,
      segref,
-     versions_v1
+     info,
+     info_2,
+     versions_v1,
+     copy,
+     %% Binary index mode tests
+     binary_mode_basic_read,
+     binary_mode_term_query,
+     binary_mode_sequential_ascending,
+     binary_mode_non_contiguous_ascending,
+     binary_mode_random_access,
+     binary_mode_overwrite_fallback,
+     binary_mode_v1_format
     ].
 
 groups() ->
@@ -50,10 +61,6 @@ init_per_testcase(TestCase, Config) ->
     PrivDir = ?config(priv_dir, Config),
     Dir = filename:join(PrivDir, TestCase),
     ok = ra_lib:make_dir(Dir),
-    _ = ets:new(ra_open_file_metrics,
-                [named_table, public, {write_concurrency, true}]),
-    _ = ets:new(ra_io_metrics,
-                [named_table, public, {write_concurrency, true}]),
     [{test_case, TestCase}, {data_dir, Dir} | Config].
 
 end_per_testcase(_, Config) ->
@@ -207,9 +214,42 @@ segref(Config) ->
     {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 128}),
     undefined = ra_log_segment:segref(Seg0),
     {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
-    {{1, 1}, "seg1.seg"} = ra_log_segment:segref(Seg1),
+    {<<"seg1.seg">>, {1, 1}} = ra_log_segment:segref(Seg1),
     ok.
 
+info(Config) ->
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 128}),
+    Info1 = ra_log_segment:info(Fn),
+    ?assertMatch(#{ref := undefined}, Info1),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
+    _ = ra_log_segment:flush(Seg1),
+    Info2 = ra_log_segment:info(Fn),
+    ?assertMatch(#{ref := {<<"seg1.seg">>, {1, 1}}}, Info2),
+    ok.
+
+info_2(Config) ->
+    %% passes live indexes which will result in additional info keys
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 128}),
+    Info1 = ra_log_segment:info(Fn, []),
+    ?assertMatch(#{ref := undefined,
+                   live_size := 0}, Info1),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
+    {ok, Seg2} = ra_log_segment:append(Seg1, 2, 2, <<"Adsf">>),
+    _ = ra_log_segment:flush(Seg2),
+    Info2 = ra_log_segment:info(Fn, [1]),
+    ?assertMatch(#{ref := {<<"seg1.seg">>, {1, 2}},
+                   num_entries := 2,
+                   live_size := 4}, Info2),
+    Info3 = ra_log_segment:info(Fn),
+    %% info/1 assumes all indexes are "live"
+    ?assertMatch(#{ref := {<<"seg1.seg">>, {1, 2}},
+                   num_entries := 2,
+                   live_size := 8}, Info3),
+    ok.
 
 full_file(Config) ->
     Dir = ?config(data_dir, Config),
@@ -460,6 +500,272 @@ read_sparse_append_read(Config) ->
     ra_log_segment:close(R0),
     ok.
 
+copy(Config) ->
+    Dir = ?config(data_dir, Config),
+    Indexes = lists:seq(1, 100),
+    SrcFn = filename:join(Dir, <<"SOURCE1.segment">>),
+    {ok, SrcSeg0} = ra_log_segment:open(SrcFn),
+    SrcSeg1 = lists:foldl(
+             fun (I, S0) ->
+                     {ok, S} = ra_log_segment:append(S0, I, 1, term_to_binary(I)),
+                     S
+             end, SrcSeg0, Indexes),
+    _ = ra_log_segment:close(SrcSeg1),
+
+    Fn = filename:join(Dir, <<"TARGET.segment">>),
+    {ok, Seg0} = ra_log_segment:open(Fn),
+    CopyIndexes = lists:seq(1, 100, 2),
+    {ok, Seg} = ra_log_segment:copy(Seg0, SrcFn, CopyIndexes),
+    ra_log_segment:close(Seg),
+    {ok, R} = ra_log_segment:open(Fn, #{mode => read,
+                                        access_pattern => random}),
+    %%TODO: consider makeing read_sparse tolerant to missing indexes somehow
+    %% perhaps detecting if the segment is "sparse"
+    {ok, 2, [_, _]} = ra_log_segment:read_sparse(R, [1, 3],
+                                                 fun (I, T, B, Acc) ->
+                                                         [{I, T, binary_to_term(B)} | Acc]
+                                                 end, []),
+    ra_log_segment:close(R),
+
+    ok.
+
+
+%% Binary index mode tests
+
+binary_mode_basic_read(Config) ->
+    %% Test basic read operations with binary index mode
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "binary_basic.seg"),
+    Data = make_data(256),
+    
+    %% Write some entries
+    {ok, Seg0} = ra_log_segment:open(Fn),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, Data),
+    {ok, Seg2} = ra_log_segment:append(Seg1, 2, 2, Data),
+    {ok, Seg3} = ra_log_segment:append(Seg2, 3, 3, Data),
+    {ok, Seg} = ra_log_segment:sync(Seg3),
+    ok = ra_log_segment:close(Seg),
+    
+    %% Read with binary mode
+    {ok, SegR} = ra_log_segment:open(Fn, #{mode => read, index_mode => binary}),
+    {1, 3} = ra_log_segment:range(SegR),
+    
+    %% Single read
+    [{1, 2, Data}] = read_sparse(SegR, [1]),
+    [{3, 3, Data}] = read_sparse(SegR, [3]),
+    
+    %% Multiple reads
+    [{1, 2, Data}, {2, 2, Data}, {3, 3, Data}] = read_sparse(SegR, [1, 2, 3]),
+    [{1, 2, Data}, {3, 3, Data}] = read_sparse(SegR, [1, 3]),
+    
+    ok = ra_log_segment:close(SegR),
+    ok.
+
+binary_mode_term_query(Config) ->
+    %% Test term_query with binary index mode
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "binary_term_query.seg"),
+    
+    {ok, Seg0} = ra_log_segment:open(Fn),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 5, 2, <<"a">>),
+    {ok, Seg2} = ra_log_segment:append(Seg1, 6, 3, <<"b">>),
+    {ok, Seg3} = ra_log_segment:append(Seg2, 7, 4, <<"c">>),
+    _ = ra_log_segment:close(Seg3),
+    
+    %% Query with binary mode
+    {ok, Seg} = ra_log_segment:open(Fn, #{mode => read, index_mode => binary}),
+    2 = ra_log_segment:term_query(Seg, 5),
+    3 = ra_log_segment:term_query(Seg, 6),
+    4 = ra_log_segment:term_query(Seg, 7),
+    undefined = ra_log_segment:term_query(Seg, 8),
+    undefined = ra_log_segment:term_query(Seg, 4),
+    _ = ra_log_segment:close(Seg),
+    ok.
+
+binary_mode_sequential_ascending(Config) ->
+    %% Test sequential ascending reads (consumer pattern) with hint optimization
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "binary_seq.seg"),
+    
+    %% Write 100 entries
+    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 200}),
+    Seg = lists:foldl(fun(Idx, S0) ->
+        Data = term_to_binary({entry, Idx}),
+        {ok, S} = ra_log_segment:append(S0, Idx, 1, Data),
+        S
+    end, Seg0, lists:seq(1, 100)),
+    ok = ra_log_segment:close(Seg),
+    
+    %% Read sequentially in ascending order (this should benefit from hint)
+    {ok, SegR} = ra_log_segment:open(Fn, #{mode => read, index_mode => binary}),
+    
+    %% Read entries 10-20 one at a time
+    lists:foreach(fun(Idx) ->
+        ExpectedData = term_to_binary({entry, Idx}),
+        [{Idx, 1, ExpectedData}] = read_sparse(SegR, [Idx])
+    end, lists:seq(10, 20)),
+    
+    %% Read a batch of sequential entries
+    Batch = lists:seq(50, 60),
+    Results = read_sparse(SegR, Batch),
+    ?assertEqual(length(Batch), length(Results)),
+    lists:foreach(fun({Idx, Term, Data}) ->
+        ?assertEqual(1, Term),
+        ?assertEqual(term_to_binary({entry, Idx}), Data)
+    end, Results),
+    
+    ok = ra_log_segment:close(SegR),
+    ok.
+
+binary_mode_non_contiguous_ascending(Config) ->
+    %% Test non-contiguous ascending reads (e.g., every 5th entry)
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "binary_sparse_seq.seg"),
+    
+    %% Write 100 entries
+    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 200}),
+    Seg = lists:foldl(fun(Idx, S0) ->
+        Data = term_to_binary({entry, Idx}),
+        {ok, S} = ra_log_segment:append(S0, Idx, 1, Data),
+        S
+    end, Seg0, lists:seq(1, 100)),
+    ok = ra_log_segment:close(Seg),
+    
+    %% Read every 5th entry (non-contiguous but ascending)
+    {ok, SegR} = ra_log_segment:open(Fn, #{mode => read, index_mode => binary}),
+    
+    SparseIndexes = lists:seq(5, 100, 5),  %% 5, 10, 15, ..., 100
+    Results = read_sparse(SegR, SparseIndexes),
+    ?assertEqual(length(SparseIndexes), length(Results)),
+    
+    lists:foreach(fun({Idx, Term, Data}) ->
+        ?assertEqual(1, Term),
+        ?assertEqual(term_to_binary({entry, Idx}), Data),
+        ?assertEqual(0, Idx rem 5)  %% Should be divisible by 5
+    end, Results),
+    
+    ok = ra_log_segment:close(SegR),
+    ok.
+
+binary_mode_random_access(Config) ->
+    %% Test random (non-sequential) access pattern
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "binary_random.seg"),
+    
+    %% Write 50 entries
+    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 100}),
+    Seg = lists:foldl(fun(Idx, S0) ->
+        Data = term_to_binary({entry, Idx}),
+        {ok, S} = ra_log_segment:append(S0, Idx, 1, Data),
+        S
+    end, Seg0, lists:seq(1, 50)),
+    ok = ra_log_segment:close(Seg),
+    
+    %% Read in random order
+    {ok, SegR} = ra_log_segment:open(Fn, #{mode => read, index_mode => binary}),
+    
+    %% Descending order
+    DescIndexes = lists:seq(50, 40, -1),
+    DescResults = read_sparse(SegR, lists:sort(DescIndexes)),
+    ?assertEqual(11, length(DescResults)),
+    
+    %% Mixed order (sorted for read_sparse)
+    MixedIndexes = [45, 12, 33, 7, 50, 1, 28],
+    MixedResults = read_sparse(SegR, lists:sort(MixedIndexes)),
+    ?assertEqual(length(MixedIndexes), length(MixedResults)),
+    
+    ok = ra_log_segment:close(SegR),
+    ok.
+
+binary_mode_overwrite_fallback(Config) ->
+    %% Test that binary mode falls back to map mode when overwrites are detected
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "binary_overwrite.seg"),
+    Data1 = <<"original">>,
+    Data2 = <<"overwritten">>,
+    
+    %% Write entries 1-5 in term 1
+    {ok, Seg0} = ra_log_segment:open(Fn),
+    Seg1 = lists:foldl(fun(Idx, S0) ->
+        {ok, S} = ra_log_segment:append(S0, Idx, 1, Data1),
+        S
+    end, Seg0, lists:seq(1, 5)),
+    
+    %% Overwrite entries 3-5 in term 2 (simulates follower receiving from new leader)
+    {ok, Seg2} = ra_log_segment:append(Seg1, 3, 2, Data2),
+    {ok, Seg3} = ra_log_segment:append(Seg2, 4, 2, Data2),
+    {ok, Seg4} = ra_log_segment:append(Seg3, 5, 2, Data2),
+    {ok, Seg} = ra_log_segment:sync(Seg4),
+    ok = ra_log_segment:close(Seg),
+    
+    %% Open with binary mode - should detect overwrites and fall back to map
+    {ok, SegR} = ra_log_segment:open(Fn, #{mode => read, index_mode => binary}),
+    
+    %% Verify range is correct (should be 1-5, not 1-8)
+    {1, 5} = ra_log_segment:range(SegR),
+    
+    %% Verify we get the correct (overwritten) data
+    [{1, 1, Data1}] = read_sparse(SegR, [1]),
+    [{2, 1, Data1}] = read_sparse(SegR, [2]),
+    [{3, 2, Data2}] = read_sparse(SegR, [3]),
+    [{4, 2, Data2}] = read_sparse(SegR, [4]),
+    [{5, 2, Data2}] = read_sparse(SegR, [5]),
+    
+    %% term_query should also work correctly
+    1 = ra_log_segment:term_query(SegR, 1),
+    1 = ra_log_segment:term_query(SegR, 2),
+    2 = ra_log_segment:term_query(SegR, 3),
+    2 = ra_log_segment:term_query(SegR, 4),
+    2 = ra_log_segment:term_query(SegR, 5),
+    
+    ok = ra_log_segment:close(SegR),
+    ok.
+
+binary_mode_v1_format(Config) ->
+    %% Test binary mode with V1 segment format
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "binary_v1.seg"),
+    Data = make_data(256),
+    Crc = erlang:crc32(Data),
+    NumEntries = 4,
+    Version = 1,
+    %% v1 index record size was 28
+    %% header size is 8
+    DataOffset = 8 + (NumEntries * 28),
+    
+    %% Create a V1 format segment manually
+    IndexData = <<1:64/unsigned, 2:64/unsigned,
+                  DataOffset:32/unsigned,
+                  (byte_size(Data)):32/unsigned,
+                  Crc:32/unsigned,
+                  2:64/unsigned, 2:64/unsigned,
+                  (DataOffset + byte_size(Data)):32/unsigned,
+                  (byte_size(Data)):32/unsigned,
+                  Crc:32/unsigned>>,
+    Header = <<"RASG", Version:16/unsigned, NumEntries:16/unsigned>>,
+    {ok, Fd} = file:open(Fn, [write, raw, binary]),
+    ok = file:pwrite(Fd, [{0, Header},
+                          {8, IndexData},
+                          {DataOffset, Data},
+                          {DataOffset + byte_size(Data), Data}]),
+    ok = file:sync(Fd),
+    ok = file:close(Fd),
+    
+    %% Read with binary mode
+    {ok, R0} = ra_log_segment:open(Fn, #{mode => read, index_mode => binary}),
+    {1, 2} = ra_log_segment:range(R0),
+    [{1, 2, Data}] = read_sparse(R0, [1]),
+    [{2, 2, Data}] = read_sparse(R0, [2]),
+    [{1, 2, Data}, {2, 2, Data}] = read_sparse(R0, [1, 2]),
+    
+    %% term_query
+    2 = ra_log_segment:term_query(R0, 1),
+    2 = ra_log_segment:term_query(R0, 2),
+    
+    ok = ra_log_segment:close(R0),
+    ok.
+
+%%% Internal
 write_until_full(Idx, Term, Data, Seg0) ->
     case ra_log_segment:append(Seg0, Idx, Term, Data) of
         {ok, Seg} ->
@@ -467,9 +773,6 @@ write_until_full(Idx, Term, Data, Seg0) ->
         {error, full} ->
             Seg0
     end.
-
-
-%%% Internal
 make_data(Size) ->
     term_to_binary(crypto:strong_rand_bytes(Size)).
 

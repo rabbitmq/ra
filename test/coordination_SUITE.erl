@@ -55,7 +55,9 @@ all_tests() ->
      segment_writer_or_wal_crash_leader,
      server_recovery_strategy,
      stopped_wal_causes_leader_change_registered,
-     stopped_wal_causes_leader_change_mfa
+     stopped_wal_causes_leader_change_mfa,
+     ra_kv,
+     no_commit_with_wal_down
     ].
 
 groups() ->
@@ -400,7 +402,7 @@ shrink_cluster_with_snapshot(Config) ->
     %% resume activity ok
     PrivDir = ?config(data_dir, Config),
     ClusterName = ?config(cluster_name, Config),
-    Peers = start_peers([s1,s2,s3], PrivDir),
+    Peers = start_peers([s1, s2, s3], PrivDir),
     try
         ServerIds = server_ids(ClusterName, Peers),
         [_A, _B, _C] = ServerIds,
@@ -1019,15 +1021,15 @@ segment_writer_or_wal_crash_follower(Config) ->
      end || I <- lists:seq(1, 10)],
 
     %% stop and restart the follower
-    ok = ra:stop_server(Follower),
-    ok = ra:restart_server(Follower),
+    ok = ra:stop_server(?SYS, Follower),
+    ok = ra:restart_server(?SYS, Follower),
 
     await_condition(AwaitReplicated, 100),
 
     _ = ct_rpc:call(FollowerNode, ra_log_wal, force_rollover, [ra_log_wal]),
 
-    ok = ra:stop_server(Follower),
-    ok = ra:restart_server(Follower),
+    ok = ra:stop_server(?SYS, Follower),
+    ok = ra:restart_server(?SYS, Follower),
 
     await_condition(AwaitReplicated, 100),
 
@@ -1129,15 +1131,15 @@ segment_writer_or_wal_crash_leader(Config) ->
      end || I <- lists:seq(1, 10)],
 
     %% stop and restart the leader
-    ok = ra:stop_server(Leader),
-    ok = ra:restart_server(Leader),
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, Leader),
 
     await_condition(AwaitReplicated, 100),
 
     _ = ct_rpc:call(LeaderNode, ra_log_wal, force_rollover, [ra_log_wal]),
 
-    ok = ra:stop_server(Leader),
-    ok = ra:restart_server(Leader),
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, Leader),
 
     await_condition(AwaitReplicated, 100),
 
@@ -1258,11 +1260,56 @@ stopped_wal_causes_leader_change(Config, RecoverStrat) ->
                             #{term := T} = ra:key_metrics(Follower),
                             T > Term andalso
                             (begin
-                                 P = ct_rpc:call(LeaderNode, erlang, whereis, [LeaderName]),%                      [ra_log_wal]),
+                                 P = ct_rpc:call(LeaderNode, erlang, whereis, [LeaderName]),
                                  is_pid(P) andalso P =/= LeaderPid
                              end)
                     end, 200),
     await_condition(AwaitReplicated, 100),
+    stop_peers(Peers),
+    ok.
+
+ra_kv(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
+    {ok, Started, []} = ra_kv:start_cluster(?SYS, ?FUNCTION_NAME, #{members => ServerIds}),
+    %% synchronously get leader
+    {ok, _, Leader} = ra:members(hd(Started)),
+    {ok, _} = ra_kv:put(Leader, <<"k1">>, <<"value1">>, 5000),
+
+    %% roll wall on all nodeso
+    [ok = erpc:call(N, ra_log_wal, force_roll_over, [ra_log_wal])
+     || {_, N} <- ServerIds],
+    timer:sleep(100),
+    [{ok, _, <<"value1">>} = ra_kv:get(ServerId, <<"k1">>, 5000)
+     || ServerId <- ServerIds],
+
+    stop_peers(Peers),
+    ok.
+
+no_commit_with_wal_down(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
+    {ok, Started, []} = ra_kv:start_cluster(?SYS, ?FUNCTION_NAME,
+                                            #{members => ServerIds}),
+    %% synchronously get leader
+    {ok, _, Leader} = ra:members(hd(Started)),
+    {ok, _} = ra_kv:put(Leader, <<"k1">>, <<"value1">>, 5000),
+
+    %% roll wall on all nodeso
+    [begin
+
+         [SupPid] = [P || {ra_log_wal_sup, P, _, _}
+                          <- supervisor:which_children({ra_log_sup, N})],
+         ok = supervisor:terminate_child(SupPid, ra_log_wal)
+     end
+     || {_, N} <- ServerIds -- [Leader]],
+    timer:sleep(100),
+    {timeout, _} = ra_kv:put(Leader, <<"k2">>, <<"value2">>, 500),
+
     stop_peers(Peers),
     ok.
 
@@ -1449,8 +1496,6 @@ snapshot_installed(#{machine_version := _,
 
 node_setup(DataDir) ->
     ok = ra_lib:make_dir(DataDir),
-    % NodeDir = filename:join(DataDir, atom_to_list(node())),
-    % ok = ra_lib:make_dir(DataDir),
     LogFile = filename:join(DataDir, "ra.log"),
     SaslFile = filename:join(DataDir, "ra_sasl.log"),
     logger:set_primary_config(level, debug),

@@ -16,6 +16,14 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("src/ra.hrl").
 
+-define(MACMOD, ?MODULE).
+
+-define(MAGIC, "RASN").
+-define(VERSION, 1).
+
+%% Indexes file format constants
+-define(IDX_MAGIC, "RASI").
+-define(IDX_VERSION, 1).
 %%%===================================================================
 %%% Common Test callbacks
 %%%===================================================================
@@ -31,6 +39,7 @@ all_tests() ->
      init_multi,
      take_snapshot,
      take_snapshot_crash,
+     take_snapshot_with_ra_seq_live_indexes,
      init_recover,
      init_recover_voter_status,
      init_recover_multi_corrupt,
@@ -38,7 +47,13 @@ all_tests() ->
      read_snapshot,
      accept_snapshot,
      abort_accept,
-     accept_receives_snapshot_written_with_lower_index
+     accept_receives_snapshot_written_with_higher_index,
+     accept_receives_snapshot_written_with_higher_index_2,
+     %% indexes format tests
+     write_and_read_indexes,
+     indexes_invalid_version,
+     indexes_checksum_error,
+     indexes_backward_compat
     ].
 
 groups() ->
@@ -92,14 +107,17 @@ take_snapshot(Config) ->
     UId = ?config(uid, Config),
     State0 = init_state(Config),
     Meta = meta(55, 2, [node()]),
-    MacRef = ?FUNCTION_NAME,
-    {State1, [{monitor, process, snapshot_writer, Pid}]} =
-         ra_snapshot:begin_snapshot(Meta, MacRef, snapshot, State0),
+    MacState = ?FUNCTION_NAME,
+    {State1, [{bg_work, Fun, _}]} =
+         ra_snapshot:begin_snapshot(Meta, ?MACMOD,MacState, snapshot, State0),
     undefined = ra_snapshot:current(State1),
-    {Pid, {55, 2}, snapshot} = ra_snapshot:pending(State1),
+    Fun(),
+    {{55, 2}, snapshot} = ra_snapshot:pending(State1),
     receive
-        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, snapshot}} ->
-            State = ra_snapshot:complete_snapshot(IdxTerm, snapshot, State1),
+        {ra_log_event,
+         {snapshot_written, {55, 2} = IdxTerm, Indexes, snapshot, _}} ->
+            State = ra_snapshot:complete_snapshot(IdxTerm, snapshot,
+                                                  Indexes, State1),
             undefined = ra_snapshot:pending(State),
             {55, 2} = ra_snapshot:current(State),
             55 = ra_snapshot:last_index_for(UId),
@@ -114,40 +132,92 @@ take_snapshot_crash(Config) ->
     SnapDir = ?config(snap_dir, Config),
     State0 = init_state(Config),
     Meta = meta(55, 2, [node()]),
-    MacRef = ?FUNCTION_NAME,
-    {State1, [{monitor, process, snapshot_writer, Pid}]} =
-         ra_snapshot:begin_snapshot(Meta, MacRef, snapshot, State0),
+    MacState = ?FUNCTION_NAME,
+    {State1, [{bg_work, _Fun, ErrFun}]} =
+         ra_snapshot:begin_snapshot(Meta, ?MACMOD, MacState, snapshot, State0),
+    ErrFun({error, blah}),
     undefined = ra_snapshot:current(State1),
-    {Pid, {55, 2}, snapshot}  = ra_snapshot:pending(State1),
+    {{55, 2}, snapshot}  = ra_snapshot:pending(State1),
     receive
-        {ra_log_event, _} ->
-            %% just pretend the snapshot event didn't happen
-            %% and the process instead crashed
+        {ra_log_event, {snapshot_error, {55, 2} = IdxTerm, snapshot, Err}} ->
+            State = ra_snapshot:handle_error(IdxTerm, Err, State1),
+            undefined = ra_snapshot:pending(State),
+            undefined = ra_snapshot:current(State),
+            undefined = ra_snapshot:last_index_for(UId),
+
+            %% assert there are no snapshots now
+            ?assertEqual([], filelib:wildcard(filename:join(SnapDir, "*"))),
             ok
-    after 10 -> ok
+    after 10 ->
+              ct:fail("no log event")
     end,
 
-    State = ra_snapshot:handle_down(Pid, it_crashed_dawg, State1),
     %% if the snapshot process crashed we just have to consider the
     %% snapshot as faulty and clear it up
-    undefined = ra_snapshot:pending(State),
-    undefined = ra_snapshot:current(State),
-    undefined = ra_snapshot:last_index_for(UId),
 
-    %% assert there are no snapshots now
-    ?assertEqual([], filelib:wildcard(filename:join(SnapDir, "*"))),
+    ok.
 
+%% Test that ra_machine:live_indexes/2 correctly handles the {ra_seq, Seq}
+%% return type from the machine callback, allowing machines to return
+%% pre-built ra_seq structures for efficiency.
+take_snapshot_with_ra_seq_live_indexes(Config) ->
+    UId = ?config(uid, Config),
+    SnapDir = ?config(snap_dir, Config),
+    State0 = init_state(Config),
+    Meta = meta(55, 2, [node()]),
+    MacState = ?FUNCTION_NAME,
+    %% Create a mock machine module that returns {ra_seq, Seq}
+    MockMod = ra_seq_test_machine,
+    meck:new(MockMod, [non_strict]),
+    meck:expect(MockMod, version, fun () -> 1 end),
+    meck:expect(MockMod, which_module, fun (_) -> MockMod end),
+    %% Return a pre-built ra_seq with ranges - this is the key test
+    %% The machine returns {ra_seq, Seq} to indicate it's already in ra_seq format
+    ExpectedSeq = [{10, 20}, 5, 3, 1],  %% ra_seq with a range and individual indexes
+    meck:expect(MockMod, live_indexes, fun (_) -> {ra_seq, ExpectedSeq} end),
+    try
+        {State1, [{bg_work, Fun, _}]} =
+             ra_snapshot:begin_snapshot(Meta, MockMod, MacState, snapshot, State0),
+        undefined = ra_snapshot:current(State1),
+        Fun(),
+        {{55, 2}, snapshot} = ra_snapshot:pending(State1),
+        receive
+            {ra_log_event,
+             {snapshot_written, {55, 2} = IdxTerm, Indexes, snapshot, _}} ->
+                %% Verify the indexes were correctly processed
+                ?assertEqual(ExpectedSeq, Indexes),
+                State = ra_snapshot:complete_snapshot(IdxTerm, snapshot,
+                                                      Indexes, State1),
+                undefined = ra_snapshot:pending(State),
+                {55, 2} = ra_snapshot:current(State),
+                55 = ra_snapshot:last_index_for(UId),
+                %% Verify the indexes file was written correctly
+                IndexFile = filename:join([SnapDir,
+                                          ra_lib:zpad_hex(2) ++ "_" ++ ra_lib:zpad_hex(55),
+                                          <<"indexes">>]),
+                {ok, ReadIndexes} = ra_snapshot:indexes(
+                                      filename:dirname(IndexFile)),
+                ?assertEqual(ExpectedSeq, ReadIndexes),
+                ok
+        after 1000 ->
+                  error(snapshot_event_timeout)
+        end
+    after
+        meck:unload(MockMod)
+    end,
     ok.
 
 init_recover(Config) ->
     UId = ?config(uid, Config),
     State0 = init_state(Config),
     Meta = meta(55, 2, [node()]),
-    {State1, [{monitor, process, snapshot_writer, _}]} =
-         ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, snapshot, State0),
+    {State1, [{bg_work, Fun, _}]} =
+         ra_snapshot:begin_snapshot(Meta, ?MACMOD, ?FUNCTION_NAME, snapshot, State0),
+    Fun(),
     receive
-        {ra_log_event, {snapshot_written, IdxTerm, snapshot}} ->
-            _ = ra_snapshot:complete_snapshot(IdxTerm, snapshot, State1),
+        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
+            _ = ra_snapshot:complete_snapshot(IdxTerm, snapshot,
+                                              Indexes, State1),
             ok
     after 1000 ->
               error(snapshot_event_timeout)
@@ -169,11 +239,12 @@ init_recover_voter_status(Config) ->
     UId = ?config(uid, Config),
     State0 = init_state(Config),
     Meta = meta(55, 2, #{node() => #{voter_status => test}}),
-    {State1, [{monitor, process, snapshot_writer, _}]} =
-         ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, snapshot, State0),
+    {State1, [{bg_work, Fun, _}]} =
+         ra_snapshot:begin_snapshot(Meta, ?MACMOD, ?FUNCTION_NAME, snapshot, State0),
+    Fun(),
     receive
-        {ra_log_event, {snapshot_written, IdxTerm, snapshot}} ->
-            _ = ra_snapshot:complete_snapshot(IdxTerm, snapshot, State1),
+        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
+            _ = ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State1),
             ok
     after 1000 ->
               error(snapshot_event_timeout)
@@ -196,16 +267,21 @@ init_multi(Config) ->
     State0 = init_state(Config),
     Meta1 = meta(55, 2, [node()]),
     Meta2 = meta(165, 2, [node()]),
-    {State1, _} = ra_snapshot:begin_snapshot(Meta1, ?FUNCTION_NAME, snapshot,
-                                             State0),
+    {State1, [{bg_work, Fun, _}]} =
+        ra_snapshot:begin_snapshot(Meta1, ?MACMOD, ?FUNCTION_NAME,
+                                   snapshot, State0),
+    %% simulate ra worker execution
+    Fun(),
     receive
-        {ra_log_event, {snapshot_written, IdxTerm, snapshot}} ->
-            State2 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, State1),
-            {State3, _} = ra_snapshot:begin_snapshot(Meta2, ?FUNCTION_NAME,
-                                                     snapshot, State2),
-            {_, {165, 2}, snapshot} = ra_snapshot:pending(State3),
+        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
+            State2 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State1),
+            {State3, [{bg_work, Fun2, _}]} =
+                ra_snapshot:begin_snapshot(Meta2, ?MACMOD, ?FUNCTION_NAME,
+                                           snapshot, State2),
+            {{165, 2}, snapshot} = ra_snapshot:pending(State3),
             {55, 2} = ra_snapshot:current(State3),
             55 = ra_snapshot:last_index_for(UId),
+            Fun2(),
             receive
                 {ra_log_event, _} ->
                     %% don't complete snapshot
@@ -235,16 +311,20 @@ init_recover_multi_corrupt(Config) ->
     State0 = init_state(Config),
     Meta1 = meta(55, 2, [node()]),
     Meta2 = meta(165, 2, [node()]),
-    {State1, _} = ra_snapshot:begin_snapshot(Meta1, ?FUNCTION_NAME, snapshot,
-                                             State0),
+    {State1, [{bg_work, Fun, _}]} =
+        ra_snapshot:begin_snapshot(Meta1, ?MACMOD, ?FUNCTION_NAME,
+                                   snapshot, State0),
+    Fun(),
     receive
-        {ra_log_event, {snapshot_written, IdxTerm, snapshot}} ->
-            State2 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, State1),
-            {State3, _} = ra_snapshot:begin_snapshot(Meta2, ?FUNCTION_NAME,
-                                                     snapshot, State2),
-            {_, {165, 2}, snapshot} = ra_snapshot:pending(State3),
+        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
+            State2 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State1),
+            {State3, [{bg_work, Fun2, _}]} =
+                ra_snapshot:begin_snapshot(Meta2, ?MACMOD, ?FUNCTION_NAME,
+                                           snapshot, State2),
+            {{165, 2}, snapshot} = ra_snapshot:pending(State3),
             {55, 2} = ra_snapshot:current(State3),
             55 = ra_snapshot:last_index_for(UId),
+            Fun2(),
             receive
                 {ra_log_event, _} ->
                     %% don't complete snapshot
@@ -280,11 +360,13 @@ init_recover_corrupt(Config) ->
     Meta = meta(55, 2, [node()]),
     SnapsDir = ?config(snap_dir, Config),
     State0 = init_state(Config),
-    {State1, _} = ra_snapshot:begin_snapshot(Meta, ?FUNCTION_NAME, snapshot,
-                                             State0),
+    {State1, [{bg_work, Fun, _}]} =
+        ra_snapshot:begin_snapshot(Meta, ?MACMOD, ?FUNCTION_NAME,
+                                   snapshot, State0),
+    Fun(),
     _ = receive
-                 {ra_log_event, {snapshot_written, IdxTerm, snapshot}} ->
-                     ra_snapshot:complete_snapshot(IdxTerm, snapshot, State1)
+                 {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
+                     ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State1)
              after 1000 ->
                        error(snapshot_event_timeout)
              end,
@@ -310,22 +392,23 @@ read_snapshot(Config) ->
     State0 = init_state(Config),
     Meta = meta(55, 2, [node()]),
     MacRef = crypto:strong_rand_bytes(1024 * 4),
-    {State1, _} =
-         ra_snapshot:begin_snapshot(Meta, MacRef, snapshot, State0),
-     State = receive
-                 {ra_log_event, {snapshot_written, IdxTerm, snapshot}} ->
-                     ra_snapshot:complete_snapshot(IdxTerm, snapshot, State1)
-             after 1000 ->
-                       error(snapshot_event_timeout)
-             end,
-     Context = #{},
+    {State1, [{bg_work, Fun, _}]} =
+        ra_snapshot:begin_snapshot(Meta, ?MACMOD, MacRef, snapshot, State0),
+    Fun(),
+    State = receive
+                {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
+                    ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State1)
+            after 1000 ->
+                      error(snapshot_event_timeout)
+            end,
+    Context = #{},
 
-     {ok, Meta, InitChunkState} = ra_snapshot:begin_read(State, Context),
+    {ok, Meta, InitChunkState} = ra_snapshot:begin_read(State, Context),
 
-     <<_:32/integer, Data/binary>> = read_all_chunks(InitChunkState, State, 1024, <<>>),
-     ?assertEqual(MacRef, binary_to_term(Data)),
+    <<_:32/integer, Data/binary>> = read_all_chunks(InitChunkState, State, 1024, <<>>),
+    ?assertEqual(MacRef, binary_to_term(Data)),
 
-     ok.
+    ok.
 
 read_all_chunks(ChunkState, State, Size, Acc) ->
     case ra_snapshot:read_chunk(ChunkState, Size, State) of
@@ -355,11 +438,12 @@ accept_snapshot(Config) ->
     undefined = ra_snapshot:accepting(State0),
     {ok, S1} = ra_snapshot:begin_accept(Meta, State0),
     {55, 2} = ra_snapshot:accepting(S1),
-    {ok, S2} = ra_snapshot:accept_chunk(A, 1, next, S1),
-    {ok, S3} = ra_snapshot:accept_chunk(B, 2, next, S2),
-    {ok, S4} = ra_snapshot:accept_chunk(C, 3, next, S3),
-    {ok, S5} = ra_snapshot:accept_chunk(D, 4, next, S4),
-    {ok, S}  = ra_snapshot:accept_chunk(E, 5, last, S5),
+    S2 = ra_snapshot:accept_chunk(A, 1, S1),
+    S3 = ra_snapshot:accept_chunk(B, 2, S2),
+    S4 = ra_snapshot:accept_chunk(C, 3, S3),
+    S5 = ra_snapshot:accept_chunk(D, 4, S4),
+    Machine = {machine, ?MODULE, #{}},
+    {S,_, _, _}  = ra_snapshot:complete_accept(E, 5, Machine, S5),
 
     undefined = ra_snapshot:accepting(S),
     undefined = ra_snapshot:pending(S),
@@ -383,8 +467,8 @@ abort_accept(Config) ->
     undefined = ra_snapshot:accepting(State0),
     {ok, S1} = ra_snapshot:begin_accept(Meta, State0),
     {55, 2} = ra_snapshot:accepting(S1),
-    {ok, S2} = ra_snapshot:accept_chunk(A, 1, next, S1),
-    {ok, S3} = ra_snapshot:accept_chunk(B, 2, next, S2),
+    S2 = ra_snapshot:accept_chunk(A, 1, S1),
+    S3 = ra_snapshot:accept_chunk(B, 2, S2),
     S = ra_snapshot:abort_accept(S3),
     undefined = ra_snapshot:accepting(S),
     undefined = ra_snapshot:pending(S),
@@ -392,15 +476,16 @@ abort_accept(Config) ->
     undefined = ra_snapshot:last_index_for(UId),
     ok.
 
-accept_receives_snapshot_written_with_lower_index(Config) ->
+accept_receives_snapshot_written_with_higher_index(Config) ->
     UId = ?config(uid, Config),
     State0 = init_state(Config),
-    MetaLocal = meta(55, 2, [node()]),
-    MetaRemote = meta(165, 2, [node()]),
-    MetaRemoteBin = term_to_binary(MetaRemote),
+    MetaLow = meta(55, 2, [node()]),
+    MetaHigh = meta(165, 2, [node()]),
+    MetaRemoteBin = term_to_binary(MetaHigh),
     %% begin a local snapshot
-    {State1, _} = ra_snapshot:begin_snapshot(MetaLocal, ?FUNCTION_NAME,
-                                             snapshot, State0),
+    {State1, [{bg_work, Fun, _}]} =
+        ra_snapshot:begin_snapshot(MetaLow, ?MACMOD, ?FUNCTION_NAME, snapshot, State0),
+    Fun(),
     MacRef = crypto:strong_rand_bytes(1024),
     MacBin = term_to_binary(MacRef),
     Crc = erlang:crc32([<<(size(MetaRemoteBin)):32/unsigned>>,
@@ -411,19 +496,20 @@ accept_receives_snapshot_written_with_lower_index(Config) ->
       B/binary>> = <<Crc:32/integer, MacBin/binary>>,
 
     %% then begin an accept for a higher index
-    {ok, State2} = ra_snapshot:begin_accept(MetaRemote, State1),
+    {ok, State2} = ra_snapshot:begin_accept(MetaHigh, State1),
     {165, 2} = ra_snapshot:accepting(State2),
-    {ok, State3} = ra_snapshot:accept_chunk(A, 1, next, State2),
+    State3 = ra_snapshot:accept_chunk(A, 1, State2),
 
     %% then the snapshot written event is received
     receive
-        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, snapshot}} ->
-            State4 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, State3),
+        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, Indexes, snapshot, _}} ->
+            State4 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State3),
             undefined = ra_snapshot:pending(State4),
             {55, 2} = ra_snapshot:current(State4),
             55 = ra_snapshot:last_index_for(UId),
             %% then accept the last chunk
-            {ok, State} = ra_snapshot:accept_chunk(B, 2, last, State4),
+            Machine = {machine, ?MODULE, #{}},
+            {State, _, _, _} = ra_snapshot:complete_accept(B, 2, Machine, State4),
             undefined = ra_snapshot:accepting(State),
             {165, 2} = ra_snapshot:current(State),
             ok
@@ -432,41 +518,134 @@ accept_receives_snapshot_written_with_lower_index(Config) ->
     end,
     ok.
 
-accept_receives_snapshot_written_with_higher_index(Config) ->
+accept_receives_snapshot_written_with_higher_index_2(Config) ->
     UId = ?config(uid, Config),
     State0 = init_state(Config),
-    MetaRemote = meta(55, 2, [node()]),
-    MetaLocal = meta(165, 2, [node()]),
+    MetaLow = meta(55, 2, [node()]),
+    MetaHigh = meta(165, 2, [node()]),
     %% begin a local snapshot
-    {State1, _} = ra_snapshot:begin_snapshot(MetaLocal, ?FUNCTION_NAME,
-                                             snapshot, State0),
-    MacRef = crypto:strong_rand_bytes(1024),
-    MacBin = term_to_binary(MacRef),
+    {State1, [{bg_work, Fun, _}]} =
+        ra_snapshot:begin_snapshot(MetaLow, ?MACMOD, ?FUNCTION_NAME,
+                                   snapshot, State0),
+    Fun(),
+    MacState = crypto:strong_rand_bytes(1024),
+    MetaBin = term_to_binary(MetaHigh),
+    IOVec = term_to_iovec(MacState),
+    Data = [<<(size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
+    Checksum = erlang:crc32(Data),
+    MacBin = iolist_to_binary([<<?MAGIC,
+                                    ?VERSION:8/unsigned,
+                                    Checksum:32/integer>>,Data]),
     %% split into 1024 max byte chunks
     <<A:1024/binary,
       B/binary>> = MacBin,
 
     %% then begin an accept for a higher index
-    {ok, State2} = ra_snapshot:begin_accept(MetaRemote, State1),
-    undefined = ra_snapshot:accepting(State2),
-    {ok, State3} = ra_snapshot:accept_chunk(A, 1, next, State2),
-    undefined = ra_snapshot:accepting(State3),
+    {ok, State2} = ra_snapshot:begin_accept(MetaHigh, State1),
+    {165, 2} = ra_snapshot:accepting(State2),
+    State3 = ra_snapshot:accept_chunk(A, 1, State2),
+    {165, 2} = ra_snapshot:accepting(State3),
 
-    %% then the snapshot written event is received
+    {State4, _, _, _} = ra_snapshot:complete_accept(B, 2, {machine, ?MODULE, #{}},
+                                                    State3),
+    undefined = ra_snapshot:accepting(State4),
+    {165, 2} = ra_snapshot:current(State4),
+    undefined = ra_snapshot:pending(State4),
+    %% then the snapshot written event is received after the higher index
+    %% has been received
     receive
-        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, snapshot}} ->
-            State4 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, State3),
-            undefined = ra_snapshot:pending(State4),
-            {55, 2} = ra_snapshot:current(State4),
-            55 = ra_snapshot:last_index_for(UId),
+        {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, Indexes, snapshot, _}} ->
+            State5 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State4),
+            undefined = ra_snapshot:pending(State5),
+            {165, 2} = ra_snapshot:current(State5),
+            165 = ra_snapshot:last_index_for(UId),
             %% then accept the last chunk
-            {ok, State} = ra_snapshot:accept_chunk(B, 2, last, State4),
-            undefined = ra_snapshot:accepting(State),
-            {165, 2} = ra_snapshot:current(State),
             ok
     after 1000 ->
               error(snapshot_event_timeout)
     end,
+    ok.
+
+%% Test that write_indexes and indexes work correctly with the new format
+write_and_read_indexes(Config) ->
+    SnapDir = ?config(snap_dir, Config),
+    TestDir = filename:join(SnapDir, "test_indexes"),
+    ok = ra_lib:make_dir(TestDir),
+
+    %% Test with a sample indexes data structure
+    Indexes = ra_seq:from_list([1, 2, 3, 5, 8, 13, 21]),
+
+    %% Write indexes
+    ok = ra_snapshot:write_indexes(TestDir, Indexes),
+
+    %% Read and verify
+    {ok, ReadIndexes} = ra_snapshot:indexes(TestDir),
+    ?assertEqual(Indexes, ReadIndexes),
+
+    %% Verify the file format manually
+    File = filename:join(TestDir, <<"indexes">>),
+    {ok, Bin} = file:read_file(File),
+    <<?IDX_MAGIC, ?IDX_VERSION:8/unsigned, Crc:32/unsigned, Data/binary>> = Bin,
+    ?assertEqual(Crc, erlang:crc32(Data)),
+    ?assertEqual(Indexes, binary_to_term(Data)),
+    ok.
+
+%% Test that indexes/1 returns error for invalid version
+indexes_invalid_version(Config) ->
+    SnapDir = ?config(snap_dir, Config),
+    TestDir = filename:join(SnapDir, "test_invalid_version"),
+    ok = ra_lib:make_dir(TestDir),
+
+    %% Write a file with invalid version (99)
+    Indexes = ra_seq:from_list([1, 2, 3]),
+    Data = term_to_binary(Indexes),
+    Crc = erlang:crc32(Data),
+    InvalidVersion = 99,
+    File = filename:join(TestDir, <<"indexes">>),
+    ok = file:write_file(File, [<<?IDX_MAGIC,
+                                   InvalidVersion:8/unsigned,
+                                   Crc:32/unsigned>>,
+                                 Data]),
+
+    %% Should return invalid_version error
+    ?assertEqual({error, {invalid_version, InvalidVersion}},
+                 ra_snapshot:indexes(TestDir)),
+    ok.
+
+%% Test that indexes/1 returns error for checksum mismatch
+indexes_checksum_error(Config) ->
+    SnapDir = ?config(snap_dir, Config),
+    TestDir = filename:join(SnapDir, "test_checksum_error"),
+    ok = ra_lib:make_dir(TestDir),
+
+    %% Write a file with wrong checksum
+    Indexes = ra_seq:from_list([1, 2, 3]),
+    Data = term_to_binary(Indexes),
+    WrongCrc = 12345678,  %% intentionally wrong
+    File = filename:join(TestDir, <<"indexes">>),
+    ok = file:write_file(File, [<<?IDX_MAGIC,
+                                   ?IDX_VERSION:8/unsigned,
+                                   WrongCrc:32/unsigned>>,
+                                 Data]),
+
+    %% Should return checksum_error
+    ?assertEqual({error, checksum_error}, ra_snapshot:indexes(TestDir)),
+    ok.
+
+%% Test backward compatibility with old format (plain term_to_binary)
+indexes_backward_compat(Config) ->
+    SnapDir = ?config(snap_dir, Config),
+    TestDir = filename:join(SnapDir, "test_backward_compat"),
+    ok = ra_lib:make_dir(TestDir),
+
+    %% Write a file in old format (plain term_to_binary, no header)
+    Indexes = ra_seq:from_list([1, 2, 3, 5, 8]),
+    File = filename:join(TestDir, <<"indexes">>),
+    ok = file:write_file(File, term_to_binary(Indexes)),
+
+    %% Should still be able to read it
+    {ok, ReadIndexes} = ra_snapshot:indexes(TestDir),
+    ?assertEqual(Indexes, ReadIndexes),
     ok.
 
 init_state(Config) ->
@@ -480,3 +659,7 @@ meta(Idx, Term, Cluster) ->
       term => Term,
       cluster => Cluster,
       machine_version => 1}.
+
+%% ra_machine fakes
+version() -> 1.
+live_indexes(_) -> [].

@@ -15,10 +15,11 @@
     {#{ra:index() => Command :: term()}, ra_flru:state()}.
 execute(Plan, Flru) ->
     execute(Plan, Flru, #{access_pattern => random,
-                          file_advise => normal}).
+                          file_advise => normal,
+                          index_mode => binary}).
 
 -spec execute(ra_log:read_plan(), undefined | ra_flru:state(),
-              ra_log_reader:read_plan_options()) ->
+              ra_log_segments:read_plan_options()) ->
     {#{ra:index() => Command :: term()}, ra_flru:state()}.
 execute(Plan, Flru, Options) ->
     ra_log:execute_read_plan(Plan, Flru,

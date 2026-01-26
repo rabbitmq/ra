@@ -15,6 +15,7 @@
 -include_lib("common_test/include/ct.hrl").
 
 -define(SYS, default).
+-define(IDMFA, {ra_lib, id, []}).
 
 %%%===================================================================
 %%% Common Test callbacks
@@ -307,15 +308,14 @@ unversioned_machine_never_sees_machine_version_command(Config) ->
     % applied. The wal fsync could take a few ms causing the race
     {ok, ok, _} = ra:process_command(ServerId, dummy),
     %% assert state_v1
-    {ok, {_, init_state}, _} = ra:leader_query(ServerId,
-                                               fun (S) -> S end),
+    {ok, {_, init_state}, _} = ra:leader_query(ServerId, ?IDMFA),
     ok = ra:stop_server(?SYS, ServerId),
     %% increment version
     % meck:expect(Mod, version, fun () -> 2 end),
     ok = ra:restart_server(?SYS, ServerId),
     {ok, ok, _} = ra:process_command(ServerId, dummy),
 
-    {ok, {_, init_state}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+    {ok, {_, init_state}, _} = ra:leader_query(ServerId, ?IDMFA),
     ok.
 
 unversioned_can_change_to_versioned(Config) ->
@@ -330,7 +330,7 @@ unversioned_can_change_to_versioned(Config) ->
     % applied. The wal fsync could take a few ms causing the race
     {ok, ok, _} = ra:process_command(ServerId, dummy),
     %% assert state_v1
-    {ok, {_, init_state}, _} = ra:leader_query(ServerId, fun (S) -> S end),
+    {ok, {_, init_state}, _} = ra:leader_query(ServerId, ?IDMFA),
     ok = ra:stop_server(?SYS, ServerId),
     meck:expect(Mod, version, fun () -> 1 end),
     meck:expect(Mod, which_module, fun (_) -> Mod end),
@@ -347,7 +347,7 @@ unversioned_can_change_to_versioned(Config) ->
     ok = ra:restart_server(?SYS, ServerId),
     {ok, ok, _} = ra:process_command(ServerId, dummy),
 
-    {ok, {_, state_v1}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+    {ok, {_, state_v1}, _} = ra:leader_query(ServerId, ?IDMFA),
     ok.
 
 server_upgrades_machine_state_on_noop_command(Config) ->
@@ -370,18 +370,14 @@ server_upgrades_machine_state_on_noop_command(Config) ->
     % applied. The wal fsync could take a few ms causing the race
     {ok, ok, _} = ra:process_command(ServerId, dummy),
     %% assert state_v1
-    {ok, {_, state_v1}, _} = ra:leader_query(ServerId,
-                                             fun (S) ->
-                                                    ct:pal("leader_query ~w", [S]),
-                                                   S
-                                             end),
+    {ok, {_, state_v1}, _} = ra:leader_query(ServerId, ?IDMFA),
     ok = ra:stop_server(?SYS, ServerId),
     %% increment version
     meck:expect(Mod, version, fun () -> 2 end),
     ok = ra:restart_server(?SYS, ServerId),
     {ok, ok, _} = ra:process_command(ServerId, dummy),
 
-    {ok, {_, state_v2}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+    {ok, {_, state_v2}, _} = ra:leader_query(ServerId, ?IDMFA),
     ok.
 
 server_applies_with_new_module(Config) ->
@@ -398,7 +394,7 @@ server_applies_with_new_module(Config) ->
     % applied. The wal fsync could take a few ms causing the race
     {ok, ok, _} = ra:process_command(ServerId, dummy),
     %% assert state_v1
-    {ok, {_, init_state}, _} = ra:leader_query(ServerId, fun (S) -> S end),
+    {ok, {_, init_state}, _} = ra:leader_query(ServerId, ?IDMFA),
 
     ok = ra:stop_server(?SYS, ServerId),
     %% simulate module upgrade
@@ -423,11 +419,11 @@ server_applies_with_new_module(Config) ->
     ok = ra:restart_server(?SYS, ServerId),
     %% increment version
     {ok, ok, _} = ra:process_command(ServerId, dummy2),
-    {ok, state_v1, _} = ra:consistent_query(ServerId, fun ra_lib:id/1),
+    {ok, state_v1, _} = ra:consistent_query(ServerId, ?IDMFA),
     ok = ra:stop_server(?SYS, ServerId),
     ok = ra:restart_server(?SYS, ServerId),
     _ = ra:members(ServerId),
-    {ok, state_v1, _} = ra:consistent_query(ServerId, fun ra_lib:id/1),
+    {ok, state_v1, _} = ra:consistent_query(ServerId, ?IDMFA),
     ok.
 
 snapshot_persists_machine_version(_Config) ->
@@ -470,7 +466,7 @@ initial_machine_version(Config) ->
     % int:break(ra_server_sup_sup, 66),
     {ok, _, _} = ra:start_cluster(?SYS, Configs, 5000),
     await(fun () ->
-                  {ok, {_, S}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+                  {ok, {_, S}, _} = ra:leader_query(ServerId, ?IDMFA),
                   S == state_v5
           end, 100),
     ?assertMatch({ok, #{effective_machine_version := 5}, _},
@@ -540,7 +536,7 @@ initial_machine_version_quorum(Config) ->
     % int:break(ra_server_sup_sup, 66),
     {ok, _, _} = ra:start_cluster(?SYS, Configs, 5000),
     await(fun () ->
-                  {ok, {_, S}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+                  {ok, {_, S}, _} = ra:leader_query(ServerId, ?IDMFA),
                   S == state_v5
           end, 100),
     ?assertMatch({ok, #{effective_machine_version := 5}, _},
@@ -573,7 +569,7 @@ initial_machine_version_quorum(Config) ->
     {ok, _, _} = ra:start_cluster(?SYS, Configs2, 5000),
     {ok, #{machine_version := 5}, _} = ra:process_command(ServerId, meta),
     await(fun () ->
-                  {ok, {_, S}, _} = ra:leader_query(ServerId, fun ra_lib:id/1),
+                  {ok, {_, S}, _} = ra:leader_query(ServerId, ?IDMFA),
                   ct:pal("S ~p", [S]),
                   S == state_v5
           end, 100),

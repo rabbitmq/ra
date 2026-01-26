@@ -2,7 +2,8 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2025 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
+%% Copyright (c) 2017-2026 Broadcom. All Rights Reserved. The term Broadcom
+%% refers to Broadcom Inc. and/or its subsidiaries.
 %%
 %% @doc The `ra_machine' behaviour.
 %%
@@ -72,6 +73,7 @@
          snapshot_installed/5,
          state_enter/3,
          overview/2,
+         live_indexes/2,
          query/3,
          module/1,
          init_aux/2,
@@ -83,6 +85,9 @@
          which_aux_fun/1,
          is_versioned/1
         ]).
+
+-export_type([release_cursor_condition/0,
+              release_cursor_opts/0]).
 
 -type state() :: term().
 %% The state for a given machine implementation.
@@ -119,6 +124,9 @@
 -type send_msg_opts() :: send_msg_opt() | [send_msg_opt()].
 -type locator() :: pid() | atom() | {atom(), node()}.
 
+-type release_cursor_condition() :: {written, ra_index()} | no_snapshot_sends.
+-type release_cursor_opts() :: #{condition => [release_cursor_condition()]}.
+
 -type version() :: non_neg_integer().
 
 -type effect() ::
@@ -133,6 +141,7 @@
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
     {timer, term(), non_neg_integer() | infinity} |
+    {timer, term(), non_neg_integer() | infinity, {abs, boolean()}} |
     {log, [ra_index()], fun(([user_command()]) -> effects())} |
 
     %% these are either conditional on the local configuration or
@@ -141,6 +150,7 @@
     {log, [ra_index()], fun(([user_command()]) -> effects()), {local, node()}} |
     {log_ext, [ra_index()], fun(([ra_log:read_plan()]) -> effects()), {local, node()}} |
     {release_cursor, ra_index(), state()} |
+    {release_cursor, ra_index(), state(), release_cursor_opts()} |
     {release_cursor, ra_index()} |
     {checkpoint, ra_index(), state()} |
     {aux, term()} |
@@ -186,7 +196,10 @@
 %% <dd> demonitor a process or erlang node</dd>
 %% <dt><b>release_cursor</b></dt>
 %% <dd> indicate to Ra that none of the preceding entries contribute to the
-%% current machine state</dd>
+%% current machine state. The 4-tuple variant accepts options:
+%% `#{condition => [Condition]}' where Condition can be:
+%% `{written, Index}' - wait until the index has been written to disk,
+%% `no_snapshot_sends' - wait until no peers are receiving snapshots</dd>
 %% </dl>
 
 -type effects() :: [effect()].
@@ -224,6 +237,7 @@
                      handle_aux/5,
                      handle_aux/6,
                      overview/1,
+                     live_indexes/1,
                      snapshot_module/0,
                      version/0,
                      which_module/1
@@ -289,6 +303,8 @@
 
 -callback overview(state()) -> map().
 
+-callback live_indexes(state()) -> [ra:index()] | {ra_seq, ra_seq:state()}.
+
 -callback snapshot_module() -> module().
 
 -callback version() -> version().
@@ -346,11 +362,24 @@ state_enter(Mod, RaftState, State) ->
 overview(Mod, State) ->
     ?OPT_CALL(Mod:overview(State), State).
 
+-spec live_indexes(module(), state()) -> ra_seq:state().
+live_indexes(Mod, State) ->
+    case ?OPT_CALL(Mod:live_indexes(State), []) of
+        {ra_seq, Seq} ->
+            %% Machine returned a pre-built ra_seq
+            Seq;
+        List ->
+            %% Plain list of indexes - convert to ra_seq
+            ra_seq:from_list(List)
+    end.
+
 %% @doc used to discover the latest machine version supported by the current
 %% code
--spec version(machine()) -> version().
+-spec version(machine() | module()) -> version().
+version(Mod) when is_atom(Mod) ->
+    ?OPT_CALL(assert_version(Mod:version()), ?DEFAULT_VERSION);
 version({machine, Mod, _}) ->
-    ?OPT_CALL(assert_version(Mod:version()), ?DEFAULT_VERSION).
+    version(Mod).
 
 -spec is_versioned(machine()) -> boolean().
 is_versioned({machine, Mod, _}) ->

@@ -33,9 +33,9 @@
          leader_query/3,
          consistent_query/2,
          consistent_query/3,
+         consistent_aux/3,
          ping/2,
          % cluster operations
-         start_cluster/1,
          start_cluster/2,
          start_cluster/3,
          start_cluster/4,
@@ -44,16 +44,10 @@
          delete_cluster/1,
          delete_cluster/2,
          % server management
-         % deprecated
-         start_server/1,
          start_server/2,
          start_server/5,
-         % deprecated
-         restart_server/1,
          restart_server/2,
          restart_server/3,
-         % deprecated
-         stop_server/1,
          stop_server/2,
          force_delete_server/2,
          trigger_election/1,
@@ -68,8 +62,6 @@
          leave_and_delete_server/3,
          leave_and_delete_server/4,
          %% troubleshooting
-         % deprecated
-         overview/0,
          overview/1,
          %% helpers
          new_uid/1,
@@ -79,19 +71,12 @@
          aux_command/2,
          aux_command/3,
          cast_aux_command/2,
-         register_external_log_reader/1,
          member_overview/1,
          member_overview/2,
          key_metrics/1,
-         key_metrics/2
+         key_metrics/2,
+         trigger_compaction/1
         ]).
-
-%% xref should pick these up
--deprecated({start_server, 1}).
--deprecated({restart_server, 1}).
--deprecated({stop_server, 1}).
--deprecated({overview, 0}).
--deprecated({register_external_log_reader, 1}).
 
 -define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
 
@@ -102,11 +87,10 @@
     {wal_data_dir, file:filename()} |
     {segment_max_entries, non_neg_integer()} |
     {wal_max_size_bytes, non_neg_integer()} |
-    {wal_compute_checksums, boolean()} |
-    {wal_write_strategy, default | o_sync}.
+    {wal_compute_checksums, boolean()}.
 
--type query_fun() :: fun((term()) -> term()) |
-                     {M :: module(), F :: atom(), A :: list()}.
+-type query_mfa() :: {M :: module(), F :: atom(), A :: list()}.
+-type query_fun() :: fun((term()) -> term()) | query_mfa().
 
 %% export some internal types
 -type index() :: ra_index().
@@ -133,6 +117,7 @@
               server_id/0,
               cluster_name/0,
               range/0,
+              query_mfa/0,
               query_fun/0,
               query_condition/0,
               from/0,
@@ -169,20 +154,19 @@ start(Params) when is_list(Params) ->
     {ok, [Started]} | {error, term()}
       when Started :: term().
 start_in(DataDir) ->
+    ra_env:configure_logger(logger),
+    LogFile = filename:join(DataDir, "ra.log"),
+    SaslFile = filename:join(DataDir, "ra_sasl.log"),
+    _ = logger:remove_handler(ra_handler),
+    ok = logger:set_primary_config(level, debug),
+    Config = #{config => #{file => LogFile}},
+    ok = logger:add_handler(ra_handler, logger_std_h, Config),
+    _ = application:load(sasl),
+    ok = application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
+    _ = application:stop(sasl),
+    ok = application:start(sasl),
+    _ = error_logger:tty(false),
     start([{data_dir, DataDir}]).
-
-%% @doc Restarts a previously successfully started ra server in the default system
-%% @param ServerId the ra_server_id() of the server
-%% @returns `{ok | error, Error}' where error can be
-%% `not_found', `system_not_started' or `name_not_registered' when the
-%% ra server has never before been started on the Erlang node.
-%% DEPRECATED: use restart_server/2
-%% @end
--spec restart_server(ra_server_id()) ->
-    ok | {error, term()}.
-restart_server(ServerId) ->
-    %% TODO: this is a bad overload
-    restart_server(default, ServerId).
 
 %% @doc Restarts a previously successfully started ra server
 %% @param System the system identifier
@@ -226,16 +210,6 @@ restart_server(System, ServerId, AddConfig)
         {badrpc, Reason} -> {error, Reason};
         {'EXIT', Err} -> {error, Err}
     end.
-
-%% @doc Stops a ra server in the default system
-%% @param ServerId the ra_server_id() of the server
-%% @returns `{ok | error, nodedown}'
-%% DEPRECATED: use stop_server/2
-%% @end
--spec stop_server(ra_server_id()) ->
-    ok | {error, nodedown | system_not_started}.
-stop_server(ServerId) ->
-    stop_server(default, ServerId).
 
 %% @doc Stops a ra server
 %% @param System the system name
@@ -390,16 +364,6 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
                end || Id <- ServerIds],
     start_cluster(System, Configs, Timeout).
 
-%% @doc Same as `start_cluster/2' but uses the default Ra system.
-%% @param ServerConfigs a list of initial server configurations
-%% DEPRECATED: use start_cluster/2
-%% @end
--spec start_cluster([ra_server:ra_server_config()]) ->
-    {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed}.
-start_cluster(ServerConfigs) ->
-  start_cluster(default, ServerConfigs).
-
 %% @doc Starts a new distributed ra cluster.
 %% @param System the system name
 %% @param ServerConfigs a list of initial server configurations
@@ -514,16 +478,6 @@ start_server(System, ClusterName, #{id := {_, _}} = Conf0, Machine, ServerIds)
              log_init_args => #{uid => UId},
              machine => Machine},
     start_server(System, maps:merge(Conf0, Conf)).
-
-%% @doc Starts a ra server in the default system
-%% @param Conf a ra_server_config() configuration map.
-%% @returns `{ok | error, Error}'
-%% DEPRECATED: use start_server/2
-%% @end
--spec start_server(ra_server:ra_server_config()) ->
-    ok | {error, term()}.
-start_server(Conf) ->
-    start_server(default, Conf).
 
 %% @doc Starts a ra server
 %% @param System the system name
@@ -747,14 +701,6 @@ leave_and_delete_server(System, ServerRef, ServerId, Timeout) ->
 new_uid(Source) when is_binary(Source) ->
     Prefix = ra_lib:derive_safe_string(Source, 6),
     ra_lib:make_uid(string:uppercase(Prefix)).
-
-%% @doc Returns a map of overview data of the default Ra system on the current Erlang
-%% node.
-%% DEPRECATED: use overview/1
-%% @end
--spec overview() -> map() | system_not_started.
-overview() ->
-    overview(default).
 
 %% @doc Returns a map of overview data of the Ra system on the current Erlang
 %% node.
@@ -999,11 +945,12 @@ local_query(ServerId, QueryFun, Options) when is_map(Options) ->
 %% @param QueryFun the query function to run
 %% @end
 -spec leader_query(ServerId :: ra_server_id() | [ra_server_id()],
-                   QueryFun :: query_fun()) ->
+                   QueryFun :: query_mfa()) ->
     ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
     {ok, {ra_idxterm(), Reply :: term()}, not_known}.
-leader_query(ServerId, QueryFun) ->
-    leader_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
+leader_query(ServerId, QueryMFA)
+  when is_tuple(QueryMFA) ->
+    leader_query(ServerId, QueryMFA, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `leader_query/2' but accepts a custom timeout or a map of
 %% options.
@@ -1021,7 +968,7 @@ leader_query(ServerId, QueryFun) ->
 %% @see leader_query/2
 %% @end
 -spec leader_query(ServerId :: ra_server_id() | [ra_server_id()],
-                   QueryFun :: query_fun(),
+                   QueryFun :: query_mfa(),
                    TimeoutOrOptions) ->
     ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
     {ok, {ra_idxterm(), Reply :: term()}, not_known}
@@ -1029,14 +976,17 @@ leader_query(ServerId, QueryFun) ->
            Timeout :: timeout(),
            Options :: #{condition => query_condition(),
                         timeout => timeout()}.
-leader_query(ServerId, QueryFun, Timeout)
-  when Timeout =:= infinity orelse is_integer(Timeout) ->
-    ra_server_proc:query(ServerId, QueryFun, leader, #{}, Timeout);
-leader_query(ServerId, QueryFun, Options) when is_map(Options) ->
+leader_query(ServerId, QueryMFA, Timeout)
+  when is_tuple(QueryMFA) andalso
+       (Timeout =:= infinity orelse
+       is_integer(Timeout)) ->
+    ra_server_proc:query(ServerId, QueryMFA, leader, #{}, Timeout);
+leader_query(ServerId, QueryMFA, Options)
+  when is_map(Options) andalso
+       is_tuple(QueryMFA) ->
     Timeout = maps:get(timeout, Options, ?DEFAULT_TIMEOUT),
     Options1 = maps:remove(timeout, Options),
-    ra_server_proc:query(
-      ServerId, QueryFun, leader, Options1, Timeout).
+    ra_server_proc:query(ServerId, QueryMFA, leader, Options1, Timeout).
 
 %% @doc Query the state machine with a consistency guarantee.
 %% This allows the caller to query the state machine on the leader node with
@@ -1048,10 +998,10 @@ leader_query(ServerId, QueryFun, Options) when is_map(Options) ->
 %% @param QueryFun the query function to run
 %% @end
 -spec consistent_query(ServerId :: ra_server_id() | [ra_server_id()],
-                       QueryFun :: query_fun()) ->
+                       QueryMFA :: query_mfa()) ->
     ra_server_proc:ra_leader_call_ret(Reply :: term()).
-consistent_query(ServerId, QueryFun) ->
-    consistent_query(ServerId, QueryFun, ?DEFAULT_TIMEOUT).
+consistent_query(ServerId, QueryMFA) ->
+    consistent_query(ServerId, QueryMFA, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `consistent_query/2' but accepts a custom timeout.
 %% @param ServerId the ra server id(s) to send the query to
@@ -1060,11 +1010,27 @@ consistent_query(ServerId, QueryFun) ->
 %% @see consistent_query/2
 %% @end
 -spec consistent_query(ServerId :: ra_server_id() | [ra_server_id()],
-                       QueryFun :: query_fun(),
+                       QueryMFA :: query_mfa(),
                        Timeout :: timeout()) ->
     ra_server_proc:ra_leader_call_ret(Reply :: term()).
-consistent_query(ServerId, QueryFun, Timeout) ->
-    ra_server_proc:query(ServerId, QueryFun, consistent, #{}, Timeout).
+consistent_query(ServerId, QueryMFA, Timeout)
+  when is_tuple(QueryMFA) ->
+    ra_server_proc:query(ServerId, QueryMFA, consistent, #{}, Timeout).
+
+
+%% @doc Similar to `consistent_query/3' but will process an aux command
+%% after consensus has been achieved.
+%% @param ServerId the ra server id(s) to try to send the query to in order
+%% @param QueryFun the query function to run
+%% @param Timeout the timeout to use
+%% @see consistent_query/2
+%% @end
+-spec consistent_aux(ServerId :: ra_server_id() | [ra_server_id()],
+                     AuxCmd :: term(),
+                     Timeout :: timeout()) ->
+    ra_server_proc:ra_leader_call_ret(Reply :: term()).
+consistent_aux(ServerId, AuxCmd, Timeout) ->
+    ra_server_proc:query(ServerId, AuxCmd, consistent_aux, #{}, Timeout).
 
 %% @doc Returns a list of cluster members
 %%
@@ -1197,18 +1163,6 @@ aux_command(ServerRef, Cmd, Timeout) ->
 cast_aux_command(ServerRef, Cmd) ->
     gen_statem:cast(ServerRef, {aux_command, Cmd}).
 
-%% @doc Registers an external log reader. ServerId needs to be local to the node.
-%% Returns an initiated ra_log_reader:state() state.
-%% Deprecated. Now only reads log data stored in segments, not log data
-%% in mem tables.
-%% @end
--spec register_external_log_reader(ra_server_id()) ->
-    ra_log_reader:state().
-register_external_log_reader({_, Node} = ServerId)
- when Node =:= node() ->
-    {ok, Reader} = gen_statem:call(ServerId, {register_external_log_reader, self()}),
-    Reader.
-
 %% @doc Returns a overview map of the internal server state
 %%
 %% The keys and values will typically remain stable but may
@@ -1278,6 +1232,13 @@ key_metrics({Name, N} = ServerId, _Timeout) when N == node() ->
     end;
 key_metrics({_, N} = ServerId, Timeout) ->
     erpc:call(N, ?MODULE, ?FUNCTION_NAME, [ServerId], Timeout).
+
+%% @doc Potentially triggers a major compaction for the provided member
+%% @param ServerId the Ra server to send the request to
+%% @end
+-spec trigger_compaction(ra_server_id()) -> ok.
+trigger_compaction(ServerRef) ->
+    gen_statem:cast(ServerRef, {ra_log_event, major_compaction}).
 
 %% internal
 

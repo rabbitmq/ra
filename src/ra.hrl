@@ -49,7 +49,8 @@
                            uid => ra_uid()}.
 
 -type ra_peer_status() :: normal |
-                          {sending_snapshot, pid()} |
+                          {sending_snapshot, pid(), non_neg_integer()} |  %% {sending_snapshot, Pid, AttemptCount}
+                          {snapshot_backoff, non_neg_integer()} |          %% {snapshot_backoff, AttemptCount}
                           suspended |
                           disconnected.
 
@@ -83,16 +84,25 @@
 %% represent a unique entry in the ra log
 -type log_entry() :: {ra_index(), ra_term(), term()}.
 
--type chunk_flag() :: next | last.
+-type chunk_flag() :: init | pre | next | last.
 
--type consistent_query_ref() :: {From :: term(), Query :: ra:query_fun(), ConmmitIndex :: ra_index()}.
+-type consistent_query_ref() ::
+    {query, From :: from(), Query :: ra:query_fun(), CommitIndex :: ra_index()} |
+    {aux, From :: from(), AuxCmd :: term(), CommitIndex :: ra_index()}.
 
 -type safe_call_ret(T) :: timeout | {error, noproc | nodedown | shutdown} | T.
 
--type states() :: leader | follower | candidate | await_condition.
+-type states() ::
+    leader |
+    follower |
+    candidate |
+    pre_vote |
+    await_condition.
 
 %% A member of the cluster from which replies should be sent.
 -type ra_reply_from() :: leader | local | {member, ra_server_id()}.
+
+-type mfargs() :: {M :: module(), F :: atom(), A :: [term()]}.
 
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
@@ -167,7 +177,7 @@
         {term :: ra_term(), % the leader's term
          leader_id :: ra_server_id(),
          meta :: snapshot_meta(),
-         chunk_state :: {pos_integer(), chunk_flag()} | undefined,
+         chunk_state :: {non_neg_integer(), chunk_flag()},
          data :: term()
         }).
 
@@ -214,6 +224,7 @@
 -define(SEGMENT_MAX_ENTRIES, 4096).
 -define(SEGMENT_MAX_PENDING, 1024).
 -define(SEGMENT_MAX_SIZE_B, 64_000_000). %% set an upper limit on segment sizing
+-define(DEF_MAJOR_COMPACTION_STRAT, {num_minors, 8}).
 
 %% logging shim
 -define(DEBUG_IF(Bool, Fmt, Args),
@@ -276,8 +287,19 @@
           "Number of checkpoint bytes written"},
          {checkpoints_promoted, ?C_RA_LOG_CHECKPOINTS_PROMOTED, counter,
           "Number of checkpoints promoted to snapshots"},
+         {minor_compactions, ?C_RA_LOG_COMPACTIONS_MINOR_COUNT, counter,
+          "Number of requested minor compactions"},
+         {major_compactions, ?C_RA_LOG_COMPACTIONS_MAJOR_COUNT, counter,
+          "Number of requested major compactions"},
+         {major_compaction_segments_written,
+          ?C_RA_LOG_COMPACTIONS_SEGMENTS_WRITTEN, counter,
+          "Number of segments written during major compactions"},
+         {major_compaction_segments_compacted,
+          ?C_RA_LOG_COMPACTIONS_SEGMENTS_COMPACTED, counter,
+          "Number of segments compacted during major compactions"},
          {reserved_1, ?C_RA_LOG_RESERVED, counter, "Reserved counter"}
          ]).
+
 -define(C_RA_LOG_WRITE_OPS, 1).
 -define(C_RA_LOG_WRITE_RESENDS, 2).
 -define(C_RA_LOG_READ_OPS, 3).
@@ -293,7 +315,11 @@
 -define(C_RA_LOG_CHECKPOINTS_WRITTEN, 13).
 -define(C_RA_LOG_CHECKPOINT_BYTES_WRITTEN, 14).
 -define(C_RA_LOG_CHECKPOINTS_PROMOTED, 15).
--define(C_RA_LOG_RESERVED, 16).
+-define(C_RA_LOG_COMPACTIONS_MINOR_COUNT, 16).
+-define(C_RA_LOG_COMPACTIONS_MAJOR_COUNT, 17).
+-define(C_RA_LOG_COMPACTIONS_SEGMENTS_WRITTEN, 18).
+-define(C_RA_LOG_COMPACTIONS_SEGMENTS_COMPACTED, 19).
+-define(C_RA_LOG_RESERVED, 20).
 
 -define(C_RA_SRV_AER_RECEIVED_FOLLOWER, ?C_RA_LOG_RESERVED + 1).
 -define(C_RA_SRV_AER_REPLIES_SUCCESS, ?C_RA_LOG_RESERVED + 2).

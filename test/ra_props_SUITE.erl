@@ -12,6 +12,7 @@
 -include_lib("proper/include/proper.hrl").
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-define(IDMFA, {ra_lib, id, []}).
 
 % just here to silence unused warning
 -export_type([op/0]).
@@ -55,7 +56,7 @@ non_assoc_prop([A, B, C], {Ops, Initial}) ->
     % set cluster to
     {ok, _, Leader} = ra:process_command(A, {set, Initial}),
     [ra:process_command(Leader, Op) || Op <- Ops],
-    {ok, _, Leader} = ra:consistent_query(A, fun(_) -> ok end),
+    {ok, _, Leader} = ra:consistent_query(A, ?IDMFA),
     timer:sleep(100),
     {ok, {_, ARes}, _} = ra:local_query(A, fun id/1),
     {ok, {_, BRes}, _} = ra:local_query(B, fun id/1),
