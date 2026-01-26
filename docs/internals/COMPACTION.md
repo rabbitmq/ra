@@ -152,20 +152,24 @@ Result:
 1. Write marker file with list of all segment filenames in the group
 2. Create `.compacting` segment and copy all live entries
 3. Close and sync the `.compacting` segment
-4. Create symlinks: for each additional segment (Seg2, Seg3, ...), create a 
+4. Rename `.compacting` to replace the first segment (atomic on POSIX)
+5. Create symlinks: for each additional segment (Seg2, Seg3, ...), create a 
    symlink pointing to the first segment's filename
-5. Rename `.compacting` to replace the first segment (atomic on POSIX)
 6. Delete the marker file
+
+**Why rename before symlinks**: This order ensures that when any symlink is 
+created, it points to a segment that already contains the compacted data. 
+If symlinks were created first, a reader following the symlink could see 
+stale data from the old segment before the rename completes.
 
 **Recovery after crash**:
 - **No marker file**: No pending compaction
 - **Marker with single segment**: Cannot determine completion state → delete 
   `.compacting` and marker, leave original intact
-- **Marker with multiple segments, no symlinks exist**: Compaction didn't 
-  complete → delete `.compacting` and marker
-- **Marker with multiple segments, at least one symlink exists**: Compaction 
-  writes completed → recreate all symlinks, rename `.compacting` if exists, 
-  delete marker
+- **Marker with multiple segments, `.compacting` exists**: Rename didn't 
+  complete → delete `.compacting` and marker, leave originals intact
+- **Marker with multiple segments, `.compacting` absent**: Rename completed,
+  compacted data is in place → recreate all symlinks (idempotent), delete marker
 
 **Symlink cleanup**: Symlinks are deleted after 60 seconds (configurable via 
 `?SYMLINK_KEEPFOR_S`). This delay ensures any in-flight reads referencing the 
