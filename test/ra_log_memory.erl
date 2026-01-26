@@ -302,7 +302,8 @@ overview(#state{} = Log) ->
     #{type => ?MODULE,
       last_index => Log#state.last_index,
       last_written => Log#state.last_written,
-      num_entries => maps:size(Log#state.entries)}.
+      num_entries => maps:size(Log#state.entries),
+      num_pending => 0}.
 
 write_config(_Config, _Log) ->
     ok.

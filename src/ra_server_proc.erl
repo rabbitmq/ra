@@ -996,7 +996,19 @@ receive_snapshot(info, {'DOWN', MRef, process, _Pid, _Info},
           [log_id(State)]),
     receive_snapshot(info, receive_snapshot_timeout,
                      State#state{leader_monitor = undefined});
-receive_snapshot(EventType, Msg, State0) ->
+receive_snapshot(EventType, Msg, State00) ->
+    %% HACK: if the EventType is a {call, From} we stash the from in the
+    %% ServerState, this is so ra_server can defer the snapshot reply in
+    %% some cases
+    State0 = case EventType of
+                 {call, _From} ->
+                     SS = State00#state.server_state,
+                     State00#state{server_state =
+                                   SS#{current_event_type => EventType}};
+                 _ ->
+                     State00
+             end,
+
     case handle_receive_snapshot(Msg, State0) of
         {receive_snapshot, State1, Effects} ->
             {#state{conf = Conf} = State, Actions} =
@@ -1278,12 +1290,14 @@ handle_enter(RaftState, OldRaftState,
         true ->
             %% ensure transitions from and to leader are logged at a higher
             %% level
-            ?NOTICE("~ts: ~s -> ~s in term: ~b machine version: ~b, last applied ~b",
+            ?NOTICE("~ts: ~s -> ~s in term: ~b machine version: ~b, "
+                    "last applied ~b",
                     [log_id(State), OldRaftState, RaftState,
                      current_term(State), machine_version(State),
                      LastApplied]);
         false ->
-            ?DEBUG("~ts: ~s -> ~s in term: ~b machine version: ~b, last applied ~b",
+            ?DEBUG("~ts: ~s -> ~s in term: ~b machine version: ~b, "
+                   "last applied ~b",
                    [log_id(State), OldRaftState, RaftState,
                     current_term(State), machine_version(State),
                     LastApplied])

@@ -99,7 +99,13 @@
       pending_consistent_queries := [consistent_query_ref()],
       commit_latency => option(non_neg_integer()),
       snapshot_phase => chunk_flag(),
-      pending_release_cursor => {ra_index(), term(), [ra_machine:release_cursor_condition()]}
+      pending_release_cursor => {ra_index(), term(),
+                                 [ra_machine:release_cursor_condition()]},
+      %% TODO: review these 3, specific to handle_receive_snapshot
+      %% could temporarily increase state size over small map (32)
+      current_event_type => term(),
+      snapshot_has_live_indexes => boolean(),
+      snapshot_next_event => term()
      }.
 
 -type state() :: ra_server_state().
@@ -1614,13 +1620,16 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
     SnapState0 = ra_log:snapshot_state(Log00),
     %% works as an assertion also
     {AcceptingSnapIdx, _} = ra_snapshot:accepting(SnapState0),
+    SnapshotHasLiveIndexes = maps:get(snapshot_has_live_indexes, State0, false),
+    LogHasPendingIndexes = maps:get(num_pending, ra_log:overview(Log00)) > 0,
     case ChunkFlag of
         init when SnapPhase == init andalso
                   SnapIndex == AcceptingSnapIdx ->
-            %% this is ok, just reply
-            %% need to set snapshot_phase to pre here as else a new snapshot
-            %% init could be sent without detecting this
-            {receive_snapshot, State0, [{reply, Reply}]};
+            %% this is ok, just reply,
+            %% if we receive an init phase we can assume the snapshot contains
+            %% live indexes
+            {receive_snapshot, State0#{snapshot_has_live_indexes => true},
+             [{reply, Reply}]};
         init ->
             ?DEBUG("~ts: receiving snapshot saw unexpected init phase at snapshot "
                    "index term {~b, ~b}, current phase ~s restarting "
@@ -1660,7 +1669,20 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             State = update_term(Term, State0#{log => Log0,
                                               snapshot_phase => next}),
             {receive_snapshot, State, [{reply, Reply}]};
+        last
+          when SnapshotHasLiveIndexes andalso
+               LogHasPendingIndexes ->
+            %% we cannot yet complete the snapshot as there are pending
+            %% log indexes
+            EventType = maps:get(current_event_type, State0),
+            ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b "
+                   "cannot yet complete as log has pending indexes",
+                   [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
+            {receive_snapshot,
+             State0#{snapshot_next_event => {EventType, Rpc}}, []};
         last ->
+            %% TODO: we can't do this bit until all pending log entries have
+            %% been processed
             ?assert(SnapIndex == AcceptingSnapIdx),
             ?DEBUG("~ts: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
                    [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
@@ -1713,16 +1735,16 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                          membership =>
                                              get_membership(ClusterIds, State0),
                                          machine_state => MacState}),
-            State = maps:remove(snapshot_phase, State1),
+            State = maps:without([snapshot_phase,
+                                  snapshot_has_live_indexes,
+                                  snapshot_next_event], State1),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapIndex),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
-            %% TODO: consider waiting until all pending WAL writes (sparse)
-            %% have been confirmed written by the WAL or segment writer until
-            %% returning to follower state
-            {follower, persist_last_applied(State), [{reply, Reply} |
-                                                     Effs0 ++ Effs ++
-                                                     SnapInstalledEffs]}
+            {follower, persist_last_applied(State),
+             [{reply, Reply} |
+              Effs0 ++ Effs ++
+              SnapInstalledEffs]}
     end;
 handle_receive_snapshot(#append_entries_rpc{term = Term} = Msg,
                         #{current_term := CurTerm,
@@ -1736,11 +1758,17 @@ handle_receive_snapshot(#append_entries_rpc{term = Term} = Msg,
     {follower, update_term(Term, State), [{next_event, Msg}]};
 handle_receive_snapshot({ra_log_event, Evt},
                         #{cfg := #cfg{log_id = _LogId},
-                          log := Log0} = State) ->
+                          log := Log0} = State0) ->
     % simply forward all other events to ra_log
     % whilst the snapshot is being received
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
-    {receive_snapshot, State#{log => Log}, Effects};
+    case maps:take(snapshot_next_event, State0) of
+        {{EventType, NextEvt}, State} ->
+            {receive_snapshot, State#{log => Log},
+             [{next_event, EventType, NextEvt} | Effects]};
+        _ ->
+            {receive_snapshot, State0#{log => Log}, Effects}
+    end;
 handle_receive_snapshot(receive_snapshot_timeout,
                         #{cfg := #cfg{log_id = LogId}} = State0) ->
     ?INFO("~ts: ~s receive snapshot timed out.",
@@ -1809,7 +1837,11 @@ abort_receive(#{snapshot_phase := Phase,
               _ ->
                   Log1
           end,
-    clear_leader_id(maps:remove(snapshot_phase, State#{log => Log})).
+    clear_leader_id(maps:without([snapshot_phase,
+                                  snapshot_has_live_indexes,
+                                  current_event_type,
+                                  snapshot_next_event],
+                                 State#{log => Log})).
 
 -spec handle_await_condition(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
