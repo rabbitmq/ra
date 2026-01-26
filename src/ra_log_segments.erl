@@ -790,15 +790,17 @@ major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
 
          FirstSegmentFn = filename:join(Dir, CompGroupLeaderFn),
 
+         %% rename the .compacting segment on top of the group leader first.
+         %% this ensures that when symlinks are created, they point to a file
+         %% that already contains the compacted data, avoiding a race condition
+         %% where readers following a symlink could see stale data.
+         %% recovery detects completion by the absence of the .compacting file.
+         ok = prim_file:rename(CompactingFn, FirstSegmentFn),
+
          %% perform sym linking of the additional segments in the compaction
-         %% group, the target is not yet updated which can be detected at
-         %% recovery by the presence of a sym link _and_ the .compacting
-         %% file
+         %% group - safe to do now since target has the compacted data
          ok = make_symlinks(Dir, FirstSegmentFn,
                             [F || {_, _, {F, _}} <- Additional]),
-
-         %% rename the .compacting segment on top of the group leader
-         ok = prim_file:rename(CompactingFn, FirstSegmentFn),
          %% finally delete the .compaction_marker file to signal
          %% compaction group is complete
          ok = prim_file:delete(CompactionMarker),
@@ -962,43 +964,30 @@ recover_compaction(Dir) ->
                     _ = prim_file:delete(CompactingFn),
                     ok = prim_file:delete(CompactionGroupFn),
                     #compaction_result{};
-                [TargetShortFn | [FstLinkSeg | _] = LinkTargets] ->
+                [TargetShortFn | [_FstLinkSeg | _] = LinkTargets] ->
                     %% multiple segments in group,
-                    %% if any of the additional segments is a symlink
-                    %% the writes to the .compacting segment completed and we
-                    %% can complete the compaction work
-                    FstLinkSegFn = filename:join(Dir, FstLinkSeg),
-                    FstLinkSegLinkFn = filename:join(Dir, with_ext(FstLinkSeg, ".link")),
+                    %% the absence of .compacting file indicates the rename
+                    %% completed and the target now contains compacted data.
+                    %% we can safely complete symlink creation (idempotent).
                     Target = filename:join(Dir, TargetShortFn),
-                    AtLeastOneLink = ra_lib:is_any_file(FstLinkSegLinkFn),
                     CompactingExists = ra_lib:is_any_file(CompactingFn),
-                    case file:read_link_info(FstLinkSegFn, [raw]) of
-                        {ok, #file_info{type = Type}}
-                          when Type == symlink orelse
-                               AtLeastOneLink ->
-                            %% it is a symlink, recreate all symlinks and delete
-                            %% compaction marker
+                    case CompactingExists of
+                        true ->
+                            %% .compacting still exists means rename didn't
+                            %% happen, compaction didn't complete - clean up
+                            _ = prim_file:delete(CompactingFn),
+                            ok = prim_file:delete(CompactionGroupFn),
+                            #compaction_result{};
+                        false ->
+                            %% .compacting is gone, rename completed, target
+                            %% has compacted data. Complete symlinks (idempotent
+                            %% - handles none/some/all symlinks already created)
                             ok = make_symlinks(Dir, Target, LinkTargets),
-                            %% if compacting file exists, rename it to target
-                            if CompactingExists ->
-                                   ok = prim_file:rename(CompactingFn, Target);
-                               true ->
-                                   ok
-                            end,
                             ok = prim_file:delete(CompactionGroupFn),
                             Compacted = [ra_log_segment:segref(Target)],
                             #compaction_result{type = major,
                                                compacted_segrefs = Compacted,
-                                               linked = LinkTargets};
-                        {error, enoent} ->
-                            %% segment does not exist indicates what exactly?
-                            _ = prim_file:delete(CompactingFn),
-                            ok = prim_file:delete(CompactionGroupFn),
-                            #compaction_result{};
-                        {ok, #file_info{type = regular}} ->
-                            _ = prim_file:delete(CompactingFn),
-                            ok = prim_file:delete(CompactionGroupFn),
-                            #compaction_result{}
+                                               linked = LinkTargets}
                     end
             end
     end.

@@ -172,6 +172,9 @@ recover1(Config) ->
     ok.
 
 recover2(Config) ->
+    %% Test recovery when rename completed but only some symlinks were created.
+    %% With the new order (rename first, then symlinks), recovery should
+    %% complete by recreating all symlinks.
     Dir = ?config(dir, Config),
     LiveList = lists:seq(1, 128 * 3, 8),
     Live = ra_seq:from_list(LiveList),
@@ -191,10 +194,13 @@ recover2(Config) ->
 
                       [{FstFn, _}, {SndFn, _}, {_ThrFn, _}] = SegRefs,
 
-                      %% create a .link for for the second compacted segment
+                      %% simulate new order: rename .compacting to target first
+                      FirstSegmentFn = filename:join(Dir, FstFn),
+                      ok = prim_file:rename(CompactingFn, FirstSegmentFn),
+
+                      %% create a .link for the second compacted segment
                       %% and symlink it to the first segment in the compaction
                       %% group
-                      FirstSegmentFn = filename:join(Dir, FstFn),
                       SndLinkFn = filename:join(Dir, with_ext(SndFn, ".link")),
                       ok = prim_file:make_symlink(FirstSegmentFn, SndLinkFn),
 
@@ -202,7 +208,7 @@ recover2(Config) ->
                       SndSegFn = filename:join(Dir, SndFn),
                       ok = prim_file:rename(SndLinkFn, SndSegFn),
                       %% this simulates a case where it stopped after only
-                      %% creating 1 of the two symlinks
+                      %% creating 1 of the two symlinks (third segment not done)
                       true
             end},
      reinit,
@@ -211,8 +217,8 @@ recover2(Config) ->
                       Infos = infos(Dir),
                       ct:pal("Infos ~p", [Infos]),
                       NumLinks = length([a || #{file_type := symlink} <- Infos]),
-                      %% a compacting file with 1 link only should just be deleted
-                      %% during init
+                      %% .compacting already renamed, marker should be deleted
+                      %% and all symlinks should be recreated
                       not filelib:is_file(CompactingFn) andalso
                       not filelib:is_file(CompactionGroupFn) andalso
                       NumLinks == 2
@@ -228,6 +234,9 @@ recover2(Config) ->
     ok.
 
 recover3(Config) ->
+    %% Test recovery when rename completed but symlink creation crashed mid-way
+    %% (only .link file exists, not yet renamed to .segment).
+    %% With the new order, recovery should complete by recreating all symlinks.
     Dir = ?config(dir, Config),
     LiveList = lists:seq(1, 128 * 3, 8),
     Live = ra_seq:from_list(LiveList),
@@ -247,10 +256,12 @@ recover3(Config) ->
 
                       [{FstFn, _}, {SndFn, _}, {_ThrFn, _}] = SegRefs,
 
-                      %% create a .link for for the second compacted segment
-                      %% and symlink it to the first segment in the compaction
-                      %% group
+                      %% simulate new order: rename .compacting to target first
                       FirstSegmentFn = filename:join(Dir, FstFn),
+                      ok = prim_file:rename(CompactingFn, FirstSegmentFn),
+
+                      %% create a .link for the second compacted segment
+                      %% but don't rename it to .segment (simulates crash mid-symlink)
                       SndLinkFn = filename:join(Dir, with_ext(SndFn, ".link")),
                       ok = prim_file:make_symlink(FirstSegmentFn, SndLinkFn),
                       true
@@ -261,8 +272,8 @@ recover3(Config) ->
                       Infos = infos(Dir),
                       ct:pal("Infos ~p", [Infos]),
                       NumLinks = length([a || #{file_type := symlink} <- Infos]),
-                      %% a compacting file with 1 link only should just be deleted
-                      %% during init
+                      %% .compacting already renamed, marker should be deleted
+                      %% and all symlinks should be recreated
                       not filelib:is_file(CompactingFn) andalso
                       not filelib:is_file(CompactionGroupFn) andalso
                       NumLinks == 2
@@ -278,6 +289,9 @@ recover3(Config) ->
     ok.
 
 recover4(Config) ->
+    %% Test recovery when .compacting still exists (rename didn't happen).
+    %% With the new order, this means compaction didn't complete and should
+    %% be aborted - .compacting and marker deleted, originals left intact.
     Dir = ?config(dir, Config),
     LiveList = lists:seq(1, 128 * 3, 8),
     Live = ra_seq:from_list(LiveList),
@@ -294,34 +308,23 @@ recover4(Config) ->
                       ok = ra_lib:write_file(CompactionGroupFn,
                                              term_to_binary(Segments)),
                       do_compaction(Dir, CompactingFn, Live, SegRefs),
-
-                      [{FstFn, _}, {SndFn, _}, {ThrFn, _}] = SegRefs,
-
-                      %% create a .link for for the second compacted segment
-                      %% and symlink it to the first segment in the compaction
-                      %% group
-                      FirstSegmentFn = filename:join(Dir, FstFn),
-                      SndLinkFn = filename:join(Dir, with_ext(SndFn, ".link")),
-                      ok = prim_file:make_symlink(FirstSegmentFn, SndLinkFn),
-                      ThrLinkFn = filename:join(Dir, with_ext(ThrFn, ".link")),
-                      ok = prim_file:make_symlink(FirstSegmentFn, ThrLinkFn),
-                      %% all symlinks completed but .compacting file was not
-                      %% renamed
+                      %% .compacting file exists but rename didn't happen
+                      %% this simulates a crash before the rename step
                       true
             end},
      reinit,
-     {assert, 1, LiveList},
      {assert, fun (_) ->
                       Infos = infos(Dir),
                       ct:pal("Infos ~p", [Infos]),
                       NumLinks = length([a || #{file_type := symlink} <- Infos]),
-                      %% a compacting file with 1 link only should just be deleted
-                      %% during init
+                      %% .compacting exists means rename didn't happen
+                      %% compaction should be aborted, no symlinks created
                       not filelib:is_file(CompactingFn) andalso
                       not filelib:is_file(CompactionGroupFn) andalso
-                      NumLinks == 2
+                      NumLinks == 0
               end},
-     {assert, 1, LiveList},
+     %% original data should still be readable
+     {assert, 1, lists:seq(1, 128 * 4)},
      {assert, fun(S) ->
                       SegRefs = ra_log_segments:segment_refs(S),
                       ct:pal("SegRefs ~p, ~p", [SegRefs, seg_refs(Dir)]),
