@@ -52,6 +52,7 @@ all() ->
      command,
      command_notify,
      leader_enters_from_await_condition,
+     follower_state_resets_peer_status,
      leader_noop_operation_enables_cluster_change,
      leader_noop_increments_machine_version,
      follower_machine_version,
@@ -2159,6 +2160,37 @@ leader_enters_from_await_condition(_Config) ->
 
     ?assertMatch({#{cluster_change_permitted := false}, _},
                  ra_server:handle_state_enter(leader, candidate, State)),
+    ok.
+
+follower_state_resets_peer_status(_Config) ->
+    %% When a server becomes a follower, all peer statuses should be reset
+    %% to normal. This prevents stale snapshot sending statuses from
+    %% interfering with release cursor conditions.
+    N2 = ?N2, N3 = ?N3,
+    State0 = base_state(3, ?FUNCTION_NAME),
+    #{cluster := Cluster0} = State0,
+
+    %% Set up peers with non-normal statuses
+    SnapshotPid = spawn(fun() -> receive stop -> ok end end),
+    Peer2 = maps:get(N2, Cluster0),
+    Peer3 = maps:get(N3, Cluster0),
+    Cluster1 = Cluster0#{N2 => Peer2#{status => {sending_snapshot, SnapshotPid, 1}},
+                         N3 => Peer3#{status => disconnected}},
+    State1 = State0#{cluster => Cluster1},
+
+    %% Verify the non-normal statuses are set
+    #{cluster := #{N2 := #{status := {sending_snapshot, _, _}},
+                   N3 := #{status := disconnected}}} = State1,
+
+    %% Transition to follower state
+    {State2, _Effects} = ra_server:handle_state_enter(follower, leader, State1),
+
+    %% Verify all peer statuses are reset to normal
+    #{cluster := #{N2 := #{status := normal},
+                   N3 := #{status := normal}}} = State2,
+
+    %% Clean up the spawned process
+    SnapshotPid ! stop,
     ok.
 
 command_notify(_Config) ->

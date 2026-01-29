@@ -2105,10 +2105,16 @@ become(leader, OldRaftState, #{cluster := Cluster,
 
     State#{log => Log,
            cluster_change_permitted => CCP};
-become(follower, _, #{log := Log0} = State) ->
+become(follower, _, #{cluster := Cluster,
+                      log := Log0} = State) ->
     %% followers should only ever need a single segment open at any one
     %% time
-    State#{log => ra_log:release_resources(1, random, Log0)};
+    State#{log => ra_log:release_resources(1, random, Log0),
+           %% reset all peers status to normal else it may interfere
+           %% with release cursor conditions
+           cluster => maps:map(fun (_, P) ->
+                                       P#{status => normal}
+                               end, Cluster)};
 become(_RaftState, _, State) ->
     State.
 
