@@ -58,6 +58,7 @@ all_tests() ->
      wal_loses_writer_state,
      detect_lost_written_range,
      snapshot_installation,
+     snapshot_installation_with_no_live_indexes_overtakes_written,
      snapshot_written_after_installation,
      oldcheckpoints_deleted_after_snapshot_install,
      append_after_snapshot_installation_with_live_indexes,
@@ -176,7 +177,6 @@ snapshot_before_written(Config) ->
                               NP == 0
                       end),
     ok.
-
 
 handle_overwrite(Config) ->
     Log0 = ra_log_init(Config),
@@ -1623,6 +1623,38 @@ snapshot_installation(Config) ->
     Log = deliver_all_log_events(Log6, 100),
     {[], _} = ra_log_take(1, 9, Log),
     {[_, _], _} = ra_log_take(16, 17, Log),
+    ok.
+
+snapshot_installation_with_no_live_indexes_overtakes_written(Config) ->
+    Log0 = ra_log_init(Config),
+    {0, 0} = ra_log:last_index_term(Log0),
+    Log1 = assert_log_events(write_n(1, 10, 2, Log0),
+                             fun (L) -> {9, 2} == ra_log:last_written(L) end),
+
+    true = ra_log_wal_SUITE:suspend_process(whereis(ra_log_wal)),
+    Log2 = write_n(1, 10, 2, Log1),
+
+    %% create snapshot chunk
+    Meta = meta(15, 2, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, #{}),
+    SnapState0 = ra_log:snapshot_state(Log2),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, [], AEffs} =
+        ra_snapshot:complete_accept(Chunk, 1, Machine, SnapState1),
+    run_effs(AEffs),
+    {ok, Log3, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, [],
+                                                ra_log:set_snapshot_state(SnapState, Log2)),
+
+    run_effs(Effs4),
+    {15, _} = ra_log:last_index_term(Log3),
+    {15, _} = ra_log:last_written(Log3),
+    #{mem_table_range := undefined} = ra_log:overview(Log3),
+
+    true = erlang:resume_process(whereis(ra_log_wal)),
+    Log4 = write_n(16, 20, 2, Log3),
+    _ = assert_log_events(Log4,
+                             fun (L) -> {19, 2} == ra_log:last_written(L) end),
     ok.
 
 append_after_snapshot_installation_with_live_indexes(Config) ->

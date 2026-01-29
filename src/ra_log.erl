@@ -1141,6 +1141,7 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod, LiveIndexes,
                  #?MODULE{cfg = #cfg{uid = UId,
                                      names = Names} = Cfg,
                           snapshot_state = SnapState0,
+                          pending = Pend0,
                           mem_table = Mt0} = State0)
   when is_atom(MacMod) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_INSTALLED, 1),
@@ -1160,9 +1161,10 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod, LiveIndexes,
                                 I
                         end,
     %% TODO: more mt entries could potentially be cleared up in the
-    %% mem table here
+    %% mem table here if we walked the live indexes
     {Spec, Mt1} = ra_mt:set_first(SmallestLiveIndex, Mt0),
     ok = exec_mem_table_delete(Names, UId, Spec),
+    Pend = ra_seq:floor(SmallestLiveIndex, Pend0),
     %% always create a new mem table here as we could have written
     %% sparese entries in the snapshot install
     %% TODO: check an empty mt doesn't leak
@@ -1174,6 +1176,7 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod, LiveIndexes,
                            last_term = SnapTerm,
                            live_indexes = LiveIndexes,
                            mem_table = Mt,
+                           pending = Pend,
                            last_written_index_term = IdxTerm},
     {Reader, CompEffs} = ra_log_segments:schedule_compaction(minor, SnapIdx,
                                                              LiveIndexes,
