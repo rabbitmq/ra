@@ -2047,7 +2047,8 @@ read_entries0(From, Idxs, #state{server_state = #{log := Log}} = State) ->
 send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                InstallTimeout, SnapState, Machine, LogId) ->
     Context = ra_snapshot:context(SnapState, ToNode),
-    {ok, #{machine_version := SnapMacVer} = Meta, ReadState} =
+    {ok, #{index := SnapIdx,
+           machine_version := SnapMacVer} = Meta, ReadState} =
         ra_snapshot:begin_read(SnapState, Context),
 
     %% TODO: consolidate getting the context, machine version and last
@@ -2062,6 +2063,8 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                    [LogId, To, TheirMacVer, SnapMacVer]),
             ok;
         false ->
+            ?DEBUG("~ts: sending snapshot at index ~b to ~w",
+                   [LogId, SnapIdx, To]),
             RPC = #install_snapshot_rpc{term = Term,
                                         leader_id = Id,
                                         chunk_state = {0, init},
@@ -2128,7 +2131,7 @@ send_snapshot_chunks(RPC0, To, ReadState0, Num, ChunkSize,
     case ContState of
         {next, ReadState1} ->
             send_snapshot_chunks(RPC0, To, ReadState1, Num + 1,
-                                     ChunkSize, InstallTimeout, SnapState);
+                                 ChunkSize, InstallTimeout, SnapState);
         last ->
             Res1
     end.

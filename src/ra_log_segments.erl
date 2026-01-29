@@ -387,8 +387,9 @@ compaction(#?STATE{compaction = Conf}) ->
 num_open_segments(#?STATE{open_segments = Open}) ->
     ra_flru:size(Open).
 
--spec fold(ra_index(), ra_index(), fun(), term(), state(),
-                                       MissingKeyStrategy :: error | return) ->
+-spec fold(ra_index(), ra_index(),
+           fun(), term(), state(),
+               MissingKeyStrategy :: error | return) ->
     {state(), term()}.
 fold(FromIdx, ToIdx, Fun, Acc,
     #?STATE{cfg = #cfg{} = Cfg} = State0, MissingKeyStrat)
@@ -406,9 +407,10 @@ sparse_read(#?STATE{cfg = #cfg{} = Cfg} = State, Indexes, Entries0) ->
     {Entries, State#?MODULE{open_segments = Open}}.
 
 -spec read_plan(state(), [ra_index()]) -> read_plan().
-read_plan(#?STATE{segment_refs = SegRefs}, Indexes) ->
+read_plan(#?STATE{cfg = Cfg,
+                  segment_refs = SegRefs}, Indexes) ->
     %% TODO: add counter for number of read plans requested
-    segment_read_plan(SegRefs, Indexes, []).
+    segment_read_plan(Cfg, SegRefs, Indexes, []).
 
 -spec exec_read_plan(file:filename_all(),
                      read_plan(),
@@ -501,21 +503,25 @@ purge_dangling_symlinks(Dir) ->
     ok.
 %% LOCAL
 
-segment_read_plan(_SegRefs, [], Acc) ->
+segment_read_plan(_Cfg, _SegRefs, [], Acc) ->
     lists:reverse(Acc);
-segment_read_plan(SegRefs, [Idx | _] = Indexes, Acc) ->
+segment_read_plan(#cfg{log_id = LogId} = Cfg,
+                  SegRefs, [Idx | _] = Indexes, Acc) ->
     case ra_lol:search(seg_ref_search_fun(Idx), SegRefs) of
         {{Fn, Range}, Cont} ->
             case sparse_read_split(fun (I) ->
                                            ra_range:in(I, Range)
                                    end, Indexes, []) of
                 {[], _} ->
-                    segment_read_plan(Cont, Indexes, Acc);
+                    segment_read_plan(Cfg, Cont, Indexes, Acc);
                 {Idxs, Rem} ->
-                    segment_read_plan(Cont, Rem, [{Fn, Idxs} | Acc])
+                    segment_read_plan(Cfg, Cont, Rem, [{Fn, Idxs} | Acc])
             end;
         undefined ->
-            %% not found
+            %% not found, not good
+            ?WARN("~ts: read plan request did not found all requested indexes"
+                  " missing ~w segrefs ~p",
+                  [LogId, Indexes, ra_lol:to_list(SegRefs)]),
             lists:reverse(Acc)
     end.
 
@@ -595,7 +601,7 @@ segment_sparse_read(#?STATE{open_segments = Open}, [], Entries0) ->
 segment_sparse_read(#?STATE{segment_refs = SegRefs,
                             open_segments = OpenSegs,
                             cfg = Cfg}, Indexes, Entries0) ->
-    Plan = segment_read_plan(SegRefs, Indexes, []),
+    Plan = segment_read_plan(Cfg, SegRefs, Indexes, []),
     lists:foldl(
       fun ({Fn, Idxs}, {Open0, C, En0}) ->
               {Seg, Open} = get_segment(Cfg, Open0, Fn),

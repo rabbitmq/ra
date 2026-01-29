@@ -737,7 +737,7 @@ execute_read_plan(#read_plan{dir = Dir,
                              plan = Plan}, Flru0, TransformFun,
                   Options) ->
     ra_log_segments:exec_read_plan(Dir, Plan, Flru0, TransformFun,
-                                 Options, Read).
+                                   Options, Read).
 
 -spec read_plan_info(read_plan()) -> map().
 read_plan_info(#read_plan{read = Read,
