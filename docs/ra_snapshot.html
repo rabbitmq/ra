@@ -20,7 +20,9 @@
 
 
 <h3 class="typedecl"><a name="type-effect">effect()</a></h3>
-<p><pre>effect() = {monitor, process, snapshot_writer, pid()}</pre></p>
+<p><pre>effect() = 
+    {monitor, process, snapshot_writer, pid()} |
+    {bg_work, function(), function()}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-file_err">file_err()</a></h3>
@@ -48,14 +50,15 @@
 <tr><td valign="top"><a href="#accepting-1">accepting/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#directory-2">directory/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#last_index_for-1">last_index_for/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#begin_snapshot-4">begin_snapshot/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#begin_snapshot-5">begin_snapshot/5</a></td><td></td></tr>
 <tr><td valign="top"><a href="#promote_checkpoint-2">promote_checkpoint/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#complete_snapshot-3">complete_snapshot/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#complete_snapshot-4">complete_snapshot/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#begin_accept-2">begin_accept/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#accept_chunk-4">accept_chunk/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#complete_accept-4">complete_accept/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#accept_chunk-3">accept_chunk/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#abort_accept-1">abort_accept/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#context-2">context/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#handle_down-3">handle_down/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_error-3">handle_error/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#delete-2">delete/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#begin_read-2">begin_read/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#read_chunk-3">read_chunk/3</a></td><td></td></tr>
@@ -64,6 +67,14 @@
 <tr><td valign="top"><a href="#current_snapshot_dir-1">current_snapshot_dir/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#take_older_checkpoints-2">take_older_checkpoints/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#take_extra_checkpoints-1">take_extra_checkpoints/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#write_indexes-2">write_indexes/2</a></td><td>
+  Indexes file format:
+  "RASI"           (4 bytes - magic)
+  Version          (1 byte - unsigned)
+  CRC32            (4 bytes - unsigned 32-bit integer)
+  Data             (binary - term_to_binary of indexes).</td></tr>
+<tr><td valign="top"><a href="#indexes-1">indexes/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#make_snapshot_dir-3">make_snapshot_dir/3</a></td><td></td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -72,8 +83,8 @@
 <div class="spec">
 <p><pre>init(UId :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a>,
      Module :: module(),
-     SnapshotsDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>,
-     CheckpointDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>,
+     SnapshotsDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>,
+     CheckpointDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>,
      Counter :: undefined | <a href="/Users/nkarl/code/rabbitmq/erts/doc/counters.html#type-counters_ref" docgen-rel="seetype" docgen-href="erts:counters#counters_ref/0">counters:counters_ref()</a>,
      MaxCheckpoints :: pos_integer()) -&gt;
         <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
@@ -100,7 +111,7 @@
 
 <h3 class="function"><a name="pending-1">pending/1</a></h3>
 <div class="spec">
-<p><pre>pending(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>({pid(), <a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>, <a href="#type-kind" docgen-rel="seetype" docgen-href="#kind/0">kind()</a>})</pre></p>
+<p><pre>pending(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>({<a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>, <a href="#type-kind" docgen-rel="seetype" docgen-href="#kind/0">kind()</a>})</pre></p>
 <p> </p>
 </div>
 
@@ -112,7 +123,7 @@
 
 <h3 class="function"><a name="directory-2">directory/2</a></h3>
 <div class="spec">
-<p><pre>directory(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>, X2 :: <a href="#type-kind" docgen-rel="seetype" docgen-href="#kind/0">kind()</a>) -&gt; <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a></pre></p>
+<p><pre>directory(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>, X2 :: <a href="#type-kind" docgen-rel="seetype" docgen-href="#kind/0">kind()</a>) -&gt; <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a></pre></p>
 <p> </p>
 </div>
 
@@ -122,10 +133,11 @@
 <p> </p>
 </div>
 
-<h3 class="function"><a name="begin_snapshot-4">begin_snapshot/4</a></h3>
+<h3 class="function"><a name="begin_snapshot-5">begin_snapshot/5</a></h3>
 <div class="spec">
 <p><pre>begin_snapshot(Meta :: <a href="#type-meta" docgen-rel="seetype" docgen-href="#meta/0">meta()</a>,
-               ReleaseCursorRef :: term(),
+               MacModule :: module(),
+               MacState :: term(),
                SnapKind :: <a href="#type-kind" docgen-rel="seetype" docgen-href="#kind/0">kind()</a>,
                State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
                   {<a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>, [<a href="#type-effect" docgen-rel="seetype" docgen-href="#effect/0">effect()</a>]}</pre></p>
@@ -141,10 +153,11 @@
 <p> </p>
 </div>
 
-<h3 class="function"><a name="complete_snapshot-3">complete_snapshot/3</a></h3>
+<h3 class="function"><a name="complete_snapshot-4">complete_snapshot/4</a></h3>
 <div class="spec">
 <p><pre>complete_snapshot(IdxTerm :: <a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>,
                   X2 :: <a href="#type-kind" docgen-rel="seetype" docgen-href="#kind/0">kind()</a>,
+                  LiveIndexes :: <a href="ra_seq.html#type-state" docgen-rel="seetype" docgen-href="ra_seq#state/0">ra_seq:state()</a>,
                   State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
                      <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
 <p> </p>
@@ -156,13 +169,25 @@
 <p> </p>
 </div>
 
-<h3 class="function"><a name="accept_chunk-4">accept_chunk/4</a></h3>
+<h3 class="function"><a name="complete_accept-4">complete_accept/4</a></h3>
+<div class="spec">
+<p><pre>complete_accept(Chunk :: term(),
+                Num :: non_neg_integer(),
+                Machine :: <a href="ra_machine.html#type-machine" docgen-rel="seetype" docgen-href="ra_machine#machine/0">ra_machine:machine()</a>,
+                State0 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+                   {<a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>,
+                    MacState :: term(),
+                    <a href="ra_seq.html#type-state" docgen-rel="seetype" docgen-href="ra_seq#state/0">ra_seq:state()</a>,
+                    [<a href="#type-effect" docgen-rel="seetype" docgen-href="#effect/0">effect()</a>]}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="accept_chunk-3">accept_chunk/3</a></h3>
 <div class="spec">
 <p><pre>accept_chunk(Chunk :: term(),
              Num :: non_neg_integer(),
-             ChunkFlag :: <a href="#type-chunk_flag" docgen-rel="seetype" docgen-href="#chunk_flag/0">chunk_flag()</a>,
              State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
-                {ok, <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>}</pre></p>
+                <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
 <p> </p>
 </div>
 
@@ -178,10 +203,12 @@
 <p> </p>
 </div>
 
-<h3 class="function"><a name="handle_down-3">handle_down/3</a></h3>
+<h3 class="function"><a name="handle_error-3">handle_error/3</a></h3>
 <div class="spec">
-<p><pre>handle_down(Pid :: pid(), Info :: term(), State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
-               <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
+<p><pre>handle_error(IDX_TERM :: {<a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a>, <a href="#type-ra_term" docgen-rel="seetype" docgen-href="#ra_term/0">ra_term()</a>},
+             Error :: term(),
+             State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+                <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
 <p> </p>
 </div>
 
@@ -221,7 +248,7 @@
 
 <h3 class="function"><a name="read_meta-2">read_meta/2</a></h3>
 <div class="spec">
-<p><pre>read_meta(Module :: module(), Location :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>) -&gt;
+<p><pre>read_meta(Module :: module(), Location :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>) -&gt;
              {ok, <a href="#type-meta" docgen-rel="seetype" docgen-href="#meta/0">meta()</a>} |
              {error,
               invalid_format |
@@ -234,7 +261,7 @@
 
 <h3 class="function"><a name="current_snapshot_dir-1">current_snapshot_dir/1</a></h3>
 <div class="spec">
-<p><pre>current_snapshot_dir(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>(<a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>)</pre></p>
+<p><pre>current_snapshot_dir(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>(<a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>)</pre></p>
 <p> </p>
 </div>
 
@@ -249,6 +276,37 @@
 <div class="spec">
 <p><pre>take_extra_checkpoints(State0 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
                           {<a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>, [<a href="#type-checkpoint" docgen-rel="seetype" docgen-href="#checkpoint/0">checkpoint()</a>]}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="write_indexes-2">write_indexes/2</a></h3>
+<div class="spec">
+<p><pre>write_indexes(Dir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>,
+              Indexes :: <a href="ra_seq.html#type-state" docgen-rel="seetype" docgen-href="ra_seq#state/0">ra_seq:state()</a>) -&gt;
+                 ok | {error, <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-posix" docgen-rel="seetype" docgen-href="kernel:file#posix/0">file:posix()</a>}</pre></p>
+<p> </p>
+</div><p>
+  Indexes file format:
+  "RASI"           (4 bytes - magic)
+  Version          (1 byte - unsigned)
+  CRC32            (4 bytes - unsigned 32-bit integer)
+  Data             (binary - term_to_binary of indexes)</p>
+
+<h3 class="function"><a name="indexes-1">indexes/1</a></h3>
+<div class="spec">
+<p><pre>indexes(Dir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>) -&gt;
+           {ok, <a href="ra_seq.html#type-state" docgen-rel="seetype" docgen-href="ra_seq#state/0">ra_seq:state()</a>} |
+           {error,
+            invalid_format |
+            {invalid_version, integer()} |
+            checksum_error |
+            <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-posix" docgen-rel="seetype" docgen-href="kernel:file#posix/0">file:posix()</a>}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="make_snapshot_dir-3">make_snapshot_dir/3</a></h3>
+<div class="spec">
+<p><code>make_snapshot_dir(Dir, Index, Term) -&gt; any()</code></p>
 <p> </p>
 </div>
 <hr>

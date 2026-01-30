@@ -1,0 +1,184 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module ra_kv</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module ra_kv</h1>
+<ul class="index"><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+
+<p><b>Behaviours:</b> <a href="ra_machine.html"><code>ra_machine</code></a>.</p>
+
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-command">command()</a></h3>
+<p><pre>command() = 
+    #put{key = <a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>,
+         value = term(),
+         meta = #{size := non_neg_integer(), hash := integer()}} |
+    #delete{key = <a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>}</pre></p>
+
+
+<h3 class="typedecl"><a name="type-key">key()</a></h3>
+<p><pre>key() = binary()</pre></p>
+
+
+<h3 class="typedecl"><a name="type-state">state()</a></h3>
+<p><b>abstract datatype</b>: <code>state()</code></p>
+
+
+<h3 class="typedecl"><a name="type-value">value()</a></h3>
+<p><pre>value() = term()</pre></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#start_cluster-3">start_cluster/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#add_member-3">add_member/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#remove_member-3">remove_member/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#member_overview-1">member_overview/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#put-4">put/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#get-3">get/3</a></td><td>get performs a consistent query that returns the index, hash and member set
+  then perform an aux query to actually get the data for a given index.</td></tr>
+<tr><td valign="top"><a href="#read_entry-4">read_entry/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#delete-3">delete/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#take_snapshot-1">take_snapshot/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#apply-3">apply/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#live_indexes-1">live_indexes/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init_aux-1">init_aux/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_aux-5">handle_aux/5</a></td><td></td></tr>
+<tr><td valign="top"><a href="#overview-1">overview/1</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="start_cluster-3">start_cluster/3</a></h3>
+<div class="spec">
+<p><pre>start_cluster(System :: atom(),
+              ClusterName :: atom(),
+              Config :: #{members := [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]}) -&gt;
+                 {ok, [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>], [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]} |
+                 {error, cluster_not_formed}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="add_member-3">add_member/3</a></h3>
+<div class="spec">
+<p><pre>add_member(System :: atom(),
+           NewMemberId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
+           LeaderId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
+              ok | {error, term()} | {timeout, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="remove_member-3">remove_member/3</a></h3>
+<div class="spec">
+<p><pre>remove_member(System :: atom(),
+              NewMemberId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
+              LeaderId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
+                 ok | {error, term()} | {timeout, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="member_overview-1">member_overview/1</a></h3>
+<div class="spec">
+<p><code>member_overview(ServerId) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="put-4">put/4</a></h3>
+<div class="spec">
+<p><pre>put(ServerId :: <a href="ra.html#type-server_id" docgen-rel="seetype" docgen-href="ra#server_id/0">ra:server_id()</a>,
+    Key :: <a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>,
+    Value :: <a href="#type-value" docgen-rel="seetype" docgen-href="#value/0">value()</a>,
+    Timeout :: non_neg_integer()) -&gt;
+       {ok, map()} | {error, term()} | {timeout, <a href="ra.html#type-server_id" docgen-rel="seetype" docgen-href="ra#server_id/0">ra:server_id()</a>}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="get-3">get/3</a></h3>
+<div class="spec">
+<p><pre>get(ServerId :: <a href="ra.html#type-server_id" docgen-rel="seetype" docgen-href="ra#server_id/0">ra:server_id()</a>,
+    Key :: <a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>,
+    Timeout :: non_neg_integer()) -&gt;
+       {ok, map(), <a href="#type-value" docgen-rel="seetype" docgen-href="#value/0">value()</a>} |
+       {error, term()} |
+       {timeout, <a href="ra.html#type-server_id" docgen-rel="seetype" docgen-href="ra#server_id/0">ra:server_id()</a>}</pre></p>
+<p> </p>
+</div><p>get performs a consistent query that returns the index, hash and member set
+  then perform an aux query to actually get the data for a given index.
+  if addressing a follower (say there is a local one) then the read may need
+  to wait if the index isn't yet available locally (term also need to be checked)
+  or check that the machien state has the right index for a given key before
+  reading the value from the log</p>
+
+<h3 class="function"><a name="read_entry-4">read_entry/4</a></h3>
+<div class="spec">
+<p><code>read_entry(ServerId, Idx, Members, Timeout) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="delete-3">delete/3</a></h3>
+<div class="spec">
+<p><pre>delete(ServerId :: <a href="ra.html#type-server_id" docgen-rel="seetype" docgen-href="ra#server_id/0">ra:server_id()</a>,
+       Key :: <a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>,
+       Timeout :: non_neg_integer()) -&gt;
+          {ok, map()} |
+          {error, not_found} |
+          {error, term()} |
+          {timeout, <a href="ra.html#type-server_id" docgen-rel="seetype" docgen-href="ra#server_id/0">ra:server_id()</a>}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="take_snapshot-1">take_snapshot/1</a></h3>
+<div class="spec">
+<p><pre>take_snapshot(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt; ok</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(X1) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="apply-3">apply/3</a></h3>
+<div class="spec">
+<p><code>apply(Meta, Put, State0) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="live_indexes-1">live_indexes/1</a></h3>
+<div class="spec">
+<p><code>live_indexes(X1) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init_aux-1">init_aux/1</a></h3>
+<div class="spec">
+<p><code>init_aux(X1) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_aux-5">handle_aux/5</a></h3>
+<div class="spec">
+<p><code>handle_aux(RaState, X2, X3, Aux, Internal) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="overview-1">overview/1</a></h3>
+<div class="spec">
+<p><code>overview(State) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

@@ -21,8 +21,10 @@
 
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#machine_state-1">machine_state/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#effective_machine_version-1">effective_machine_version/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#leader_id-1">leader_id/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#last_applied-1">last_applied/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#current_term-1">current_term/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#members_info-1">members_info/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#overview-1">overview/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#log_last_index_term-1">log_last_index_term/1</a></td><td></td></tr>
@@ -38,6 +40,13 @@
 <p> </p>
 </div>
 
+<h3 class="function"><a name="effective_machine_version-1">effective_machine_version/1</a></h3>
+<div class="spec">
+<p><pre>effective_machine_version(X1 :: <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>) -&gt;
+                             <a href="ra_machine.html#type-version" docgen-rel="seetype" docgen-href="ra_machine#version/0">ra_machine:version()</a></pre></p>
+<p> </p>
+</div>
+
 <h3 class="function"><a name="leader_id-1">leader_id/1</a></h3>
 <div class="spec">
 <p><pre>leader_id(State :: <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>) -&gt;
@@ -48,6 +57,12 @@
 <h3 class="function"><a name="last_applied-1">last_applied/1</a></h3>
 <div class="spec">
 <p><pre>last_applied(State :: <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>) -&gt; <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="current_term-1">current_term/1</a></h3>
+<div class="spec">
+<p><pre>current_term(State :: <a href="ra_aux.html#type-internal_state" docgen-rel="seetype" docgen-href="ra_aux#internal_state/0">ra_aux:internal_state()</a>) -&gt; <a href="#type-ra_term" docgen-rel="seetype" docgen-href="#ra_term/0">ra_term()</a></pre></p>
 <p> </p>
 </div>
 

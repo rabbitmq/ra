@@ -1,4 +1,5 @@
 %% encoding: UTF-8
 {application,ra}.
-{modules,[ra,ra_aux,ra_counters,ra_dbg,ra_directory,ra_env,ra_leaderboard,
-          ra_log_reader,ra_machine,ra_snapshot,ra_system]}.
+{modules,[ra,ra_aux,ra_counters,ra_dbg,ra_directory,ra_env,ra_kv,
+          ra_kv_harness,ra_leaderboard,ra_log_read_plan,ra_log_snapshot_state,
+          ra_lol,ra_machine,ra_seq,ra_snapshot,ra_system]}.

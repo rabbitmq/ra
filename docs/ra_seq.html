@@ -1,0 +1,182 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module ra_seq</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module ra_seq</h1>
+<ul class="index"><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+
+
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-iter">iter()</a></h3>
+<p><b>abstract datatype</b>: <code>iter()</code></p>
+
+
+<h3 class="typedecl"><a name="type-state">state()</a></h3>
+<p><pre>state() = [<a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a> | <a href="ra.html#type-range" docgen-rel="seetype" docgen-href="ra#range/0">ra:range()</a>]</pre></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#append-2">append/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#from_list-1">from_list/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#floor-2">floor/2</a></td><td>This operation is O(n) + a list:reverse/1.</td></tr>
+<tr><td valign="top"><a href="#limit-2">limit/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#add-2">add/2</a></td><td>adds two sequences together where To is
+  the "lower" sequence.</td></tr>
+<tr><td valign="top"><a href="#fold-3">fold/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#expand-1">expand/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#subtract-2">subtract/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#first-1">first/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#last-1">last/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#remove_prefix-2">remove_prefix/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#iterator-1">iterator/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#next-1">next/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#list_chunk-2">list_chunk/2</a></td><td>Returns a chunk of up to ChunkSize expanded indices from the sequence
+  without eagerly expanding the entire sequence.</td></tr>
+<tr><td valign="top"><a href="#length-1">length/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#in-2">in/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#range-1">range/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#in_range-2">in_range/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#has_overlap-2">has_overlap/2</a></td><td>Check if any element in the sequence overlaps with the given range.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="append-2">append/2</a></h3>
+<div class="spec">
+<p><pre>append(Idx :: <a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a>, Rem :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="from_list-1">from_list/1</a></h3>
+<div class="spec">
+<p><pre>from_list(L :: [<a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a>]) -&gt; <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="floor-2">floor/2</a></h3>
+<div class="spec">
+<p><pre>floor(FloorIdxIncl :: <a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a>, Seq :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
+<p> </p>
+</div><p>This operation is O(n) + a list:reverse/1</p>
+
+<h3 class="function"><a name="limit-2">limit/2</a></h3>
+<div class="spec">
+<p><pre>limit(CeilIdxIncl :: <a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a>, Rem :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="add-2">add/2</a></h3>
+<div class="spec">
+<p><pre>add(Add :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>, To :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
+<p> </p>
+</div><p>adds two sequences together where To is
+  the "lower" sequence</p>
+
+<h3 class="function"><a name="fold-3">fold/3</a></h3>
+<div class="spec">
+<p><pre>fold(Fun :: fun((<a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a>, Acc) -&gt; Acc), Acc, Seq :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+        Acc</pre>
+<ul class="definitions"><li><pre>Acc = term()</pre></li></ul></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="expand-1">expand/1</a></h3>
+<div class="spec">
+<p><pre>expand(Seq :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; [<a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a>]</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="subtract-2">subtract/2</a></h3>
+<div class="spec">
+<p><pre>subtract(Min :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>, Sub :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; Diff :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="first-1">first/1</a></h3>
+<div class="spec">
+<p><pre>first(Seq :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; undefined | <a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="last-1">last/1</a></h3>
+<div class="spec">
+<p><pre>last(Seq :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; undefined | <a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="remove_prefix-2">remove_prefix/2</a></h3>
+<div class="spec">
+<p><pre>remove_prefix(Prefix :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>, Seq :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+                 {ok, <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>} | {error, not_prefix}</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="iterator-1">iterator/1</a></h3>
+<div class="spec">
+<p><pre>iterator(Seq :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-iter" docgen-rel="seetype" docgen-href="#iter/0">iter()</a> | end_of_seq</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="next-1">next/1</a></h3>
+<div class="spec">
+<p><pre>next(I :: <a href="#type-iter" docgen-rel="seetype" docgen-href="#iter/0">iter()</a>) -&gt; {<a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a>, <a href="#type-iter" docgen-rel="seetype" docgen-href="#iter/0">iter()</a>} | end_of_seq</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="list_chunk-2">list_chunk/2</a></h3>
+<div class="spec">
+<p><pre>list_chunk(ChunkSize :: pos_integer(), Seq :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a> | <a href="#type-iter" docgen-rel="seetype" docgen-href="#iter/0">iter()</a>) -&gt;
+              {[<a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a>], <a href="#type-iter" docgen-rel="seetype" docgen-href="#iter/0">iter()</a>} | end_of_seq</pre></p>
+<p> </p>
+</div><p>Returns a chunk of up to ChunkSize expanded indices from the sequence
+  without eagerly expanding the entire sequence. On first call, pass a state().
+  On subsequent calls, pass the returned iterator.
+  Returns <code>{Chunk, NewIterator}</code> or <code>end_of_seq</code> when exhausted.
+  Indices are returned in ascending order.</p>
+
+<h3 class="function"><a name="length-1">length/1</a></h3>
+<div class="spec">
+<p><code>length(Seq) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="in-2">in/2</a></h3>
+<div class="spec">
+<p><code>in(Idx, Rem) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="range-1">range/1</a></h3>
+<div class="spec">
+<p><pre>range(Seq :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="ra.html#type-range" docgen-rel="seetype" docgen-href="ra#range/0">ra:range()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="in_range-2">in_range/2</a></h3>
+<div class="spec">
+<p><pre>in_range(Range :: <a href="ra.html#type-range" docgen-rel="seetype" docgen-href="ra#range/0">ra:range()</a>, Seq0 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="has_overlap-2">has_overlap/2</a></h3>
+<div class="spec">
+<p><pre>has_overlap(Range :: <a href="ra.html#type-range" docgen-rel="seetype" docgen-href="ra#range/0">ra:range()</a>, Seq :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; boolean()</pre></p>
+<p> </p>
+</div><p>Check if any element in the sequence overlaps with the given range.
+  This is a pure query that does not modify the sequence and can terminate
+  early as soon as an overlap is found.
+  Sequences are ordered high -&gt; low, so we traverse from highest to lowest.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

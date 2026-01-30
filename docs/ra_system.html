@@ -25,13 +25,13 @@
       wal_compute_checksums =&gt; boolean(),
       wal_max_batch_size =&gt; non_neg_integer(),
       wal_max_entries =&gt; undefined | non_neg_integer(),
-      wal_write_strategy =&gt; default | o_sync | sync_after_notify,
       wal_sync_method =&gt; datasync | sync | none,
       wal_hibernate_after =&gt; non_neg_integer(),
       wal_garbage_collect =&gt; boolean(),
       wal_pre_allocate =&gt; boolean(),
       segment_max_entries =&gt; non_neg_integer(),
       segment_max_pending =&gt; non_neg_integer(),
+      segment_max_size_bytes =&gt; non_neg_integer(),
       segment_compute_checksums =&gt; boolean(),
       snapshot_chunk_size =&gt; non_neg_integer(),
       receive_snapshot_timeout =&gt; non_neg_integer(),
@@ -47,7 +47,9 @@
       low_priority_commands_flush_size =&gt; non_neg_integer(),
       low_priority_commands_in_memory_size =&gt; non_neg_integer(),
       server_recovery_strategy =&gt;
-          undefined | registered | {module(), atom(), list()}}</pre></p>
+          undefined | registered | {module(), atom(), list()},
+      machine_upgrade_strategy =&gt;
+          <a href="ra_server.html#type-machine_upgrade_strategy" docgen-rel="seetype" docgen-href="ra_server#machine_upgrade_strategy/0">ra_server:machine_upgrade_strategy()</a>}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-names">names()</a></h3>

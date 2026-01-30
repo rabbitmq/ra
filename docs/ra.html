@@ -26,8 +26,7 @@
     {wal_data_dir, <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>} |
     {segment_max_entries, non_neg_integer()} |
     {wal_max_size_bytes, non_neg_integer()} |
-    {wal_compute_checksums, boolean()} |
-    {wal_write_strategy, default | o_sync}</pre></p>
+    {wal_compute_checksums, boolean()}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-idxterm">idxterm()</a></h3>
@@ -52,9 +51,11 @@ evaluated.</p>
   </ul></p>
 
 <h3 class="typedecl"><a name="type-query_fun">query_fun()</a></h3>
-<p><pre>query_fun() = 
-    fun((term()) -&gt; term()) |
-    {M :: module(), F :: atom(), A :: list()}</pre></p>
+<p><pre>query_fun() = fun((term()) -&gt; term()) | <a href="#type-query_mfa" docgen-rel="seetype" docgen-href="#query_mfa/0">query_mfa()</a></pre></p>
+
+
+<h3 class="typedecl"><a name="type-query_mfa">query_mfa()</a></h3>
+<p><pre>query_mfa() = {M :: module(), F :: atom(), A :: list()}</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_cmd_ret">ra_cmd_ret()</a></h3>
@@ -77,21 +78,17 @@ evaluated.</p>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#start-0">start/0</a></td><td>Starts the ra application.</td></tr>
 <tr><td valign="top"><a href="#start-1">start/1</a></td><td>Starts the ra application.</td></tr>
 <tr><td valign="top"><a href="#start_in-1">start_in/1</a></td><td>Starts the ra application with a provided data directory.</td></tr>
-<tr><td valign="top"><a href="#restart_server-1">restart_server/1</a></td><td>Restarts a previously successfully started ra server in the default system.</td></tr>
 <tr><td valign="top"><a href="#restart_server-2">restart_server/2</a></td><td>Restarts a previously successfully started ra server.</td></tr>
 <tr><td valign="top"><a href="#restart_server-3">restart_server/3</a></td><td>Restarts a previously successfully started ra server.</td></tr>
-<tr><td valign="top"><a href="#stop_server-1">stop_server/1</a></td><td>Stops a ra server in the default system.</td></tr>
 <tr><td valign="top"><a href="#stop_server-2">stop_server/2</a></td><td>Stops a ra server.</td></tr>
 <tr><td valign="top"><a href="#force_delete_server-2">force_delete_server/2</a></td><td>Deletes a ra server
   The server is forcefully deleted.</td></tr>
 <tr><td valign="top"><a href="#start_or_restart_cluster-4">start_or_restart_cluster/4</a></td><td>Starts or restarts a ra cluster.</td></tr>
 <tr><td valign="top"><a href="#start_or_restart_cluster-5">start_or_restart_cluster/5</a></td><td>Same as <code>start_or_restart_cluster/4</code> but accepts a custom timeout.</td></tr>
 <tr><td valign="top"><a href="#start_cluster-4">start_cluster/4</a></td><td>Starts a new distributed ra cluster.</td></tr>
-<tr><td valign="top"><a href="#start_cluster-1">start_cluster/1</a></td><td>Same as <code>start_cluster/2</code> but uses the default Ra system.</td></tr>
 <tr><td valign="top"><a href="#start_cluster-2">start_cluster/2</a></td><td>Starts a new distributed ra cluster.</td></tr>
 <tr><td valign="top"><a href="#start_cluster-3">start_cluster/3</a></td><td>Same as <code>start_cluster/2</code> but accepts a custom timeout.</td></tr>
 <tr><td valign="top"><a href="#start_server-5">start_server/5</a></td><td>Starts an individual ra server of a cluster.</td></tr>
-<tr><td valign="top"><a href="#start_server-1">start_server/1</a></td><td>Starts a ra server in the default system.</td></tr>
 <tr><td valign="top"><a href="#start_server-2">start_server/2</a></td><td>Starts a ra server.</td></tr>
 <tr><td valign="top"><a href="#delete_cluster-1">delete_cluster/1</a></td><td>Deletes a ra cluster in an orderly fashion.</td></tr>
 <tr><td valign="top"><a href="#delete_cluster-2">delete_cluster/2</a></td><td>Same as <code>delete_cluster/1</code> but also accepts a timeout.</td></tr>
@@ -107,8 +104,6 @@ evaluated.</p>
 <tr><td valign="top"><a href="#leave_and_delete_server-4">leave_and_delete_server/4</a></td><td>Same as <code>leave_and_delete_server/3</code> but also accepts a timeout.</td></tr>
 <tr><td valign="top"><a href="#new_uid-1">new_uid/1</a></td><td>generates a random uid using the provided source material for the first
   6 characters.</td></tr>
-<tr><td valign="top"><a href="#overview-0">overview/0</a></td><td>Returns a map of overview data of the default Ra system on the current Erlang
-  node.</td></tr>
 <tr><td valign="top"><a href="#overview-1">overview/1</a></td><td>Returns a map of overview data of the Ra system on the current Erlang
   node.</td></tr>
 <tr><td valign="top"><a href="#process_command-3">process_command/3</a></td><td>Submits a command to a ra server.</td></tr>
@@ -127,20 +122,23 @@ options.</td></tr>
 options.</td></tr>
 <tr><td valign="top"><a href="#consistent_query-2">consistent_query/2</a></td><td>Query the state machine with a consistency guarantee.</td></tr>
 <tr><td valign="top"><a href="#consistent_query-3">consistent_query/3</a></td><td>Same as <code>consistent_query/2</code> but accepts a custom timeout.</td></tr>
+<tr><td valign="top"><a href="#consistent_aux-3">consistent_aux/3</a></td><td>Similar to <code>consistent_query/3</code> but will process an aux command
+  after consensus has been achieved.</td></tr>
 <tr><td valign="top"><a href="#members-1">members/1</a></td><td>Returns a list of cluster members.</td></tr>
 <tr><td valign="top"><a href="#members-2">members/2</a></td><td>Returns a list of cluster members.</td></tr>
 <tr><td valign="top"><a href="#members_info-1">members_info/1</a></td><td>Returns a list of cluster members and their Raft metrics.</td></tr>
 <tr><td valign="top"><a href="#members_info-2">members_info/2</a></td><td>Returns a list of cluster members and their Raft metrics.</td></tr>
 <tr><td valign="top"><a href="#initial_members-1">initial_members/1</a></td><td>Returns a list of initial (seed) cluster members.</td></tr>
 <tr><td valign="top"><a href="#initial_members-2">initial_members/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#transfer_leadership-2">transfer_leadership/2</a></td><td>Transfers leadership from the leader to a follower.</td></tr>
+<tr><td valign="top"><a href="#transfer_leadership-2">transfer_leadership/2</a></td><td>Transfers leadership from the leader to a voter follower.</td></tr>
 <tr><td valign="top"><a href="#aux_command-2">aux_command/2</a></td><td>Executes (using a call) an auxiliary command that the state machine can handle.</td></tr>
+<tr><td valign="top"><a href="#aux_command-3">aux_command/3</a></td><td>Executes (using a call) an auxiliary command that the state machine can handle.</td></tr>
 <tr><td valign="top"><a href="#cast_aux_command-2">cast_aux_command/2</a></td><td>Executes (using a cast) an auxiliary command that the state machine can handle.</td></tr>
-<tr><td valign="top"><a href="#register_external_log_reader-1">register_external_log_reader/1</a></td><td>Registers an external log reader.</td></tr>
 <tr><td valign="top"><a href="#member_overview-1">member_overview/1</a></td><td>Returns a overview map of the internal server state.</td></tr>
 <tr><td valign="top"><a href="#member_overview-2">member_overview/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#key_metrics-1">key_metrics/1</a></td><td>Returns a map of key metrics about a Ra member.</td></tr>
 <tr><td valign="top"><a href="#key_metrics-2">key_metrics/2</a></td><td>Returns a map of key metrics about a Ra member.</td></tr>
+<tr><td valign="top"><a href="#trigger_compaction-1">trigger_compaction/1</a></td><td>Potentially triggers a major compaction for the provided member.</td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -170,17 +168,6 @@ options.</td></tr>
   The same as ra:start([{data_dir, dir}])
   If the application is running it will be stopped and restarted.</p>
 
-<h3 class="function"><a name="restart_server-1">restart_server/1</a></h3>
-<div class="spec">
-<p><pre>restart_server(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt; ok | {error, term()}</pre></p>
-<p><code>ServerId</code>: the ra_server_id() of the server<br>
-</p>
-<p>returns: <code>{ok | error, Error}</code> where error can be
-  <code>not_found</code>, <code>system_not_started</code> or <code>name_not_registered</code> when the
-  ra server has never before been started on the Erlang node.
-  DEPRECATED: use restart_server/2</p>
-</div><p>Restarts a previously successfully started ra server in the default system</p>
-
 <h3 class="function"><a name="restart_server-2">restart_server/2</a></h3>
 <div class="spec">
 <p><pre>restart_server(System :: atom(), ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
@@ -208,16 +195,6 @@ options.</td></tr>
   <code>not_found</code> or <code>name_not_registered</code> when the ra server has never before
   been started on the Erlang node.</p>
 </div><p>Restarts a previously successfully started ra server</p>
-
-<h3 class="function"><a name="stop_server-1">stop_server/1</a></h3>
-<div class="spec">
-<p><pre>stop_server(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
-               ok | {error, nodedown | system_not_started}</pre></p>
-<p><code>ServerId</code>: the ra_server_id() of the server<br>
-</p>
-<p>returns: <code>{ok | error, nodedown}</code>
-  DEPRECATED: use stop_server/2</p>
-</div><p>Stops a ra server in the default system</p>
 
 <h3 class="function"><a name="stop_server-2">stop_server/2</a></h3>
 <div class="spec">
@@ -321,16 +298,6 @@ options.</td></tr>
 </div><p>Starts a new distributed ra cluster.
  </p>
 
-<h3 class="function"><a name="start_cluster-1">start_cluster/1</a></h3>
-<div class="spec">
-<p><pre>start_cluster(ServerConfigs :: [<a href="ra_server.html#type-ra_server_config" docgen-rel="seetype" docgen-href="ra_server#ra_server_config/0">ra_server:ra_server_config()</a>]) -&gt;
-                 {ok, [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>], [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>]} |
-                 {error, cluster_not_formed}</pre></p>
-<p><code>ServerConfigs</code>: a list of initial server configurations
-  DEPRECATED: use start_cluster/2<br>
-</p>
-</div><p>Same as <code>start_cluster/2</code> but uses the default Ra system.</p>
-
 <h3 class="function"><a name="start_cluster-2">start_cluster/2</a></h3>
 <div class="spec">
 <p><pre>start_cluster(System :: atom(),
@@ -380,16 +347,6 @@ options.</td></tr>
 <p>returns: <code>ok</code>  if the server could be successfully started or <code>{error, Reason}</code> otherwise.</p>
 </div><p>Starts an individual ra server of a cluster.</p>
 <p><b>See also:</b> <a href="#start_server-2" docgen-rel="seemfa" docgen-href="#start_server/2">start_server/2</a>.</p>
-
-<h3 class="function"><a name="start_server-1">start_server/1</a></h3>
-<div class="spec">
-<p><pre>start_server(Conf :: <a href="ra_server.html#type-ra_server_config" docgen-rel="seetype" docgen-href="ra_server#ra_server_config/0">ra_server:ra_server_config()</a>) -&gt;
-                ok | {error, term()}</pre></p>
-<p><code>Conf</code>: a ra_server_config() configuration map.<br>
-</p>
-<p>returns: <code>{ok | error, Error}</code>
-  DEPRECATED: use start_server/2</p>
-</div><p>Starts a ra server in the default system</p>
 
 <h3 class="function"><a name="start_server-2">start_server/2</a></h3>
 <div class="spec">
@@ -578,14 +535,6 @@ command to the log.</p>
 <p> </p>
 </div><p>generates a random uid using the provided source material for the first
   6 characters.</p>
-
-<h3 class="function"><a name="overview-0">overview/0</a></h3>
-<div class="spec">
-<p><pre>overview() -&gt; map() | system_not_started</pre></p>
-<p> </p>
-</div><p>Returns a map of overview data of the default Ra system on the current Erlang
-  node.
-  DEPRECATED: use overview/1</p>
 
 <h3 class="function"><a name="overview-1">overview/1</a></h3>
 <div class="spec">
@@ -784,7 +733,7 @@ options.</p>
 <h3 class="function"><a name="leader_query-2">leader_query/2</a></h3>
 <div class="spec">
 <p><pre>leader_query(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
-             QueryFun :: <a href="#type-query_fun" docgen-rel="seetype" docgen-href="#query_fun/0">query_fun()</a>) -&gt;
+             QueryFun :: <a href="#type-query_mfa" docgen-rel="seetype" docgen-href="#query_mfa/0">query_mfa()</a>) -&gt;
                 <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>,
                                                    Reply :: term()}) |
                 {ok, {<a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>, Reply :: term()}, not_known}</pre></p>
@@ -801,7 +750,7 @@ options.</p>
 <h3 class="function"><a name="leader_query-3">leader_query/3</a></h3>
 <div class="spec">
 <p><pre>leader_query(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
-             QueryFun :: <a href="#type-query_fun" docgen-rel="seetype" docgen-href="#query_fun/0">query_fun()</a>,
+             QueryFun :: <a href="#type-query_mfa" docgen-rel="seetype" docgen-href="#query_mfa/0">query_mfa()</a>,
              TimeoutOrOptions) -&gt;
                 <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>({<a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>,
                                                    Reply :: term()}) |
@@ -827,11 +776,10 @@ options.</p>
 <h3 class="function"><a name="consistent_query-2">consistent_query/2</a></h3>
 <div class="spec">
 <p><pre>consistent_query(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
-                 QueryFun :: <a href="#type-query_fun" docgen-rel="seetype" docgen-href="#query_fun/0">query_fun()</a>) -&gt;
+                 QueryMFA :: <a href="#type-query_mfa" docgen-rel="seetype" docgen-href="#query_mfa/0">query_mfa()</a>) -&gt;
                     <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>(Reply ::
                                                           term())</pre></p>
 <p><code>ServerId</code>: the ra server id(s) to send the query to<br>
-<code>QueryFun</code>: the query function to run<br>
 </p>
 </div><p>Query the state machine with a consistency guarantee.
   This allows the caller to query the state machine on the leader node with
@@ -843,15 +791,28 @@ options.</p>
 <h3 class="function"><a name="consistent_query-3">consistent_query/3</a></h3>
 <div class="spec">
 <p><pre>consistent_query(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
-                 QueryFun :: <a href="#type-query_fun" docgen-rel="seetype" docgen-href="#query_fun/0">query_fun()</a>,
+                 QueryMFA :: <a href="#type-query_mfa" docgen-rel="seetype" docgen-href="#query_mfa/0">query_mfa()</a>,
                  Timeout :: timeout()) -&gt;
                     <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>(Reply ::
                                                           term())</pre></p>
 <p><code>ServerId</code>: the ra server id(s) to send the query to<br>
-<code>QueryFun</code>: the query function to run<br>
 <code>Timeout</code>: the timeout to use<br>
 </p>
 </div><p>Same as <code>consistent_query/2</code> but accepts a custom timeout.</p>
+<p><b>See also:</b> <a href="#consistent_query-2" docgen-rel="seemfa" docgen-href="#consistent_query/2">consistent_query/2</a>.</p>
+
+<h3 class="function"><a name="consistent_aux-3">consistent_aux/3</a></h3>
+<div class="spec">
+<p><pre>consistent_aux(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a> | [<a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>],
+               AuxCmd :: term(),
+               Timeout :: timeout()) -&gt;
+                  <a href="ra_server_proc.html#type-ra_leader_call_ret" docgen-rel="seetype" docgen-href="ra_server_proc#ra_leader_call_ret/0">ra_server_proc:ra_leader_call_ret</a>(Reply ::
+                                                        term())</pre></p>
+<p><code>ServerId</code>: the ra server id(s) to try to send the query to in order<br>
+<code>Timeout</code>: the timeout to use<br>
+</p>
+</div><p>Similar to <code>consistent_query/3</code> but will process an aux command
+  after consensus has been achieved.</p>
 <p><b>See also:</b> <a href="#consistent_query-2" docgen-rel="seemfa" docgen-href="#consistent_query/2">consistent_query/2</a>.</p>
 
 <h3 class="function"><a name="members-1">members/1</a></h3>
@@ -969,12 +930,23 @@ timeout if there is currently no leader (i.e. an election is in progress).</p>
                        {error, term()} |
                        {timeout, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>}</pre></p>
 <p> </p>
-</div><p>Transfers leadership from the leader to a follower.
-  Returns <code>already_leader</code> if the transfer target is already the leader.</p>
+</div><p>Transfers leadership from the leader to a voter follower.
+  Returns <code>already_leader</code> if the transfer target is already the leader.
+  Leadership cannot be transferred to non-voters.</p>
 
 <h3 class="function"><a name="aux_command-2">aux_command/2</a></h3>
 <div class="spec">
 <p><pre>aux_command(ServerRef :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>, Cmd :: term()) -&gt; term()</pre></p>
+<p> </p>
+</div><p>Executes (using a call) an auxiliary command that the state machine can handle.
+ </p>
+
+<h3 class="function"><a name="aux_command-3">aux_command/3</a></h3>
+<div class="spec">
+<p><pre>aux_command(ServerRef :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
+            Cmd :: term(),
+            Timeout :: timeout()) -&gt;
+               term()</pre></p>
 <p> </p>
 </div><p>Executes (using a call) an auxiliary command that the state machine can handle.
  </p>
@@ -985,16 +957,6 @@ timeout if there is currently no leader (i.e. an election is in progress).</p>
 <p> </p>
 </div><p>Executes (using a cast) an auxiliary command that the state machine can handle.
  </p>
-
-<h3 class="function"><a name="register_external_log_reader-1">register_external_log_reader/1</a></h3>
-<div class="spec">
-<p><pre>register_external_log_reader(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt;
-                                <a href="ra_log_reader.html#type-state" docgen-rel="seetype" docgen-href="ra_log_reader#state/0">ra_log_reader:state()</a></pre></p>
-<p> </p>
-</div><p>Registers an external log reader. ServerId needs to be local to the node.
-  Returns an initiated ra_log_reader:state() state.
-  Deprecated. Now only reads log data stored in segments, not log data
-  in mem tables.</p>
 
 <h3 class="function"><a name="member_overview-1">member_overview/1</a></h3>
 <div class="spec">
@@ -1038,6 +1000,12 @@ timeout if there is currently no leader (i.e. an election is in progress).</p>
   Ra process itself so is likely to return swiftly even
   when the Ra process is busy (such as when it is recovering)
  </p>
+
+<h3 class="function"><a name="trigger_compaction-1">trigger_compaction/1</a></h3>
+<div class="spec">
+<p><pre>trigger_compaction(ServerRef :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>) -&gt; ok</pre></p>
+<p> </p>
+</div><p>Potentially triggers a major compaction for the provided member</p>
 <hr>
 
 <div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
