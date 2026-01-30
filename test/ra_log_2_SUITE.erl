@@ -73,6 +73,7 @@ all_tests() ->
      sparse_read,
      read_plan_modified,
      read_plan,
+     read_plan_missing_index,
      sparse_read_out_of_range,
      sparse_read_out_of_range_2,
      written_event_after_snapshot,
@@ -584,6 +585,28 @@ read_plan(Config) ->
     ?assertEqual(length(Indexes), maps:size(EntriesOut)),
     %% assert the indexes requestd were all returned in order
     [] = Indexes -- [I || I <- maps:keys(EntriesOut)],
+    ok.
+
+read_plan_missing_index(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_and_roll(1, 500, 1, Log0, 50),
+    Log2 = deliver_all_log_events(Log1, 100),
+    {Log3, Effs} = ra_log:update_release_cursor(300, #{}, macctx(),
+                                                [1, 299], Log2),
+    ct:pal("Effs ~p", [Effs]),
+    run_effs(Effs),
+
+    Log4 = assert_log_events(Log3,
+                             fun (L) ->
+                                     #{snapshot_index := SnapIdx} = ra_log:overview(L),
+                                     SnapIdx == 300
+                             end),
+    timer:sleep(100),
+    flush(),
+    ReadPlan = ra_log:partial_read([128, 301], Log4, fun (_, _, Cmd) -> Cmd end),
+    ?assert(is_map(ra_log_read_plan:info(ReadPlan))),
+    ct:pal("ReadPlan ~p", [ReadPlan]),
+    {Entries, _} = ra_log_read_plan:execute(ReadPlan, undefined),
     ok.
 
 written_event_after_snapshot(Config) ->

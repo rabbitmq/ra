@@ -212,6 +212,7 @@ setup_log() ->
                 end),
     meck:expect(ra_log, write_config, fun ra_log_memory:write_config/2),
     meck:expect(ra_log, next_index, fun ra_log_memory:next_index/1),
+    meck:expect(ra_log, has_pending, fun (_) -> false end),
     meck:expect(ra_log, append, fun ra_log_memory:append/2),
     meck:expect(ra_log, write, fun ra_log_memory:write/2),
     meck:expect(ra_log, write_sparse, fun ra_log_memory:write_sparse/3),

@@ -45,6 +45,7 @@
 
          can_write/1,
          exists/2,
+         has_pending/1,
          overview/1,
          %% config
          write_config/2,
@@ -1386,6 +1387,12 @@ exists({Idx, Term}, Log0) ->
     end.
 
 -spec overview(state()) -> overview().
+-spec has_pending(state()) -> boolean().
+has_pending(#?MODULE{pending = []}) ->
+    false;
+has_pending(#?MODULE{}) ->
+    true.
+
 overview(#?MODULE{range = Range,
                   last_term = LastTerm,
                   last_written_index_term = LWIT,
