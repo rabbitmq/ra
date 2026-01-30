@@ -196,6 +196,7 @@ returned by the state machine unless specific effect provide the `local` option.
 | `{log, [ra_index()], fun(([user_command()]) -> effects()), {local, node()}}` | on member local to `node()` else leader |
 | `{log_ext, [ra_index()], fun(([ra_log:read_plan()]) -> effects()), {local, node()}}` | on member local to `node()` else leader |
 | `{release_cursor \| checkpoint, ra_index(), term()}` | all members |
+| `{release_cursor, ra_index(), term(), Options}` | all members |
 | `{aux, term()}` | every member |
 
 
@@ -286,6 +287,37 @@ This effect, when emitted, is evaluated on all nodes and not just the leader.
 It is not guaranteed that a snapshot will be taken. A decision to take
 a snapshot or to delay it is taken using a number of internal Ra state factors.
 The goal is to minimise disk I/O activity when possible.
+
+#### Conditional Release Cursors
+
+The `{release_cursor, RaftIndex, MachineState, Options}` 4-tuple variant
+allows specifying conditions that must be met before the snapshot is taken.
+This is useful when the machine state references log entries that may not
+yet be fully persisted to disk.
+
+Options is a map that can contain:
+
+* `#{condition => [Condition]}` - a list of conditions that must all be true
+
+Supported conditions:
+
+* `{written, RaftIndex}` - wait until the specified index has been written
+  to disk (i.e., `last_written >= RaftIndex`). This is useful when the machine
+  has "live indexes" - references to log entries that are still in the WAL
+  and haven't been flushed to segments yet.
+
+* `no_snapshot_sends` - wait until no peers are currently receiving snapshots
+  (i.e., no peer has `sending_snapshot` status). This prevents taking a new
+  snapshot while the current one is being replicated to followers.
+
+Example:
+
+```erlang
+apply(#{index := Idx}, _Cmd, State) ->
+    %% Only delay snapshot if there are live indexes
+    Opts = #{condition => [{written, Idx}]},
+    {State, ok, [{release_cursor, Idx, State, Opts}]}.
+```
 
 ### Checkpointing
 

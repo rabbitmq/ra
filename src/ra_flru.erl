@@ -16,7 +16,8 @@
          insert/3,
          evict/2,
          evict_all/1,
-         size/1
+         size/1,
+         max_size/1
          ]).
 
 -define(MAX_SIZE, 5).
@@ -90,6 +91,10 @@ evict_all(#?MODULE{items = Items,
 -spec size(state()) -> non_neg_integer().
 size(#?MODULE{items = Items}) ->
     length(Items).
+
+-spec max_size(state()) -> non_neg_integer().
+max_size(#?MODULE{max_size = MaxSize}) ->
+    MaxSize.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

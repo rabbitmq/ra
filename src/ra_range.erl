@@ -11,19 +11,28 @@
          new/1,
          new/2,
          add/2,
+         combine/2,
          in/2,
          extend/2,
          limit/2,
          truncate/2,
          size/1,
          overlap/2,
-         subtract/2
+         subtract/2,
+         fold/3
         ]).
 
 
 -type range() :: undefined | {ra:index(), ra:index()}.
 
 -export_type([range/0]).
+
+-define(IS_RANGE(R), ((is_tuple(R) andalso
+                       tuple_size(R) == 2 andalso
+                       is_integer(element(1, R)) andalso
+                       is_integer(element(2, R))) orelse
+                      R == undefined)).
+
 
 -spec new(ra:index()) -> range().
 new(Start) when is_integer(Start) ->
@@ -35,7 +44,9 @@ new(Start, End)
        is_integer(End) andalso
        Start =< End ->
     {Start, End};
-new(_Start, _End) ->
+new(Start, End)
+  when is_integer(Start) andalso
+       is_integer(End) ->
     undefined.
 
 -spec add(AddRange :: range(), CurRange :: range()) -> range().
@@ -47,6 +58,15 @@ add({AddStart, AddEnd}, {Start, End})
     {min(AddStart, Start), max(AddEnd, End)};
 add(AddRange, _Range) ->
     %% no overlap, return add range
+    AddRange.
+
+-spec combine(AddRange :: range(), CurRange :: range()) -> range().
+combine(undefined, Range) ->
+    Range;
+combine({AddStart, AddEnd}, {Start, End}) ->
+    {min(AddStart, Start), max(AddEnd, End)};
+combine(AddRange, _Range) ->
+    %% no overlap, return combine range
     AddRange.
 
 -spec in(ra:index(), range()) -> boolean().
@@ -71,14 +91,17 @@ limit(CeilExcl, Range)
 -spec truncate(ra:index(), range()) -> range().
 truncate(UpToIncl, {_Start, End})
   when is_integer(UpToIncl) andalso
+       is_integer(End) andalso
        UpToIncl >= End ->
     undefined;
 truncate(UpToIncl, {Start, End})
   when is_integer(UpToIncl) andalso
+       is_integer(Start) andalso
        UpToIncl >= Start ->
     {UpToIncl + 1, End};
 truncate(UpToIncl, Range)
-  when is_integer(UpToIncl) ->
+  when is_integer(UpToIncl) andalso
+       ?IS_RANGE(Range) ->
     Range.
 
 size(undefined) ->
@@ -119,6 +142,19 @@ subtract({_SubStart, _SubEnd} = SubRange, {Start, End} = Range) ->
                                  new(OEnd + 1, End)]]
     end.
 
+-spec fold(range(), fun((ra:index(), Acc) -> Acc), Acc) ->
+    Acc when Acc :: term().
+fold(undefined, _Fun, Acc) ->
+    Acc;
+fold({S, E}, Fun, Acc) ->
+    fold0(S, E, Fun, Acc).
+
+%% internals
+
+fold0(S, S, Fun, Acc) ->
+    Fun(S, Acc);
+fold0(S, E, Fun, Acc) ->
+    fold0(S+1, E, Fun, Fun(S, Acc)).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -194,6 +230,11 @@ extend_test() ->
     ?assertEqual({1, 11}, extend(11, {1, 10})),
     ?assertError({cannot_extend, 1, {5, 10}}, extend(1, {5, 10})),
     ?assertError({cannot_extend, 12, {1, 10}}, extend(12, {1, 10})),
+    ok.
+
+fold_test() ->
+    ?assertEqual([4,3,2,1], fold({1, 4}, fun ra_lib:cons/2, [])),
+    ?assertEqual([], fold(undefined, fun ra_lib:cons/2, [])),
     ok.
 
 -endif.

@@ -48,6 +48,7 @@ all_tests() ->
      aux_eval,
      aux_tick,
      aux_handler_not_impl,
+     consistent_aux,
      aux_command,
      aux_command_v2,
      aux_command_v1_and_v2,
@@ -396,7 +397,8 @@ meta_data(Config) ->
                             end),
     ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),
-    T = os:system_time(millisecond),
+    T = erlang:system_time(millisecond),
+    timer:sleep(100),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     {ok, {metadata, Idx, Term, Ts}, ServerId} =
         ra:process_command(ServerId, any_command),
@@ -562,9 +564,14 @@ timer_effect(Config) ->
     Self = self(),
     meck:new(Mod, [non_strict]),
     meck:expect(Mod, init, fun (_) -> the_state end),
-    meck:expect(Mod, apply, fun (_, {cmd, Name}, State) ->
+    meck:expect(Mod, apply, fun
+                                (_, {cmd, Name}, State) ->
                                     %% timer for 1s
                                     {State, ok, {timer, Name, 1000}};
+                                (#{system_time := Ts}, {cmd2, Name}, State) ->
+                                    %% timer for 1s
+                                    {State, ok, {timer, Name, Ts + 1000,
+                                                 {abs, true}}};
                                 (_, {timeout, Name}, State) ->
                                     {State, ok, {send_msg, Self, {got_timeout, Name}}}
                             end),
@@ -574,7 +581,7 @@ timer_effect(Config) ->
     T0 = os:system_time(millisecond),
     {ok, _, ServerId} = ra:process_command(ServerId, {cmd, one}),
     timer:sleep(500),
-    {ok, _, ServerId} = ra:process_command(ServerId, {cmd, two}),
+    {ok, _, ServerId} = ra:process_command(ServerId, {cmd2, two}),
     receive
         {got_timeout, one} ->
             T = os:system_time(millisecond),
@@ -610,6 +617,7 @@ log_effect(Config) ->
                                     {[], ok,
                                      {log, lists:reverse(Idxs),
                                       fun (Cmds) ->
+                                              ct:pal("LOG!!"),
                                               Datas = [D || {_, D} <- Cmds],
                                               %% using a plain send here to
                                               %% ensure this effect is only
@@ -663,6 +671,50 @@ aux_handler_not_impl(Config) ->
     ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
     {ok, _, Leader} = ra:members(ServerId1),
     {error, aux_handler_not_implemented} = ra:aux_command(Leader, emit),
+    ok.
+
+consistent_aux(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+    Cluster = [ServerId1, ServerId2, ServerId3],
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> [] end),
+    meck:expect(Mod, init_aux, fun (_) -> undefined end),
+    meck:expect(Mod, apply,
+                fun
+                    (_, Cmd, State) ->
+                        ct:pal("handling ~p", [Cmd]),
+                        %% handle all
+                        {State, ok}
+                end),
+    meck:expect(Mod, handle_aux,
+                fun
+                    (RaftState, {call, _From}, emit, AuxState, Opaque) ->
+                        %% emits aux state
+                        {reply, {RaftState, AuxState}, AuxState, Opaque};
+                    (_RaftState, {call, _From}, banana, AuxState, Opaque) ->
+                        %% emits aux state
+                        {reply, banana, AuxState, Opaque};
+                    (_RaftState, cast, eval, AuxState, Opaque) ->
+                        %% replaces aux state
+                        {no_reply, AuxState, Opaque};
+                    (_RaftState, cast, NewState, _AuxState, Opaque) ->
+                        %% replaces aux state
+                        {no_reply, NewState, Opaque}
+                end),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    timer:sleep(100),
+    {ok, banana, _} = ra:consistent_aux(ServerId1, banana, 500),
+    ra:stop_server(?SYS, ServerId2),
+    {ok, banana, _} = ra:consistent_aux(ServerId1, banana, 500),
+    ra:stop_server(?SYS, ServerId3),
+    {timeout, ServerId1} = ra:consistent_aux(ServerId1, banana, 500),
+    ra:restart_server(?SYS, ServerId2),
+    ra:restart_server(?SYS, ServerId3),
+    ra:delete_cluster(Cluster),
     ok.
 
 aux_command(Config) ->

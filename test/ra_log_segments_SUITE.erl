@@ -1,0 +1,982 @@
+%% This Source Code Form is subject to the terms of the Mozilla Public
+%% License, v. 2.0. If a copy of the MPL was not distributed with this
+%% file, You can obtain one at https://mozilla.org/MPL/2.0/.
+%%
+%% Copyright (c) 2017-2025 Broadcom. All Rights Reserved. The term Broadcom
+%% refers to Broadcom Inc. and/or its subsidiaries.
+-module(ra_log_segments_SUITE).
+
+-compile(nowarn_export_all).
+-compile(export_all).
+
+-include("src/ra.hrl").
+-include_lib("common_test/include/ct.hrl").
+-include_lib("eunit/include/eunit.hrl").
+-include_lib("kernel/include/file.hrl").
+
+%% common ra_log tests to ensure behaviour is equivalent across
+%% ra_log backends
+
+all() ->
+    [
+     {group, tests}
+    ].
+
+all_tests() ->
+    [
+     recover1,
+     recover2,
+     recover3,
+     recover4,
+     compactions_are_not_triggered_concurrently,
+     basics,
+     major,
+     major_max_size,
+     major_max_size_2,
+     minor,
+     overwrite,
+     result_after_segments,
+     result_after_segments_overwrite,
+     major_strategy_num_minors,
+     major_deletes_orphaned_segments
+    ].
+
+groups() ->
+    [
+     {tests, [], all_tests()}
+    ].
+
+init_per_testcase(TestCase, Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    Dir = filename:join(PrivDir, TestCase),
+    ok = ra_lib:make_dir(Dir),
+    CompConf = #{max_count => 128,
+                 max_size => 128_000},
+    ra_counters:init(),
+    [{uid, atom_to_binary(TestCase, utf8)},
+     {comp_conf, CompConf},
+     {test_case, TestCase},
+     {dir, Dir} | Config].
+
+end_per_testcase(_, Config) ->
+    Config.
+
+%% TESTS
+
+result_after_segments(Config) ->
+    Dir = ?config(dir, Config),
+    LiveList = lists:seq(1, 128 * 3, 8),
+    Live = ra_seq:from_list(LiveList),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 128 * 3)},
+     {major, 128 * 3, Live},
+     {entries, 1, lists:seq(128 * 3, 128 * 4)},
+     handle_compaction_result,
+     {assert, 1, LiveList},
+     {assert, 1, lists:seq(128 * 3, 128 * 4)},
+     {assert, fun (S) ->
+                      ct:pal("seg refs ~p", [ra_log_segments:segment_refs(S)]),
+                      true
+              end}
+    ],
+    SegConf = #{max_count => 128},
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+    ct:pal("infos ~p", [infos(Dir)]),
+    ok.
+
+result_after_segments_overwrite(Config) ->
+    Dir = ?config(dir, Config),
+    LiveList = lists:seq(1, 128 * 2, 8),
+    Live = ra_seq:from_list(LiveList),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 128 * 3)},
+     {major, 128 * 3, Live},
+     {entries, 2, lists:seq(128 * 2, 128 * 4)},
+     handle_compaction_result,
+     {print, "1"},
+     {assert, 1, ra_seq:expand(ra_seq:limit(128 * 2, Live))},
+     {assert, 2, lists:seq(128 * 2, 128 * 3)},
+     {print, "2"},
+     {assert, fun (S) ->
+                      ct:pal("seg refs ~p", [ra_log_segments:segment_refs(S)]),
+                      true
+              end},
+     {assert, 2, lists:seq(128 * 3, 128 * 4)}
+    ],
+    SegConf = #{max_count => 128},
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+    ct:pal("infos ~p", [infos(Dir)]),
+    ok.
+
+recover1(Config) ->
+    %% major compactions can be interrupted at a variety of points and each
+    %% needs to be handled carefully to ensure the log isn't incorrectly
+    %% recovered
+
+    %% There is a .compacting file in the segments directory
+    %% 1. Compaction stopped before the compacting segment got renamed to
+    %% the lowest numbered segments.
+    %% 2. Compaction stopped before or during additional segments in the group
+    %% where linked (.compacting link count > 1)
+
+    Dir = ?config(dir, Config),
+    CompactionGroupFn = filename:join(Dir, <<"0000000000000001.compaction_group">>),
+    SegmentFn = <<"0000000000000001.segment">>,
+    CompactingFn = filename:join(Dir, <<"0000000000000001.compacting">>),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 128 * 4)},
+     {assert, fun (_) ->
+                      Group = term_to_binary([SegmentFn]),
+                      ok = ra_lib:write_file(CompactionGroupFn, Group),
+                      ok = ra_lib:write_file(CompactingFn, <<>>),
+                      true
+              end},
+     reinit,
+     {assert, fun (_) ->
+                      %% compaction groups and compacting files should be removed
+                      not filelib:is_file(CompactionGroupFn) andalso
+                      not filelib:is_file(CompactingFn)
+              end},
+     {assert, fun (_) ->
+                      %% only compaction_group case
+                      Group = term_to_binary([SegmentFn]),
+                      ok = ra_lib:write_file(CompactionGroupFn, Group),
+                      true
+              end},
+     reinit,
+     {assert, fun (_) ->
+                      %% compaction groups and compacting files should be removed
+                      not filelib:is_file(CompactionGroupFn) andalso
+                      not filelib:is_file(CompactingFn)
+              end},
+     {assert, fun (_) ->
+                      %% partially written compaction_group file case
+                      ok = ra_lib:write_file(CompactionGroupFn, <<"banana">>),
+                      true
+              end},
+     reinit,
+     {assert, fun (_) ->
+                      %% compaction groups and compacting files should be removed
+                      not filelib:is_file(CompactionGroupFn) andalso
+                      not filelib:is_file(CompactingFn)
+              end}
+    ],
+    SegConf = #{max_count => 128},
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+    ok.
+
+recover2(Config) ->
+    %% Test recovery when rename completed but only some symlinks were created.
+    %% With the new order (rename first, then symlinks), recovery should
+    %% complete by recreating all symlinks.
+    Dir = ?config(dir, Config),
+    LiveList = lists:seq(1, 128 * 3, 8),
+    Live = ra_seq:from_list(LiveList),
+    CompactionGroupFn = filename:join(Dir, <<"0000000000000001.compaction_group">>),
+    CompactingFn = filename:join(Dir, <<"0000000000000001.compacting">>),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 128 * 4)},
+     {assert, fun (_) ->
+                      %% compactable segrefs
+                      SegRefs = lists:reverse(tl(seg_refs(Dir))),
+                      Segments = [F || {F, _} <- SegRefs],
+                      %% write compaction_group file
+                      ok = ra_lib:write_file(CompactionGroupFn,
+                                             term_to_binary(Segments)),
+                      do_compaction(Dir, CompactingFn, Live, SegRefs),
+
+                      [{FstFn, _}, {SndFn, _}, {_ThrFn, _}] = SegRefs,
+
+                      %% simulate new order: rename .compacting to target first
+                      FirstSegmentFn = filename:join(Dir, FstFn),
+                      ok = prim_file:rename(CompactingFn, FirstSegmentFn),
+
+                      %% create a .link for the second compacted segment
+                      %% and symlink it to the first segment in the compaction
+                      %% group
+                      SndLinkFn = filename:join(Dir, with_ext(SndFn, ".link")),
+                      ok = prim_file:make_symlink(FirstSegmentFn, SndLinkFn),
+
+                      %% rename the .link file on top of the .segment file
+                      SndSegFn = filename:join(Dir, SndFn),
+                      ok = prim_file:rename(SndLinkFn, SndSegFn),
+                      %% this simulates a case where it stopped after only
+                      %% creating 1 of the two symlinks (third segment not done)
+                      true
+            end},
+     reinit,
+     {assert, 1, LiveList},
+     {assert, fun (_) ->
+                      Infos = infos(Dir),
+                      ct:pal("Infos ~p", [Infos]),
+                      NumLinks = length([a || #{file_type := symlink} <- Infos]),
+                      %% .compacting already renamed, marker should be deleted
+                      %% and all symlinks should be recreated
+                      not filelib:is_file(CompactingFn) andalso
+                      not filelib:is_file(CompactionGroupFn) andalso
+                      NumLinks == 2
+              end},
+     {assert, 1, LiveList},
+     {assert, fun(S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      SegRefs == seg_refs(Dir)
+              end}
+    ],
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, #{max_count => 128}} | Config], Segs0, Scen),
+    ok.
+
+recover3(Config) ->
+    %% Test recovery when rename completed but symlink creation crashed mid-way
+    %% (only .link file exists, not yet renamed to .segment).
+    %% With the new order, recovery should complete by recreating all symlinks.
+    Dir = ?config(dir, Config),
+    LiveList = lists:seq(1, 128 * 3, 8),
+    Live = ra_seq:from_list(LiveList),
+    CompactionGroupFn = filename:join(Dir, <<"0000000000000001.compaction_group">>),
+    CompactingFn = filename:join(Dir, <<"0000000000000001.compacting">>),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 128 * 4)},
+     {assert, fun (_) ->
+                      %% compactable segrefs
+                      SegRefs = lists:reverse(tl(seg_refs(Dir))),
+                      Segments = [F || {F, _} <- SegRefs],
+                      %% write compaction_group file
+                      ok = ra_lib:write_file(CompactionGroupFn,
+                                             term_to_binary(Segments)),
+                      do_compaction(Dir, CompactingFn, Live, SegRefs),
+
+                      [{FstFn, _}, {SndFn, _}, {_ThrFn, _}] = SegRefs,
+
+                      %% simulate new order: rename .compacting to target first
+                      FirstSegmentFn = filename:join(Dir, FstFn),
+                      ok = prim_file:rename(CompactingFn, FirstSegmentFn),
+
+                      %% create a .link for the second compacted segment
+                      %% but don't rename it to .segment (simulates crash mid-symlink)
+                      SndLinkFn = filename:join(Dir, with_ext(SndFn, ".link")),
+                      ok = prim_file:make_symlink(FirstSegmentFn, SndLinkFn),
+                      true
+            end},
+     reinit,
+     {assert, 1, LiveList},
+     {assert, fun (_) ->
+                      Infos = infos(Dir),
+                      ct:pal("Infos ~p", [Infos]),
+                      NumLinks = length([a || #{file_type := symlink} <- Infos]),
+                      %% .compacting already renamed, marker should be deleted
+                      %% and all symlinks should be recreated
+                      not filelib:is_file(CompactingFn) andalso
+                      not filelib:is_file(CompactionGroupFn) andalso
+                      NumLinks == 2
+              end},
+     {assert, 1, LiveList},
+     {assert, fun(S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      SegRefs == seg_refs(Dir)
+              end}
+    ],
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, #{max_count => 128}} | Config], Segs0, Scen),
+    ok.
+
+recover4(Config) ->
+    %% Test recovery when .compacting still exists (rename didn't happen).
+    %% With the new order, this means compaction didn't complete and should
+    %% be aborted - .compacting and marker deleted, originals left intact.
+    Dir = ?config(dir, Config),
+    LiveList = lists:seq(1, 128 * 3, 8),
+    Live = ra_seq:from_list(LiveList),
+    CompactionGroupFn = filename:join(Dir, <<"0000000000000001.compaction_group">>),
+    CompactingFn = filename:join(Dir, <<"0000000000000001.compacting">>),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 128 * 4)},
+     {assert, fun (_) ->
+                      %% compactable segrefs
+                      SegRefs = lists:reverse(tl(seg_refs(Dir))),
+                      Segments = [F || {F, _} <- SegRefs],
+                      %% write compaction_group file
+                      ok = ra_lib:write_file(CompactionGroupFn,
+                                             term_to_binary(Segments)),
+                      do_compaction(Dir, CompactingFn, Live, SegRefs),
+                      %% .compacting file exists but rename didn't happen
+                      %% this simulates a crash before the rename step
+                      true
+            end},
+     reinit,
+     {assert, fun (_) ->
+                      Infos = infos(Dir),
+                      ct:pal("Infos ~p", [Infos]),
+                      NumLinks = length([a || #{file_type := symlink} <- Infos]),
+                      %% .compacting exists means rename didn't happen
+                      %% compaction should be aborted, no symlinks created
+                      not filelib:is_file(CompactingFn) andalso
+                      not filelib:is_file(CompactionGroupFn) andalso
+                      NumLinks == 0
+              end},
+     %% original data should still be readable
+     {assert, 1, lists:seq(1, 128 * 4)},
+     {assert, fun(S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      ct:pal("SegRefs ~p, ~p", [SegRefs, seg_refs(Dir)]),
+                      SegRefs == seg_refs(Dir)
+              end}
+    ],
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, #{max_count => 128}} | Config], Segs0, Scen),
+    ok.
+
+compactions_are_not_triggered_concurrently(Config) ->
+    %% creates 3 segments then a snapshot at the first index of the last segment
+    %% with live indexes only in the first segment.
+    Dir = ?config(dir, Config),
+    LiveList = lists:seq(1, 128, 5),
+    Live = ra_seq:from_list(LiveList),
+    ct:pal("Live ~p", [Live]),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 128 * 3)},
+     {assert, 1, lists:seq(1, 128 * 3)},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 3
+              end},
+     {major, 128 * 2, Live},
+     %% this compaction should be dropped
+     {major, 128 * 3, Live},
+     {assert,
+      fun (_S) ->
+              receive
+                  {ra_log_event, {compaction_result, _}} = Evt ->
+                      receive
+                          {ra_log_event, {compaction_result, Res}} ->
+                              ct:pal("unexpected second compaction result ~p", [Res]),
+                              false
+                      after 100 ->
+                                self() ! Evt,
+                                true
+                      end
+              after 1000 ->
+                        flush(),
+                        false
+              end
+      end},
+     handle_compaction_result,
+     {major, 128 * 3, Live},
+     handle_compaction_result
+    ],
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, #{max_count => 128}} | Config], Segs0, Scen),
+    ok.
+
+basics(Config) ->
+    %% creates 3 segments then a snapshot at the first index of the last segment
+    %% with live indexes only in the first segment.
+    Dir = ?config(dir, Config),
+    LiveList = lists:seq(1, 128, 5),
+    Live = ra_seq:from_list(LiveList),
+    ct:pal("Live ~p", [Live]),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 128 * 3)},
+     {assert, 1, lists:seq(1, 128 * 3)},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 3
+              end},
+     %% this compaction will delete 1 segment (segment 2)
+     {minor, 128 * 2, Live},
+     handle_compaction_result,
+     {assert, 1, LiveList},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 2
+              end},
+     %% this compaction will compact segment 1
+     {major, 128 * 2, Live},
+     handle_compaction_result,
+     reinit,
+     {assert, 1, LiveList},
+     {assert, fun (S) ->
+                      [#{num_entries := NumEntries} |_ ] = infos(Dir),
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 2 andalso
+                      ra_seq:length(Live) == NumEntries
+
+              end}
+    ],
+
+
+    SegConf = #{max_count => 128},
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+
+    ct:pal("infos ~p", [infos(Dir)]),
+    ok.
+
+minor(Config) ->
+    LiveList = [1 | lists:seq(257, 500, 10)],
+    Live = ra_seq:from_list(LiveList),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 500)},
+     {assert, 1, lists:seq(1, 500)},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 4
+              end},
+     {minor, 500, Live},
+     handle_compaction_result,
+     {assert, 1, LiveList},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 3
+              end},
+     reinit,
+     {assert, 1, LiveList},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 3
+              end},
+
+     %% simulate a purge command
+     {entries, 1, [501]},
+     {minor, 501, []},
+     handle_compaction_result,
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 1
+              end}
+    ],
+
+    SegConf = #{max_count => 128},
+    Dir = ?config(dir, Config),
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+
+    ok.
+
+overwrite(Config) ->
+    Live = ra_seq:from_list(lists:seq(1, 600, 10)),
+    Scen =
+    [
+     {entries, 1, lists:seq(1, 500)},
+     {entries, 2, lists:seq(200, 700)},
+     reinit,
+     {assert, 1, lists:seq(1, 200, 10)},
+     {assert, 2, lists:seq(201, 700, 10)},
+     {minor, 600, Live},
+     handle_compaction_result,
+     {major, 600, Live},
+     {assert, 1, lists:seq(1, 200, 10)},
+     {assert, 2, lists:seq(201, 700, 10)},
+     handle_compaction_result,
+     {assert, 1, lists:seq(1, 200, 10)},
+     {assert, 2, lists:seq(201, 700, 10)}
+    ],
+
+    SegConf = #{max_count => 128},
+    Dir = ?config(dir, Config),
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+    ok.
+
+major_max_size_2(Config) ->
+    %% this test could compact 3 segemtns into one just based on entry counts
+    %% however the max_size configuration needs to be taken into account
+    %% with the compaction grouping and not create an oversized taget segment
+    Dir = ?config(dir, Config),
+    Data1 = crypto:strong_rand_bytes(1000),
+    Data2 = crypto:strong_rand_bytes(2000),
+    Entries1 = [{I, 1, term_to_binary(Data1)}
+               || I <- lists:seq(1, 64)],
+    Entries2 = [{I, 1, term_to_binary(Data2)}
+               || I <- lists:seq(65, 130)],
+    %% only the smaller entries are still live
+    LiveList = lists:seq(1, 65),
+    Live = ra_seq:from_list(LiveList),
+    Live = ra_seq:from_list(LiveList),
+    Scen =
+    [
+     {entries, 1, Entries1},
+     {entries, 1, Entries2},
+     {assert, 1, lists:seq(1, 130)},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 2
+              end},
+     {major, 130, Live},
+     handle_compaction_result,
+     {assert, fun (S) ->
+                      %% infos contain one symlink
+                      Infos = infos(Dir),
+                      ct:pal("Infos ~p", [Infos]),
+                      %% assert this segment was compacted due to potential
+                      %% data reclamation and not just for entries
+                      ?assertMatch(#{num_entries := 65}, hd(Infos)),
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 2
+              end}
+    ],
+    SegConf = #{max_count => 128},
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+    ok.
+
+major_max_size(Config) ->
+    %% this test could compact 3 segemtns into one just based on entry counts
+    %% however the max_size configuration needs to be taken into account
+    %% with the compaction grouping and not create an oversized taget segment
+    Dir = ?config(dir, Config),
+    Data = crypto:strong_rand_bytes(2000),
+    Entries = [{I, 1, term_to_binary(Data)}
+               || I <- lists:seq(1, 128 * 4)],
+    LiveList = lists:seq(1, 30) ++
+               lists:seq(128, 128 + 30) ++
+               lists:seq(256, 256 + 30),
+    Live = ra_seq:from_list(LiveList),
+    Scen =
+    [
+     {entries, 1, Entries},
+     {assert, 1, lists:seq(1, 128 * 4)},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 4
+              end},
+     {major, 128 * 4, Live},
+     handle_compaction_result,
+     {assert, 1, LiveList},
+     {assert, fun (S) ->
+                      %% infos contain one symlink
+                      Infos = infos(Dir),
+                      Symlinks = [I || #{file_type := symlink} = I <- Infos],
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 3 andalso
+                      length(Infos) == 4 andalso
+                      length(Symlinks) == 1
+              end}
+    ],
+    SegConf = #{max_count => 128},
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+    ok.
+
+major(Config) ->
+    Dir = ?config(dir, Config),
+    Entries1 = lists:seq(1, 641),
+    LiveList = lists:seq(1, 383, 3) ++
+                lists:seq(384, 511) ++ %% the 4th segment is still full
+                lists:seq(512, 640, 3),
+    Live = ra_seq:from_list(LiveList),
+    Scen =
+    [
+     {entries, 1, Entries1},
+     {assert, 1, lists:seq(1, 641)},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 6
+              end},
+     {major, 640, Live},
+     handle_compaction_result,
+     {assert, 1, LiveList},
+     {assert, fun (S) ->
+                      %% infos contain one symlink
+                      Infos = infos(Dir),
+                      Symlinks = [I || #{file_type := symlink} = I <- Infos],
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 5 andalso
+                      length(Infos) == 6 andalso
+                      length(Symlinks) == 1
+              end},
+     reinit,
+     {assert, 1, LiveList},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 5
+              end},
+     {assert,
+      fun (_S) ->
+              ok = ra_log_segments:purge_symlinks(Dir, 1),
+              [_] = [I || #{file_type := symlink} = I <- infos(Dir)],
+              timer:sleep(2000),
+              ok = ra_log_segments:purge_symlinks(Dir, 1),
+              Infos = infos(Dir),
+              Symlinks = [I || #{file_type := symlink} = I <- Infos],
+              Files = [I || #{file_type := regular} = I <- Infos],
+              length(Symlinks) == 0 andalso
+              length(Files) == 5
+      end}
+    ],
+    SegConf = #{max_count => 128},
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir)),
+    run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+
+    ok.
+
+major_strategy_num_minors(Config) ->
+    SegConf = #{max_count => 16},
+    Dir = ?config(dir, Config),
+    Entries1 = lists:seq(1, 32),
+    Entries2 = lists:seq(33, 64),
+    Entries3 = lists:seq(65, 96),
+    Live1 = ra_seq:from_list(lists:seq(1, 32, 3)),
+    Live2 = ra_seq:from_list(lists:seq(1, 64, 3)),
+    Live3 = ra_seq:from_list(lists:seq(1, 96, 3)),
+    ct:pal("Live1 ~p", [Live1]),
+    Scen =
+    [
+     {entries, 1, Entries1},
+     {assert, 1, lists:seq(1, 32)},
+     {assert, fun (S) ->
+                      SegRefs = ra_log_segments:segment_refs(S),
+                      length(SegRefs) == 2
+              end},
+     {minor, 30, Live1},
+     handle_compaction_result,
+     {assert, 1, lists:seq(1, 32, 3)},
+
+     {entries, 1, Entries2},
+     {minor, 60, Live2},
+     handle_compaction_result,
+     {entries, 1, Entries3},
+     {minor, 90, Live3},
+     handle_compaction_result
+
+    ],
+
+    Counters = ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
+    CompConf  = #{max_count => 16,
+                  max_size => 128_000,
+                  major_strategy => {num_minors, 2}},
+
+    Segs0 = ra_log_segments_init(Config, Dir, seg_refs(Dir), CompConf, Counters),
+    _Segs = run_scenario([{seg_conf, SegConf} | Config], Segs0, Scen),
+    ?assertMatch(#{major_compactions := 1,
+                   minor_compactions := 2},
+                 ra_counters:counters(?FUNCTION_NAME,
+                                            [minor_compactions,
+                                             major_compactions])),
+
+    ok.
+
+major_deletes_orphaned_segments(Config) ->
+    %% This test verifies that major compaction correctly deletes orphaned
+    %% segment files that exist on disk but are not in the segment refs.
+    %% This can happen when segments are fully overwritten.
+    %% It also verifies that symlinks are NOT deleted (they need to be kept
+    %% for pending readers).
+    %%
+    %% The scenario:
+    %% 1. Create 4 segments (indexes 1-512)
+    %% 2. Overwrite segments 2 and 3 with new data, creating orphaned files
+    %% 3. Create a symlink in the orphaned range to verify it's preserved
+    %% 4. Run major compaction
+    %% 5. Verify orphaned regular files are deleted but symlinks are preserved
+    Dir = ?config(dir, Config),
+    SegConf = #{max_count => 128},
+
+    %% Create initial 4 segments
+    Seg0 = open_last_segment(Config, SegConf),
+    Entries1 = [{I, 1, term_to_binary(<<"data1">>)} || I <- lists:seq(1, 512)],
+    {Seg1, Refs1} = append_to_segment(Seg0, Entries1, [], SegConf),
+    ok = ra_log_segment:close(Seg1),
+
+    %% We should have 4 segment files now
+    InitialFiles = all_segment_files(Dir),
+    ct:pal("Initial segment files: ~p", [InitialFiles]),
+    ?assertEqual(4, length(InitialFiles)),
+
+    %% Initialize ra_log_segments with these refs
+    Segs0 = ra_log_segments_init(Config, Dir, Refs1),
+
+    %% Now overwrite indexes 129-384 (segments 2 and 3) with term 2
+    %% This will create new segment files and the old segment 2 and 3 files
+    %% become orphaned (not referenced in segment_refs but still on disk)
+    Seg2 = open_last_segment(Config, SegConf),
+    Entries2 = [{I, 2, term_to_binary(<<"data2">>)} || I <- lists:seq(129, 384)],
+    {Seg3, Refs2} = append_to_segment(Seg2, Entries2, [], SegConf),
+    ok = ra_log_segment:close(Seg3),
+
+    {Segs1, _Overwritten} = ra_log_segments:update_segments(Refs2, Segs0),
+
+    %% Check segment refs - the overwritten segments should be compacted out
+    SegRefs = ra_log_segments:segment_refs(Segs1),
+    ct:pal("Segment refs after overwrite: ~p", [SegRefs]),
+
+    %% Check files on disk - there should be more files than refs
+    %% because the old segment 2 and 3 files are orphaned
+    FilesAfterOverwrite = all_segment_files(Dir),
+    ct:pal("Files after overwrite: ~p", [FilesAfterOverwrite]),
+
+    %% The orphaned files (old segment 2 and 3) should still exist on disk
+    %% but not be in the segment refs
+    RefFiles = [F || {F, _} <- SegRefs],
+    OrphanedFiles = [F || F <- FilesAfterOverwrite,
+                          not lists:member(list_to_binary(filename:basename(F)), RefFiles)],
+    ct:pal("Orphaned files: ~p", [OrphanedFiles]),
+    ?assert(length(OrphanedFiles) > 0),
+
+    %% Create a symlink in the orphaned range to verify it's NOT deleted
+    %% This simulates a symlink left over from a previous compaction that
+    %% may still have pending readers.
+    %% We point to segment 1 which won't be deleted, so the symlink won't
+    %% become dangling (dangling symlinks are cleaned up separately).
+    SymlinkTarget = filename:join(Dir, "0000000000000001.segment"),
+    %% Create symlink with a name in the orphaned range (e.g., 0000000000000002.segment)
+    %% but we'll use a different name to avoid conflicts
+    SymlinkName = filename:join(Dir, "0000000000000002a.segment"),
+    ok = prim_file:make_symlink(SymlinkTarget, SymlinkName),
+    ct:pal("Created test symlink: ~p -> ~p", [SymlinkName, SymlinkTarget]),
+
+    %% Now run major compaction - this should delete the orphaned regular files
+    %% but preserve the symlink
+    LiveList = lists:seq(1, 128) ++ lists:seq(385, 512),
+    Live = ra_seq:from_list(LiveList),
+    {Segs2, Effs} = ra_log_segments:schedule_compaction(major, 512, Live, Segs1),
+
+    %% Execute the background work (compaction)
+    lists:foreach(fun ({bg_work, Fun, _}) -> Fun();
+                      (_) -> ok
+                  end, Effs),
+
+    %% Handle compaction result
+    CompRes = receive
+                  {ra_log_event, {compaction_result, Res}} ->
+                      ct:pal("Compaction result: ~p", [Res]),
+                      Res
+              after 5000 ->
+                        flush(),
+                        exit(compaction_timeout)
+              end,
+
+    {Segs3, Effs2} = ra_log_segments:handle_compaction_result(CompRes, Segs2),
+    %% Execute cleanup effects
+    lists:foreach(fun ({bg_work, Fun, _}) -> Fun();
+                      (_) -> ok
+                  end, Effs2),
+
+    %% Verify orphaned files are deleted
+    FilesAfterCompaction = all_segment_files(Dir),
+    ct:pal("Files after compaction: ~p", [FilesAfterCompaction]),
+
+    FinalSegRefs = ra_log_segments:segment_refs(Segs3),
+    FinalRefFiles = [F || {F, _} <- FinalSegRefs],
+    ct:pal("Final segment refs: ~p", [FinalSegRefs]),
+
+    %% All regular files on disk should now be referenced
+    %% Symlinks should be preserved (not deleted)
+    RemainingOrphans = [F || F <- FilesAfterCompaction,
+                             not lists:member(list_to_binary(filename:basename(F)), FinalRefFiles),
+                             not is_symlink(F)],
+    ct:pal("Remaining orphaned regular files: ~p", [RemainingOrphans]),
+
+    %% Verify no orphaned regular files remain
+    ?assertEqual([], RemainingOrphans),
+
+    %% Verify the symlink we created is still there
+    ?assert(filelib:is_file(SymlinkName)),
+    ?assert(is_symlink(SymlinkName)),
+    ct:pal("Symlink preserved: ~p", [SymlinkName]),
+
+    ra_log_segments:close(Segs3),
+    ok.
+
+
+
+%% Helpers
+
+open_last_segment(Config, SegConf) ->
+    Dir = ?config(dir, Config),
+    case seg_refs(Dir) of
+        [] ->
+            Fn = ra_lib:zpad_filename("", "segment", 1),
+            SegFn = filename:join(Dir, Fn),
+            {ok, Seg} = ra_log_segment:open(SegFn, SegConf),
+            Seg;
+        [{Fn, _} | _] ->
+            SegFn = filename:join(Dir, Fn),
+            {ok, Seg} = ra_log_segment:open(SegFn, SegConf),
+            Seg
+    end.
+
+
+
+append_to_segment(Seg0, [], Refs, _Conf) ->
+    {Seg0, [ra_log_segment:segref(Seg0) | Refs]};
+append_to_segment(Seg0, [{Idx, Term, Data} | Rem] = All, Refs, Conf) ->
+    DataSize = iolist_size(Data),
+    case ra_log_segment:append(Seg0, Idx, Term, {DataSize, Data}) of
+        {ok, Seg} ->
+            append_to_segment(Seg, Rem, Refs, Conf);
+        {error, full} ->
+            Ref = ra_log_segment:segref(Seg0),
+            % close and open a new segment
+            append_to_segment(open_successor_segment(Seg0, Conf), All,
+                              [Ref | Refs], Conf)
+    end.
+
+open_successor_segment(CurSeg, SegConf) ->
+    Fn0 = ra_log_segment:filename(CurSeg),
+    Fn = ra_lib:zpad_filename_incr(Fn0),
+    ok = ra_log_segment:close(CurSeg),
+    {ok, Seg} =  ra_log_segment:open(Fn, SegConf),
+    Seg.
+
+
+seg_refs(Dir) ->
+    lists:reverse(
+      [ra_log_segment:segref(F) || F <- segment_files(Dir),
+                                   is_regular(F) andalso
+      lists:member(filename:extension(F), [".segment", <<".segment">>])]).
+
+infos(Dir) ->
+    [ra_log_segment:info(F) || F <- segment_files(Dir)].
+
+segment_files(Dir) ->
+    case prim_file:list_dir(Dir) of
+        {ok, Files0} ->
+            Files = [filename:join(Dir, F)
+                     || F <- Files0,
+                        begin
+                            Ext = filename:extension(F),
+                            lists:member(Ext, [".segment",
+                                               % ".compacting",
+                                               % ".compacted",
+                                               ".link"])
+                        end],
+            lists:sort(Files);
+        {error, enoent} ->
+            []
+    end.
+
+flush() ->
+    receive
+        Any ->
+            ct:pal("flush ~p", [Any]),
+            flush()
+    after 0 ->
+              ok
+    end.
+
+is_regular(Filename) ->
+    {ok, #file_info{type = T}} = file:read_link_info(Filename, [raw, {time, posix}]),
+    T == regular.
+
+is_symlink(Filename) ->
+    case file:read_link_info(Filename, [raw, {time, posix}]) of
+        {ok, #file_info{type = symlink}} -> true;
+        _ -> false
+    end.
+
+all_segment_files(Dir) ->
+    case prim_file:list_dir(Dir) of
+        {ok, Files0} ->
+            [filename:join(Dir, F)
+             || F <- Files0,
+                filename:extension(F) == ".segment"];
+        {error, enoent} ->
+            []
+    end.
+
+run_scenario(_, Segs, []) ->
+    Segs;
+run_scenario(Config, Segs0, [reinit | Rem]) ->
+    Dir = ?config(dir, Config),
+    CompConf = ?config(comp_conf, Config),
+    ra_log_segments:close(Segs0),
+    Segs = ra_log_segments:init(?config(uid, Config), Dir, 1, random,
+                                seg_refs(Dir), undefined, CompConf, ""),
+    ?FUNCTION_NAME(Config, Segs, Rem);
+run_scenario(Config, Segs0, [{entries, Term, IndexesOrEntries} | Rem]) ->
+    SegConf = ?config(seg_conf, Config),
+    Seg0 = open_last_segment(Config, SegConf),
+    Entries = case is_tuple(hd(IndexesOrEntries)) of
+                  true ->
+                      IndexesOrEntries;
+                  false ->
+                      [{I, Term, term_to_binary(<<"data1">>)}
+                       || I <- IndexesOrEntries]
+              end,
+    {Seg, Refs} = append_to_segment(Seg0, Entries, [], SegConf),
+    _ = ra_log_segment:close(Seg),
+    {Segs, _Overwritten} = ra_log_segments:update_segments(Refs, Segs0),
+    %% TODO: what to do about overwritten
+    ?FUNCTION_NAME(Config, Segs, Rem);
+run_scenario(Config, Segs0, [{Type, SnapIdx, Live} | Rem])
+  when Type == major orelse Type == minor ->
+    {Segs1, Effs} = ra_log_segments:schedule_compaction(Type, SnapIdx, Live, Segs0),
+    Segs = lists:foldl(fun ({bg_work, Fun, _}, S0) ->
+                               Fun(),
+                               S0;
+                           ({next_event, {ra_log_event,
+                                          {compaction_result, _Res}} = E}, S0) ->
+                               self() ! E,
+                               S0
+                       end, Segs1, Effs),
+
+    ?FUNCTION_NAME(Config, Segs, Rem);
+run_scenario(Config, Segs0, [handle_compaction_result = Step | Rem]) ->
+    CompRes3 = receive
+                   {ra_log_event, {compaction_result, Res3}} ->
+                       ct:pal("compaction result ~p", [Res3]),
+                       Res3
+               after 5000 ->
+                         flush(),
+                         exit({ra_log_event_timeout, Step})
+               end,
+
+    {Segs1, Effs} =
+        ra_log_segments:handle_compaction_result(CompRes3, Segs0),
+    [Fun1() || {bg_work, Fun1, _} <- Effs],
+    ?FUNCTION_NAME(Config, Segs1, Rem);
+run_scenario(Config, Segs0, [{assert, Term, Indexes} | Rem]) ->
+    {Read, Segs2} = ra_log_segments:sparse_read(Segs0,
+                                                lists:reverse(Indexes), []),
+    %% assert we can read
+    ?assertEqual(length(Indexes), length(Read)),
+    ?assert(lists:all(fun ({_, T, _}) -> T == Term end, Read)),
+    ?FUNCTION_NAME(Config, Segs2, Rem);
+run_scenario(Config, Segs0, [{assert, Fun} | Rem])
+  when is_function(Fun) ->
+    ?assert(Fun(Segs0)),
+    ?FUNCTION_NAME(Config, Segs0, Rem);
+run_scenario(Config, Segs0, [{print, What} | Rem]) ->
+    ct:pal(What),
+    ?FUNCTION_NAME(Config, Segs0, Rem).
+
+
+with_ext(Fn, Ext) when is_binary(Fn) andalso is_list(Ext) ->
+    <<(filename:rootname(Fn))/binary, (ra_lib:to_binary(Ext))/binary>>.
+
+ra_log_segments_init(Config, Dir, SegRefs) ->
+    CompConf = ?config(comp_conf, Config),
+    ra_log_segments_init(Config, Dir, SegRefs, CompConf, undefined).
+
+ra_log_segments_init(Config, Dir, SegRefs, CompConf, Counters) ->
+    UId = ?config(uid, Config),
+    ra_log_segments:init(UId, Dir, 1, random,
+                         SegRefs, Counters,
+                         CompConf, "").
+
+do_compaction(Dir, CompactingFn, Live, All) ->
+    {ok, CompSeg0} = ra_log_segment:open(CompactingFn,
+                                         #{max_count => 128}),
+    CompSeg = lists:foldl(
+                fun ({F, R}, S0) ->
+                        L = ra_seq:in_range(R, Live),
+                        {ok, S} = ra_log_segment:copy(
+                                    S0, filename:join(Dir, F),
+                                    ra_seq:expand(L)),
+                        S
+                end, CompSeg0, All),
+    ok = ra_log_segment:close(CompSeg),
+    ok.

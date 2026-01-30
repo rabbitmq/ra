@@ -4,6 +4,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("kernel/include/file.hrl").
 
 -include("src/ra.hrl").
 %%
@@ -19,7 +20,9 @@ all() ->
 all_tests() ->
     [
      resend_write_lost_in_wal_crash,
+     resend_after_written_event_lost_in_wal_crash,
      resend_write_after_tick,
+     snapshot_before_written,
      handle_overwrite,
      handle_overwrite_append,
      receive_segment,
@@ -32,6 +35,12 @@ all_tests() ->
      last_written_overwrite,
      last_written_overwrite_2,
      last_index_reset,
+     set_last_index_with_pending,
+     fold_after_sparse_mem_table,
+     fold_after_sparse_segments,
+     write_sparse_re_init,
+     write_sparse_after_index_reset,
+     write_sparse_after_index_reset_segments,
      last_index_reset_before_written,
      recovery,
      recover_many,
@@ -40,15 +49,21 @@ all_tests() ->
      recovery_with_missing_config_file,
      wal_crash_recover,
      wal_crash_with_lost_message_and_log_init,
+     missed_written_then_write,
+     missed_written_then_segments_then_write,
      wal_down_read_availability,
      wal_down_append_throws,
      wal_down_write_returns_error_wal_down,
-
+     wal_down_stage,
+     wal_loses_writer_state,
      detect_lost_written_range,
      snapshot_installation,
+     snapshot_installation_with_no_live_indexes_overtakes_written,
      snapshot_written_after_installation,
      oldcheckpoints_deleted_after_snapshot_install,
+     append_after_snapshot_installation_with_live_indexes,
      append_after_snapshot_installation,
+     release_cursor_after_snapshot_installation,
      written_event_after_snapshot_installation,
      update_release_cursor,
      update_release_cursor_with_machine_version,
@@ -58,6 +73,7 @@ all_tests() ->
      sparse_read,
      read_plan_modified,
      read_plan,
+     read_plan_missing_index,
      sparse_read_out_of_range,
      sparse_read_out_of_range_2,
      written_event_after_snapshot,
@@ -65,10 +81,16 @@ all_tests() ->
      recover_after_snapshot,
      updated_segment_can_be_read,
      open_segments_limit,
-     %% TODO mt: do or deprecate in current minor
-     % external_reader,
-     write_config
-    ].
+     write_config,
+     sparse_write,
+     sparse_write_resend,
+     overwritten_segment_is_cleared,
+     overwritten_segment_is_cleared_on_init,
+     concurrent_snapshot_install_and_compaction,
+     snapshot_installation_with_live_indexes,
+     init_with_dangling_symlink,
+     init_after_missing_segments_event
+   ].
 
 groups() ->
     [
@@ -125,12 +147,44 @@ end_per_testcase(_, Config) ->
 -define(N2, {n2, node()}).
 % -define(N3, {n3, node()}).
 
+snapshot_before_written(Config) ->
+    %% snapshot_written comes in before written event for lower entries.
+
+    Log0 = write_n(1, 6, 1,
+                   ra_log_init(Config, #{min_snapshot_interval => 0})),
+    {ok, 5} = ra_log_wal:last_writer_seq(ra_log_wal, ?config(uid, Config)),
+    %% write 10 entries
+    Log1 = write_n(6, 20, 1, Log0),
+    SnapIdx = 10,
+    %% do snapshot in
+    {Log2, Effs} = ra_log:update_release_cursor(SnapIdx, #{}, macctx(),
+                                                [10, 4],
+                                                Log1),
+    run_effs(Effs),
+    {Log3, Effs3} = receive
+                        {ra_log_event, {snapshot_written, {10, 1}, _,
+                                        snapshot, _} = Evt} ->
+                            ra_log:handle_event(Evt, Log2)
+                    after 5000 ->
+                              flush(),
+                              exit(snapshot_written_timeout)
+                    end,
+    run_effs(Effs3),
+    assert_log_events(Log3,
+                      fun (L) ->
+                              #{last_written_index_term := LW,
+                                num_pending := NP} = ra_log:overview(L),
+                              {19, 1} == LW andalso
+                              NP == 0
+                      end),
+    ok.
+
 handle_overwrite(Config) ->
     Log0 = ra_log_init(Config),
     {ok, Log1} = ra_log:write([{1, 1, "value"},
                                {2, 1, "value"}], Log0),
     receive
-        {ra_log_event, {written, 1, {1, 2}}} -> ok
+        {ra_log_event, {written, 1, [2, 1]}} -> ok
     after 2000 ->
               exit(written_timeout)
     end,
@@ -138,13 +192,15 @@ handle_overwrite(Config) ->
     % ensure immediate truncation
     {1, 2} = ra_log:last_index_term(Log3),
     {ok, Log4} = ra_log:write([{2, 2, "value"}], Log3),
+
     % simulate the first written event coming after index 20 has already
     % been written in a new term
-    {Log, _} = ra_log:handle_event({written, 1, {1, 2}}, Log4),
+    {Log, _} = ra_log:handle_event({written, 1, [2, 1]}, Log4),
+    ct:pal("Log ~p", [Log]),
     % ensure last written has not been incremented
     {0, 0} = ra_log:last_written(Log),
     {2, 2} = ra_log:last_written(
-               element(1, ra_log:handle_event({written, 2, {1, 2}}, Log))),
+               element(1, ra_log:handle_event({written, 2, [2, 1]}, Log))),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     _ = deliver_all_log_events(Log, 100),
     ra_log:close(Log),
@@ -159,7 +215,7 @@ handle_overwrite_append(Config) ->
     {ok, Log1} = ra_log:write([{1, 1, "value"},
                                {2, 1, "value"}], Log0),
     receive
-        {ra_log_event, {written, 1, {1, 2}}} -> ok
+        {ra_log_event, {written, 1, [2, 1]}} -> ok
     after 2000 ->
               flush(),
               exit(written_timeout)
@@ -174,11 +230,11 @@ handle_overwrite_append(Config) ->
     {3, 3} = ra_log:last_index_term(Log4),
     % simulate the first written event coming after index has already
     % been written in a new term
-    {Log, _} = ra_log:handle_event({written, 1, {1, 2}}, Log4),
+    {Log, _} = ra_log:handle_event({written, 1, [2, 1]}, Log4),
     % ensure last written has not been incremented
     {1, 1} = ra_log:last_written(Log),
     {3, 3} = ra_log:last_written(
-               element(1, ra_log:handle_event({written, 3, {2, 3}}, Log))),
+               element(1, ra_log:handle_event({written, 3, [3, 2]}, Log))),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     _ = deliver_all_log_events(Log, 100),
     ra_log:close(Log),
@@ -202,7 +258,7 @@ receive_segment(Config) ->
     {3, 1} = ra_log:last_written(Log2),
     % force wal roll over
     ok = ra_log_wal:force_roll_over(ra_log_wal),
-    % Log3 = deliver_all_log_events(Log2, 1500),
+
     Log3 = deliver_log_events_cond(
              Log2, fun (L) ->
                            #{mem_table_range := MtRange} = ra_log:overview(L),
@@ -254,7 +310,6 @@ read_one(Config) ->
     ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     Log0 = ra_log_init(Config, #{counter => ra_counters:fetch(?FUNCTION_NAME)}),
     Log1 = append_n(1, 2, 1, Log0),
-    % Log1 = ra_log:append({1, 1, <<1:64/integer>>}, Log0),
     % ensure the written event is delivered
     Log2 = deliver_all_log_events(Log1, 200),
     {[_], Log} = ra_log_take(1, 1, Log2),
@@ -309,9 +364,9 @@ validate_sequential_fold(Config) ->
 
     ct:pal("ra_log:overview/1 ~p", [ra_log:overview(FinLog)]),
 
-    #{?FUNCTION_NAME := #{read_mem_table := M1,
-                          open_segments := 2, %% as this is the max
-                          read_segment := M4} = O} = ra_counters:overview(),
+    #{read_mem_table := M1,
+      open_segments := 2, %% as this is the max
+      read_segment := M4} = O = ra_counters:overview(?FUNCTION_NAME),
     ct:pal("counters ~p", [O]),
     ?assertEqual(1000, M1 + M4),
 
@@ -399,16 +454,18 @@ sparse_read_out_of_range_2(Config) ->
                                           write_and_roll(1, 10, 2, Log0)), 50),
     SnapIdx = 10,
     %% do snapshot in
-    {Log2, _} = ra_log:update_release_cursor(SnapIdx, #{}, 2,
-                                             <<"snap@10">>, Log1),
-    {Log3, _} = receive
-                    {ra_log_event, {snapshot_written, {10, 2},
-                                    snapshot} = Evt} ->
-                        ra_log:handle_event(Evt, Log2)
-                after 5000 ->
-                          flush(),
-                          exit(snapshot_written_timeout)
-                end,
+    {Log2, Effs} = ra_log:update_release_cursor(SnapIdx, #{}, macctx(),
+                                                <<"snap@10">>, Log1),
+    run_effs(Effs),
+    {Log3, Effs3} = receive
+                        {ra_log_event, {snapshot_written, {10, 2}, _,
+                                        snapshot, _} = Evt} ->
+                            ra_log:handle_event(Evt, Log2)
+                    after 5000 ->
+                              flush(),
+                              exit(snapshot_written_timeout)
+                    end,
+    run_effs(Effs3),
     Log4 = deliver_all_log_events(Log3, 100),
 
     {SnapIdx, 2} = ra_log:snapshot_index_term(Log4),
@@ -530,30 +587,56 @@ read_plan(Config) ->
     [] = Indexes -- [I || I <- maps:keys(EntriesOut)],
     ok.
 
+read_plan_missing_index(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_and_roll(1, 500, 1, Log0, 50),
+    Log2 = deliver_all_log_events(Log1, 100),
+    {Log3, Effs} = ra_log:update_release_cursor(300, #{}, macctx(),
+                                                [1, 299], Log2),
+    ct:pal("Effs ~p", [Effs]),
+    run_effs(Effs),
+
+    Log4 = assert_log_events(Log3,
+                             fun (L) ->
+                                     #{snapshot_index := SnapIdx} = ra_log:overview(L),
+                                     SnapIdx == 300
+                             end),
+    timer:sleep(100),
+    flush(),
+    ReadPlan = ra_log:partial_read([128, 301], Log4, fun (_, _, Cmd) -> Cmd end),
+    ?assert(is_map(ra_log_read_plan:info(ReadPlan))),
+    ct:pal("ReadPlan ~p", [ReadPlan]),
+    {Entries, _} = ra_log_read_plan:execute(ReadPlan, undefined),
+    ok.
+
 written_event_after_snapshot(Config) ->
     Log0 = ra_log_init(Config, #{min_snapshot_interval => 1}),
     Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
     Log1b = ra_log:append({2, 1, <<"two">>}, Log1),
-    {Log2, _} = ra_log:update_release_cursor(2, #{}, 1,
-                                             <<"one+two">>, Log1b),
+    {Log2, Effs} = ra_log:update_release_cursor(2, #{}, macctx(),
+                                                <<"one+two">>, Log1b),
+    run_effs(Effs),
     {Log3, _} = receive
-                    {ra_log_event, {snapshot_written, {2, 1},
-                                    snapshot} = Evt} ->
+                    {ra_log_event, {snapshot_written, {2, 1}, _,
+                                    snapshot, _} = Evt} ->
                         ra_log:handle_event(Evt, Log2)
                 after 500 ->
                           exit(snapshot_written_timeout)
                 end,
 
+    %% the written events for indexes [1,2] are delivered after
     Log4 = deliver_all_log_events(Log3, 100),
+    ct:pal("Log4 ~p", [ra_log:overview(Log4)]),
     % true = filelib:is_file(Snap1),
     Log5  = ra_log:append({3, 1, <<"three">>}, Log4),
     Log6  = ra_log:append({4, 1, <<"four">>}, Log5),
     Log6b = deliver_all_log_events(Log6, 100),
-    {Log7, _} = ra_log:update_release_cursor(4, #{}, 1,
-                                             <<"one+two+three+four">>,
-                                             Log6b),
+    {Log7, Effs2} = ra_log:update_release_cursor(4, #{}, macctx(),
+                                                 <<"one+two+three+four">>,
+                                                 Log6b),
+    run_effs(Effs2),
     _ = receive
-            {ra_log_event, {snapshot_written, {4, 1}, snapshot} = E} ->
+            {ra_log_event, {snapshot_written, {4, 1}, _, snapshot, _} = E} ->
                 ra_log:handle_event(E, Log7)
         after 500 ->
                   exit(snapshot_written_timeout)
@@ -569,8 +652,9 @@ recover_after_snapshot(Config) ->
     Log0 = ra_log_init(Config, #{min_snapshot_interval => 1}),
     Log1 = ra_log:append({1, 1, <<"one">>}, Log0),
     Log2 = ra_log:append({2, 1, <<"two">>}, Log1),
-    {Log3, _} = ra_log:update_release_cursor(2, #{}, 1,
-                                             <<"one+two">>, Log2),
+    {Log3, Effs} = ra_log:update_release_cursor(2, #{}, macctx(),
+                                                <<"one+two">>, Log2),
+    run_effs(Effs),
     Log4 = deliver_all_log_events(Log3, 100),
     ra_log:close(Log4),
     restart_wal(),
@@ -578,7 +662,7 @@ recover_after_snapshot(Config) ->
     Log = ra_log_init(Config, #{min_snapshot_interval => 1}),
     Overview = ra_log:overview(Log),
     ra_log:close(Log),
-    ?assertMatch(#{last_index := 2,
+    ?assertMatch(#{range := undefined,
                    last_term := 1,
                    snapshot_index := 2,
                    last_written_index_term := {2, 1}}, Overview),
@@ -591,12 +675,13 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
     Log1b = deliver_all_log_events(ra_log:append({2, 1, <<"two">>}, Log1), 500),
     true = erlang:suspend_process(whereis(ra_log_wal)),
     Log2 = write_n(3, 500, 1, Log1b),
-    {Log3, _} = ra_log:update_release_cursor(100, #{}, 1, <<"100">>, Log2),
+    {Log3, Effs0} = ra_log:update_release_cursor(100, #{}, macctx(),
+                                                 <<"100">>, Log2),
+    run_effs(Effs0),
     Log4 = deliver_all_log_events(Log3, 500),
 
     Overview = ra_log:overview(Log4),
-    ?assertMatch(#{last_index := 499,
-                   first_index := 101,
+    ?assertMatch(#{range := {101, 499},
                    mem_table_range := {101, 499},
                    last_written_index_term := {100, 1}}, Overview),
 
@@ -605,7 +690,7 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
     %% no written notifications for anything lower than the snapshot should
     %% be received
     Log5 = receive
-               {ra_log_event, {written, _Term, {From, _To}} = E}
+               {ra_log_event, {written, _Term, [{From, _To}]} = E}
                  when From == 101 ->
                    {Log4b, Effs} = ra_log:handle_event(E, Log4),
                    Log4c = lists:foldl(
@@ -623,8 +708,7 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
                      ct:fail("expected log event not received")
            end,
     OverviewAfter = ra_log:overview(Log5),
-    ?assertMatch(#{last_index := 499,
-                   first_index := 101,
+    ?assertMatch(#{range := {101, 499},
                    snapshot_index := 100,
                    mem_table_range := {101, 499},
                    last_written_index_term := {499, 1}}, OverviewAfter),
@@ -658,11 +742,7 @@ updated_segment_can_be_read(Config) ->
     % this should return all entries
     {Entries1, _} = ra_log_take(1, 15, Log4),
     ?assertEqual(15, length(Entries1)),
-    ct:pal("Entries: ~p", [Entries]),
-    ct:pal("Entries1: ~p", [Entries1]),
-    ct:pal("Counters ~p", [ra_counters:overview(?FUNCTION_NAME)]),
     ?assertEqual(15, length(Entries1)),
-    % l18 = length(Entries1),
     ok.
 
 cache_overwrite_then_take(Config) ->
@@ -716,19 +796,184 @@ last_written_overwrite_2(Config) ->
 
 last_index_reset(Config) ->
     Log0 = ra_log_init(Config),
-    Log1 = write_n(1, 5, 1, Log0),
+    Log1 = write_n(1, 6, 1, Log0),
     Pred = fun (L) ->
-                   {4, 1} == ra_log:last_written(L)
+                   {5, 1} == ra_log:last_written(L)
            end,
     Log2 = assert_log_events(Log1, Pred, 2000),
-    5 = ra_log:next_index(Log2),
-    {4, 1} = ra_log:last_index_term(Log2),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
     % reverts last index to a previous index
     % needs to be done if a new leader sends an empty AER
     {ok, Log3} = ra_log:set_last_index(3, Log2),
     {3, 1} = ra_log:last_written(Log3),
     4 = ra_log:next_index(Log3),
     {3, 1} = ra_log:last_index_term(Log3),
+    O = ra_log:overview(Log3),
+    ct:pal("o ~p", [O]),
+    ?assertMatch(#{range := {0, 3},
+                   %% we have a new mem table but the mem table does not know
+                   %% whatever the first index should be so reports the
+                   %% full previous range, this will be corrected after the
+                   %% next write at index 4
+                   mem_table_range := {0, 5}},
+                 O),
+    {ok, Log} = ra_log:write([{4, 2, hi}], Log3),
+    O2 = ra_log:overview(Log),
+    ct:pal("o ~p", [O2]),
+    ?assertMatch(#{range := {0, 4},
+                   mem_table_range := {0, 4}},
+                 O2),
+    ok.
+
+set_last_index_with_pending(Config) ->
+    Log0 = ra_log_init(Config),
+    Log2 = write_n(1, 6, 1, Log0),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    {ok, Log3} = ra_log:set_last_index(3, Log2),
+    {LastIdx, _} = ra_log:last_index_term(Log3),
+    {ok, Log4} = ra_log:write_sparse({5, 1, 5}, LastIdx, Log3),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log5 = assert_log_events(Log4, Pred, 2000),
+    {5, 1} = ra_log:last_written(Log5),
+    6 = ra_log:next_index(Log5),
+    {5, 1} = ra_log:last_index_term(Log5),
+
+    ok.
+
+fold_after_sparse_mem_table(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 500),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log2b} = ra_log:set_last_index(5, Log2),
+    {ok, Log3} = ra_log:write_sparse({7, 1, hi}, undefined, Log2b),
+    {ok, Log4} = ra_log:write_sparse({17, 1, hi}, 7, Log3),
+    Log = deliver_all_log_events(Log4, 500),
+    {Res, _Log} = ra_log:fold(1, 17,
+                              fun ({I, _, _}, Is) ->
+                                      [I | Is]
+                              end, [], Log, return),
+    ct:pal("Res ~p", [Res]),
+    ?assertMatch([5,4,3,2,1], Res),
+    ok.
+
+fold_after_sparse_segments(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 500),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log2b} = ra_log:set_last_index(5, Log2),
+    {ok, Log3} = ra_log:write_sparse({7, 1, hi}, undefined, Log2b),
+    {ok, Log4} = ra_log:write_sparse({17, 1, hi}, 7, Log3),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    Log = deliver_all_log_events(Log4, 500),
+    ra_log:fold(1, 17, fun (_, _) -> ok end, undefined, Log, return),
+    ok.
+
+write_sparse_re_init(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_and_roll(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 500),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log2b} = ra_log:set_last_index(5, Log2),
+    {ok, Log3} = ra_log:write_sparse({7, 1, hi}, undefined, Log2b),
+    {ok, Log4} = ra_log:write_sparse({17, 1, hi}, 7, Log3),
+    Log = deliver_all_log_events(Log4, 500),
+
+    O = ra_log:overview(Log),
+    ra_log:close(Log),
+
+    ReInitLog = ra_log_init(Config),
+    O2 = ra_log:overview(ReInitLog ),
+    OO = maps:without([last_wal_write, open_segments], O),
+    OO2 = maps:without([last_wal_write, open_segments], O2),
+    ?assertEqual(OO, OO2),
+    ok.
+
+write_sparse_after_index_reset(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 500),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log3} = ra_log:set_last_index(3, Log2),
+    {3, 1} = ra_log:last_written(Log3),
+    4 = ra_log:next_index(Log3),
+    {3, 1} = ra_log:last_index_term(Log3),
+    O = ra_log:overview(Log3),
+    ct:pal("o ~p", [O]),
+    {ok, Log4} = ra_log:write_sparse({7, 1, hi}, undefined, Log3),
+    {ok, Log} = ra_log:write_sparse({17, 1, hi}, 7, Log4),
+    O2 = ra_log:overview(Log),
+    ct:pal("o ~p", [O2]),
+    ?assertMatch(#{range := {0, 17},
+                   mem_table_range := {0, 17}},
+                 O2),
+    ok.
+
+write_sparse_after_index_reset_segments(Config) ->
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Pred = fun (L) ->
+                   {5, 1} == ra_log:last_written(L)
+           end,
+    Log2 = assert_log_events(Log1, Pred, 2000),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    Log2b = deliver_all_log_events(Log2, 500),
+    % reverts last index to a previous index
+    % needs to be done if a new leader sends an empty AER
+    {ok, Log3} = ra_log:set_last_index(3, Log2b),
+    {3, 1} = ra_log:last_written(Log3),
+    4 = ra_log:next_index(Log3),
+    {3, 1} = ra_log:last_index_term(Log3),
+    O = ra_log:overview(Log3),
+    ct:pal("o ~p", [O]),
+    {ok, Log4} = ra_log:write_sparse({7, 1, hi}, undefined, Log3),
+    {ok, Log5} = ra_log:write_sparse({17, 1, hi}, 7, Log4),
+    Log5b = deliver_all_log_events(Log5, 500),
+    O2 = ra_log:overview(Log5b),
+    ?assertMatch(#{range := {0, 17},
+                   mem_table_range := {7, 17}},
+                 O2),
+
+    %% try overwrite again
+    {ok, Log6} = ra_log:set_last_index(3, Log5b),
+    {3, 1} = ra_log:last_index_term(Log6),
+    {ok, Log7} = ra_log:write_sparse({7, 1, hi}, undefined, Log6),
+    {ok, Log8} = ra_log:write_sparse({17, 1, hi}, 7, Log7),
+    Log = deliver_all_log_events(Log8, 500),
+    O5 = ra_log:overview(Log),
+    ct:pal("o ~p", [O5]),
     ok.
 
 last_index_reset_before_written(Config) ->
@@ -752,7 +997,6 @@ last_index_reset_before_written(Config) ->
                                    end),
     4 = ra_log:next_index(Log3),
     {3, 1} = ra_log:last_index_term(Log3),
-    % #{cache_size := 0} = ra_log:overview(Log3),
     ok.
 
 recovery(Config) ->
@@ -777,10 +1021,6 @@ recovery(Config) ->
     {20, 3} = ra_log:last_index_term(Log5),
     Log6 = validate_fold(1, 4, 1, Log5),
     Log7 = validate_fold(5, 14, 2, Log6),
-    % debugger:start(),
-    % int:i(ra_log),
-    % int:break(ra_log, 413),
-
     Log8 = validate_fold(15, 20, 3, Log7),
     ra_log:close(Log8),
 
@@ -892,6 +1132,7 @@ resend_write_lost_in_wal_crash(Config) ->
     Log3 = append_n(11, 13, 2, Log2b),
     Log4 = receive
                {ra_log_event, {resend_write, 10} = Evt} ->
+                   ct:pal("resend"),
                    element(1, ra_log:handle_event(Evt, Log3));
                {ra_log_event, {written, 2, {11, 12}}} ->
                    ct:fail("unexpected gappy write!!")
@@ -906,6 +1147,37 @@ resend_write_lost_in_wal_crash(Config) ->
     {[_, _, _, _, _], _} = ra_log_take(9, 14, Log6),
     ra_log:close(Log6),
 
+    ok.
+
+resend_after_written_event_lost_in_wal_crash(Config) ->
+    Log0 = ra_log_init(Config),
+    {0, 0} = ra_log:last_index_term(Log0),
+    %% write 1..9
+    Log1 = append_n(1, 10, 2, Log0),
+    Log2 = assert_log_events(Log1, fun (L) ->
+                                           {9, 2} == ra_log:last_written(L)
+                                   end),
+    WalPid = whereis(ra_log_wal),
+    %% suspend wal, write an entry then kill it
+    Log2b = append_n(10, 11, 2, Log2),
+    receive
+        {ra_log_event, {written, 2, [10]}} ->
+            %% drop written event to simulate being lost in wal crash
+            ok
+    after 500 ->
+              flush(),
+              ct:fail(resend_write_timeout)
+    end,
+    %% restart wal to get a new pid, shouldn't matter
+    exit(WalPid, kill),
+    wait_for_wal(WalPid),
+    %% write 11..12 which should trigger resend
+    Log3 = append_n(11, 12, 2, Log2b),
+    Log6 = assert_log_events(Log3, fun (L) ->
+                                           {11, 2} == ra_log:last_written(L)
+                                   end),
+    {[_, _, _], _} = ra_log_take(9, 11, Log6),
+    ra_log:close(Log6),
     ok.
 
 resend_write_after_tick(Config) ->
@@ -982,6 +1254,55 @@ wal_crash_with_lost_message_and_log_init(Config) ->
 
     ok.
 
+missed_written_then_write(Config) ->
+    Log0 = ra_log_init(Config, #{wal => ra_log_wal}),
+    {0, 0} = ra_log:last_index_term(Log0),
+    % write some entries
+    Log1 = append_n(1, 10, 2, Log0),
+
+    %% lose the written event
+    receive
+        {ra_log_event,{written, _, _}} -> ok
+    after 5000 ->
+              ct:fail("written event timeout")
+    end,
+
+    Log3 = append_n(10, 15, 2, Log1),
+    _Log4 = assert_log_events(Log3, fun (L) ->
+                                           {14, 2} == ra_log:last_written(L)
+                                   end),
+    ok.
+
+missed_written_then_segments_then_write(Config) ->
+    Log0 = ra_log_init(Config, #{wal => ra_log_wal}),
+    {0, 0} = ra_log:last_index_term(Log0),
+    % write some entries
+    Log1 = append_n(1, 10, 2, Log0),
+
+    %% lose the written event
+    receive
+        {ra_log_event,{written, _, _}} -> ok
+    after 5000 ->
+              ct:fail("written event timeout")
+    end,
+
+    ra_log_wal:force_roll_over(ra_log_wal),
+    Log2 = assert_log_events(Log1,
+                             fun (L) ->
+                                     #{segments_range := SR,
+                                       num_pending := Pnd,
+                                       last_written_index_term := LWIT} =
+                                         ra_log:overview(L),
+                                     SR == {0,9} andalso
+                                     Pnd == 0 andalso
+                                     LWIT == {9, 2}
+                             end),
+    Log3 = append_n(10, 15, 2, Log2),
+    _Log4 = assert_log_events(Log3, fun (L) ->
+                                           {14, 2} == ra_log:last_written(L)
+                                   end),
+    ok.
+
 wal_down_read_availability(Config) ->
     Log0 = ra_log_init(Config),
     Log1 = append_n(1, 10, 2, Log0),
@@ -1011,6 +1332,64 @@ wal_down_write_returns_error_wal_down(Config) ->
                      <- supervisor:which_children(ra_log_sup)],
     ok = supervisor:terminate_child(SupPid, ra_log_wal),
     {error, wal_down} = ra_log:write([{1, 1, hi}], Log0),
+    ok.
+
+wal_down_stage(Config) ->
+    [SupPid] = [P || {ra_log_wal_sup, P, _, _}
+                     <- supervisor:which_children(ra_log_sup)],
+
+    Log0 = ra_log:begin_tx(ra_log_init(Config)),
+    Log1 = ra_log:append({2, 1, ho},
+                         ra_log:append({1, 1, hi}, Log0)),
+    ok = supervisor:terminate_child(SupPid, ra_log_wal),
+    {error, wal_down, Log2} = ra_log:commit_tx(Log1),
+    {ok, _} = supervisor:restart_child(SupPid, ra_log_wal),
+    %% check it is possible to write the next  entries
+    ?assertEqual(1, ra_log:next_index(Log2)),
+    Log3 = ra_log:append({1, 1, hi}, ra_log:begin_tx(Log2)),
+    {ok, Log4} = ra_log:commit_tx(Log3),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    _Log = assert_log_events(Log4, fun (L) ->
+                                           {1, 1} == ra_log:last_written(L)
+                                   end),
+    ok.
+
+wal_loses_writer_state(Config) ->
+    %% this test simulate a double WAL crash, which is enough for th WAL to
+    %% lose it's current writer gap tracking state (as it is recovered from
+    %% the wal itself. If this is combined with a ra server crash, some writes
+    %% may never materialise
+    [SupPid] = [P || {ra_log_wal_sup, P, _, _}
+                     <- supervisor:which_children(ra_log_sup)],
+
+    Log0 = ra_log:append({1, 1, hi}, ra_log_init(Config)),
+    true = ra_log_wal_SUITE:suspend_process(whereis(ra_log_wal)),
+    Log1 = ra_log:append({2, 1, ho}, Log0),
+    exit(whereis(ra_log_wal), kill),
+    timer:sleep(100),
+    ra_log_segment_writer:await(ra_log_segment_writer),
+    ok = supervisor:terminate_child(SupPid, ra_log_wal),
+    {ok, _} = supervisor:restart_child(SupPid, ra_log_wal),
+    ra_log:close(Log1),
+    ra_log_segment_writer:await(ra_log_segment_writer),
+    flush(),
+    Log2 = ra_log_init(Config),
+    Log3 = ra_log:append({3, 1, hum}, Log2),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    Log4 = assert_log_events(Log3,
+                             fun (L) ->
+                                     #{last_written_index_term := LW,
+                                       segments_range := SR} =
+                                         ra_log:overview(L),
+                                     {3, 1} == LW andalso
+                                     {0, 3} == SR
+                             end),
+    %% assert all written entries can be read
+    {Entries, _Log} = ra_log:sparse_read([1,2,3], Log4),
+    ?assertMatch([{1, _, _},
+                  {2, _, _},
+                  {3, _, _}], Entries),
+
     ok.
 
 detect_lost_written_range(Config) ->
@@ -1059,11 +1438,12 @@ snapshot_written_after_installation(Config) ->
     Log0 = ra_log_init(Config, #{min_snapshot_interval => 2}),
     %% log 1 .. 9, should create a single segment
     Log1 = write_and_roll(1, 10, 1, Log0),
-    {Log2, _} = ra_log:update_release_cursor(5, #{}, 1,
-                                             <<"one-five">>, Log1),
+    {Log2, Effs} = ra_log:update_release_cursor(5, #{}, macctx(),
+                                                <<"one-five">>, Log1),
+    run_effs(Effs),
     DelayedSnapWritten = receive
-                             {ra_log_event, {snapshot_written, {5, 1},
-                                             snapshot} = Evt} ->
+                             {ra_log_event, {snapshot_written, {5, 1}, _,
+                                             snapshot, _} = Evt} ->
                                  Evt
                          after 1000 ->
                                    flush(),
@@ -1075,8 +1455,12 @@ snapshot_written_after_installation(Config) ->
     Chunk = create_snapshot_chunk(Config, Meta, Context),
     SnapState0 = ra_log:snapshot_state(Log2),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
-    {Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, Log2),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log3, _} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
+                                            ra_log:set_snapshot_state(SnapState, Log2)),
     %% write some more to create another segment
     Log4 = write_and_roll(16, 20, 2, Log3),
     {Log5, Efx4} = ra_log:handle_event(DelayedSnapWritten, Log4),
@@ -1104,10 +1488,11 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
                                  min_checkpoint_interval => 2}),
     %% log 1 .. 9, should create a single segment
     Log1 = write_and_roll(1, 10, 1, Log0),
-    {Log2, _} = ra_log:checkpoint(5, #{}, 1, <<"one-five">>, Log1),
+    {Log2, Effs} = ra_log:checkpoint(5, #{}, macctx(), <<"one-five">>, Log1),
+    run_effs(Effs),
     DelayedSnapWritten = receive
-                             {ra_log_event, {snapshot_written, {5, 1},
-                                             checkpoint} = Evt} ->
+                             {ra_log_event, {snapshot_written, {5, 1}, _,
+                                             checkpoint, _} = Evt} ->
                                  Evt
                          after 1000 ->
                                    flush(),
@@ -1120,8 +1505,14 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
     Chunk = create_snapshot_chunk(Config, Meta, Context),
     SnapState0 = ra_log:snapshot_state(Log3),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
-    {Log4, Effs4} = ra_log:install_snapshot({15, 2}, SnapState, Log3),
+    % {ok, SnapState, AcceptEffs} =
+    %     ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log4, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log3)),
     ?assert(lists:any(fun (E) -> element(1, E) == delete_snapshot end, Effs4)),
     %% write some more to create another segment
     Log5 = write_and_roll(16, 20, 2, Log4),
@@ -1148,6 +1539,61 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
 
     ok.
 
+snapshot_installation_with_live_indexes(Config) ->
+    Log0 = ra_log_init(Config),
+    {0, 0} = ra_log:last_index_term(Log0),
+    Log1 = assert_log_events(write_n(1, 10, 2, Log0),
+                             fun (L) ->
+                                     LW = ra_log:last_written(L),
+                                     {9, 2} == LW
+                             end),
+    Log2 = Log1,
+
+    %% create snapshot chunk
+    Meta = meta(15, 2, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, [2, 9, 14], [2, 9, 14], #{}),
+    SnapState0 = ra_log:snapshot_state(Log2),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+
+    %% write  a sparse one
+    {ok, Log2b} = ra_log:write_sparse({14, 2, <<>>}, 9, Log2),
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log3, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log2b)),
+
+
+    run_effs(Effs4),
+    {15, _} = ra_log:last_index_term(Log3),
+    {15, _} = ra_log:last_written(Log3),
+    %% write the next index, bearning in mind the last index the WAL saw
+    %% was 14
+    {ok, Log4} = ra_log:write([{16, 2, <<>>}], Log3),
+    Log5 = assert_log_events(Log4,
+                            fun (L) ->
+                                    LW = ra_log:last_written(L),
+                                    {16, 2} == LW
+                            end),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    Log = assert_log_events(Log5,
+                            fun (L) ->
+                                    #{mem_table_range := R} = ra_log:overview(L),
+                                    R == undefined
+                            end),
+    ct:pal("o ~p", [ra_log:overview(Log)]),
+    UId = ?config(uid, Config),
+    ?assertEqual(LiveIndexes, ra_log_snapshot_state:live_indexes(
+                                ra_log_snapshot_state, UId)),
+    ra_log:close(Log),
+    flush(),
+    _LogAfter = ra_log_init(Config),
+    %% validate recovery recovers the live indexes correctly
+    ?assertEqual(LiveIndexes, ra_log_snapshot_state:live_indexes(
+                                ra_log_snapshot_state, UId)),
+    ok.
+
 snapshot_installation(Config) ->
     Log0 = ra_log_init(Config),
     {0, 0} = ra_log:last_index_term(Log0),
@@ -1164,9 +1610,14 @@ snapshot_installation(Config) ->
     Chunk = create_snapshot_chunk(Config, Meta, #{}),
     SnapState0 = ra_log:snapshot_state(Log2),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
-    {Log3, _} = ra_log:install_snapshot({15, 2}, SnapState, Log2),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log3, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log2)),
 
+    run_effs(Effs4),
     {15, _} = ra_log:last_index_term(Log3),
     {15, _} = ra_log:last_written(Log3),
     #{mem_table_range := undefined} = ra_log:overview(Log3),
@@ -1179,9 +1630,12 @@ snapshot_installation(Config) ->
     % after a snapshot we need a "truncating write" that ignores missing
     % indexes
     Log5 = write_n(16, 20, 2, Log4),
-    {[], _} = ra_log_take(1, 9, Log5),
-    {[_, _], _} = ra_log_take(16, 17, Log5),
-    Log6 = assert_log_events(Log5, fun (L) ->
+    %% check that the log can be reset to a pending write index
+    {ok, Log5b} = ra_log:set_last_index(19, Log5),
+
+    {[], _} = ra_log_take(1, 9, Log5b),
+    {[_, _], _} = ra_log_take(16, 17, Log5b),
+    Log6 = assert_log_events(Log5b, fun (L) ->
                                            {19, 2} == ra_log:last_written(L)
                                    end),
     {[], _} = ra_log_take(1, 9, Log6),
@@ -1191,6 +1645,80 @@ snapshot_installation(Config) ->
     {[_, _], _} = ra_log_take(16, 17, Log6),
     Log = deliver_all_log_events(Log6, 100),
     {[], _} = ra_log_take(1, 9, Log),
+    {[_, _], _} = ra_log_take(16, 17, Log),
+    ok.
+
+snapshot_installation_with_no_live_indexes_overtakes_written(Config) ->
+    Log0 = ra_log_init(Config),
+    {0, 0} = ra_log:last_index_term(Log0),
+    Log1 = assert_log_events(write_n(1, 10, 2, Log0),
+                             fun (L) -> {9, 2} == ra_log:last_written(L) end),
+
+    true = ra_log_wal_SUITE:suspend_process(whereis(ra_log_wal)),
+    Log2 = write_n(1, 10, 2, Log1),
+
+    %% create snapshot chunk
+    Meta = meta(15, 2, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, #{}),
+    SnapState0 = ra_log:snapshot_state(Log2),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, [], AEffs} =
+        ra_snapshot:complete_accept(Chunk, 1, Machine, SnapState1),
+    run_effs(AEffs),
+    {ok, Log3, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, [],
+                                                ra_log:set_snapshot_state(SnapState, Log2)),
+
+    run_effs(Effs4),
+    {15, _} = ra_log:last_index_term(Log3),
+    {15, _} = ra_log:last_written(Log3),
+    #{mem_table_range := undefined} = ra_log:overview(Log3),
+
+    true = erlang:resume_process(whereis(ra_log_wal)),
+    Log4 = write_n(16, 20, 2, Log3),
+    _ = assert_log_events(Log4,
+                             fun (L) -> {19, 2} == ra_log:last_written(L) end),
+    ok.
+
+append_after_snapshot_installation_with_live_indexes(Config) ->
+    logger:set_primary_config(level, all),
+    %% simulates scenario where a node becomes leader after receiving a
+    %% snapshot with live indexes
+    % write a few entries
+    % simulate outage/ message loss
+    % write snapshot for entry not seen
+    % then write entries
+    Log0 = ra_log_init(Config), {0, 0} = ra_log:last_index_term(Log0),
+    % Log1 = write_n(1, 10, 2, Log0),
+    Log1 = assert_log_events(write_n(1, 10, 2, Log0),
+                             fun (L) ->
+                                     {9, 2} == ra_log:last_written(L)
+                             end),
+    %% do snapshot
+    Meta = meta(15, 2, [?N1]),
+    LiveIndexes = [5,1],
+    Chunk = create_snapshot_chunk(Config, Meta, LiveIndexes, LiveIndexes, #{}),
+    SnapState0 = ra_log:snapshot_state(Log1),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log2, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log1)),
+    run_effs(Effs4),
+    {15, _} = ra_log:last_index_term(Log2),
+    {15, _} = ra_log:last_written(Log2),
+
+    % after a snapshot we need a "truncating write" that ignores missing
+    % indexes
+    Log3 = append_n(16, 20, 3, Log2),
+    Log = assert_log_events(Log3, fun (L) ->
+                                          {19, 3} == ra_log:last_written(L)
+                                  end),
+
+    ?assertMatch({[_, _], _}, ra_log:sparse_read([1, 5], Log)),
+    % {[], _} = ra_log_take(1, 9, Log),
     {[_, _], _} = ra_log_take(16, 17, Log),
     ok.
 
@@ -1213,8 +1741,13 @@ append_after_snapshot_installation(Config) ->
     Chunk = create_snapshot_chunk(Config, Meta, #{}),
     SnapState0 = ra_log:snapshot_state(Log1),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
-    {Log2, _} = ra_log:install_snapshot({15, 2}, SnapState, Log1),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log2, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log1)),
+    run_effs(Effs4),
     {15, _} = ra_log:last_index_term(Log2),
     {15, _} = ra_log:last_written(Log2),
 
@@ -1226,6 +1759,57 @@ append_after_snapshot_installation(Config) ->
                                   end),
     {[], _} = ra_log_take(1, 9, Log),
     {[_, _], _} = ra_log_take(16, 17, Log),
+    ok.
+
+release_cursor_after_snapshot_installation(Config) ->
+    Log0 = ra_log_init(Config, #{min_snapshot_interval => 0}),
+    {0, 0} = ra_log:last_index_term(Log0),
+    Log1 = assert_log_events(write_n(1, 16, 2, Log0),
+                             fun (L) ->
+                                     LW = ra_log:last_written(L),
+                                     {15, 2} == LW
+                             end),
+
+    Log2 = Log1,
+
+    %% create snapshot chunk
+    Meta = meta(15, 2, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, [1, 5, 10], [1, 5, 10], #{}),
+    SnapState0 = ra_log:snapshot_state(Log2),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log3, Effs4} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log2)),
+
+    run_effs(Effs4),
+    {15, 2} = ra_snapshot:current(ra_log:snapshot_state(Log3)),
+
+    %% Write some entries
+    Log4 = assert_log_events(write_n(16, 20, 2, Log3),
+                             fun (L) ->
+                                     LW = ra_log:last_written(L),
+                                     {19, 2} == LW
+                             end),
+
+    %% then take a snapshot
+    {Log5, Effs5} = ra_log:update_release_cursor(19, #{?N1 => new_peer(),
+                                                       ?N2 => new_peer()},
+                                                 macctx(), [1, 5, 10, 17], Log4),
+
+    run_effs(Effs5),
+    %% ensure snapshot index has been updated and 1 segment deleted
+    Log = assert_log_events(Log5,
+                             fun (L) ->
+                                     {19, 2} == ra_log:snapshot_index_term(L)
+                                     % andalso
+                                     % length(find_segments(Config)) == 1
+                             end),
+
+    ct:pal("Log ~p", [Log]),
+
     ok.
 
 written_event_after_snapshot_installation(Config) ->
@@ -1244,8 +1828,13 @@ written_event_after_snapshot_installation(Config) ->
     Chunk = create_snapshot_chunk(Config, Meta, #{}),
     SnapState0 = ra_log:snapshot_state(Log1),
     {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
-    {ok, SnapState} = ra_snapshot:accept_chunk(Chunk, 1, last, SnapState1),
-    {Log2, _} = ra_log:install_snapshot({SnapIdx, 2}, SnapState, Log1),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1, Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log2, Effs4} = ra_log:install_snapshot({SnapIdx, 2}, ?MODULE, LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log1)),
+    run_effs(Effs4),
     {SnapIdx, _} = ra_log:last_index_term(Log2),
     {SnapIdx, _} = ra_log:last_written(Log2),
     NextIdx = SnapIdx + 1,
@@ -1281,33 +1870,35 @@ update_release_cursor(Config) ->
     % assert there are two segments at this point
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
-    {Log2, _} = ra_log:update_release_cursor(127, #{?N1 => new_peer(),
-                                                    ?N2 => new_peer()},
-                                             1, initial_state, Log1),
+    {Log2, Effs} = ra_log:update_release_cursor(127, #{?N1 => new_peer(),
+                                                       ?N2 => new_peer()},
+                                                macctx(), initial_state, Log1),
 
+    run_effs(Effs),
+    %% ensure snapshot index has been updated and 1 segment deleted
     Log3 = assert_log_events(Log2,
                              fun (L) ->
-                                     {127, 2} == ra_log:snapshot_index_term(L)
+                                     {127, 2} == ra_log:snapshot_index_term(L) andalso
+                                     length(find_segments(Config)) == 1
                              end),
     %% now the snapshot_written should have been delivered and the
     %% snapshot state table updated
-    [{UId, 127}] = ets:lookup(ra_log_snapshot_state, ?config(uid, Config)),
+    UId = ?config(uid, Config),
+    127 = ra_log_snapshot_state:snapshot(ra_log_snapshot_state, UId),
     % this should delete a single segment
-    ra_lib:retry(fun () ->
-                         Segments = find_segments(Config),
-                         1 == length(Segments)
-                 end, 10, 100),
+    ct:pal("Log3 ~p", [Log3]),
     Log3b = validate_fold(128, 149, 2, Log3),
     % update the release cursor all the way
-    {Log4, _} = ra_log:update_release_cursor(149, #{?N1 => new_peer(),
-                                                    ?N2 => new_peer()},
-                                             1, initial_state, Log3b),
+    {Log4, Effs2} = ra_log:update_release_cursor(149, #{?N1 => new_peer(),
+                                                        ?N2 => new_peer()},
+                                                 macctx(), initial_state, Log3b),
+    run_effs(Effs2),
     Log5 = assert_log_events(Log4,
                              fun (L) ->
                                      {149, 2} == ra_log:snapshot_index_term(L)
                              end),
 
-    [{UId, 149}] = ets:lookup(ra_log_snapshot_state, UId),
+    149 = ra_log_snapshot_state:snapshot(ra_log_snapshot_state, UId),
 
     % only one segment should remain as the segment writer always keeps
     % at least one segment for each
@@ -1317,9 +1908,9 @@ update_release_cursor(Config) ->
 
     % append a few more items
     Log = assert_log_events(append_and_roll_no_deliver(150, 155, 2, Log5),
-                             fun (L) ->
-                                     {154, 2} == ra_log:last_written(L)
-                             end),
+                            fun (L) ->
+                                    {154, 2} == ra_log:last_written(L)
+                            end),
     validate_fold(150, 154, 2, Log),
     % assert there is only one segment - the current
     % snapshot has been confirmed.
@@ -1337,11 +1928,11 @@ update_release_cursor_with_machine_version(Config) ->
     % assert there are two segments at this point
     [_, _] = find_segments(Config),
     % update release cursor to the last entry of the first segment
-    MacVer = 2,
-    {Log2, _} = ra_log:update_release_cursor(127, #{?N1 => new_peer(),
-                                                    ?N2 => new_peer()},
-                                             MacVer,
-                                             initial_state, Log1),
+    {Log2, Effs} = ra_log:update_release_cursor(127, #{?N1 => new_peer(),
+                                                       ?N2 => new_peer()},
+                                                {0, ?MODULE},
+                                                initial_state, Log1),
+    run_effs(Effs),
     Log = assert_log_events(Log2,
                             fun (L) ->
                                     {127, 2} == ra_log:snapshot_index_term(L)
@@ -1350,7 +1941,7 @@ update_release_cursor_with_machine_version(Config) ->
     %% assert the version is in the snapshot state meta data
     CurrentDir = ra_snapshot:current_snapshot_dir(SnapState),
     {ok, Meta} = ra_snapshot:read_meta(ra_log_snapshot, CurrentDir),
-    ?assertMatch(#{index := 127, machine_version := MacVer}, Meta),
+    ?assertMatch(#{index := 127, machine_version := 0}, Meta),
     ok.
 
 missed_mem_table_entries_are_deleted_at_next_opportunity(Config) ->
@@ -1388,9 +1979,12 @@ missed_mem_table_entries_are_deleted_at_next_opportunity(Config) ->
     Log5 = validate_fold(1, 154, 2, Log4),
 
     % then update the release cursor
-    {Log6, _Effs} = ra_log:update_release_cursor(154, #{?N1 => new_peer(),
+    {Log6, Effs2} = ra_log:update_release_cursor(154, #{?N1 => new_peer(),
                                                         ?N2 => new_peer()},
-                                                 1, initial_state, Log5),
+                                                 macctx(), initial_state, Log5),
+    run_effs(Effs2),
+    ct:pal("Effs2 ~p", [Effs2]),
+    ct:pal("find segments ~p", [find_segments(Config)]),
     Log7 = deliver_log_events_cond(Log6,
                                    fun (_) ->
                                            case find_segments(Config) of
@@ -1452,71 +2046,7 @@ open_segments_limit(Config) ->
     ?assert(Open =< Max),
     ok.
 
-external_reader(Config) ->
-    %% external readers should be notified of all new segments
-    %% and the lower bound of the log
-    %% The upper bound needs to be discovered by querying
-    logger:set_primary_config(level, all),
-    Log0 = ra_log_init(Config),
-    {0, 0} = ra_log:last_index_term(Log0),
-
-    Log1 = write_n(200, 220, 2,
-                   write_and_roll(1, 200, 2, Log0)),
-
-    Self = self(),
-    Pid = spawn(
-            fun () ->
-                    receive
-                        {ra_log_reader_state, R1} = Evt ->
-                            {Es, R2} = ra_log_reader:sparse_read(
-                                         R1, lists:seq(0, 220), []),
-                            Len1 = length(Es),
-                            Self ! {got, Evt, Es},
-                            receive
-                                {ra_log_update, _, F, _} = Evt2 ->
-                                    %% reader before update has been processed
-                                    %% should work
-                                    Indexes = lists:seq(F, 220),
-                                    {Stale, _} = ra_log_reader:sparse_read(R2, Indexes, []),
-                                    ?assertEqual(Len1, length(Stale)),
-                                    R3 = ra_log_reader:handle_log_update(Evt2, R2),
-                                    {Es2, _R4} = ra_log_reader:sparse_read(R3, Indexes, []),
-                                    ct:pal("Es2 ~w", [length(Es2)]),
-                                    ?assertEqual(Len1, length(Es2)),
-                                    Self ! {got, Evt2, Es2}
-                            end
-                    end
-            end),
-    {Log2, [{reply, {ok, Reader}} | _]} =
-        ra_log:register_reader(Pid, Log1),
-    Pid ! {ra_log_reader_state, Reader},
-    %% TODO: validate there is monitor effect
-    receive
-        {got, Evt, Entries} ->
-            ct:pal("got segs: ~w ~w", [Evt, length(Entries)]),
-            ok
-    after 2000 ->
-              flush(),
-              exit(got_timeout)
-    end,
-    ra_log_wal:force_roll_over(ra_log_wal),
-
-    deliver_log_events_cond(
-      Log2, fun (_L) ->
-                    %% this should result in a segment update
-                    receive
-                        {got, Evt2, Entries1} ->
-                            ct:pal("got segs: ~p ~p", [Evt2, length(Entries1)]),
-                            true
-                    after 10 ->
-                              false
-                    end
-            end, 100),
-    flush(),
-    ok.
-
 write_config(Config) ->
-
     C = #{cluster_name => ?MODULE,
           id => {?MODULE, node()},
           uid => <<"blah">>,
@@ -1530,14 +2060,349 @@ write_config(Config) ->
 
     ok.
 
+sparse_write(Config) ->
+    Log00 = ra_log_init(Config),
+    % assert there are no segments at this point
+    [] = find_segments(Config),
+
+    % create a segment
+
+    Indexes = lists:seq(1, 10, 2),
+    Log0 = write_sparse(Indexes, 0, Log00),
+    Log0b = assert_log_events(Log0,
+                             fun (L) ->
+                                     #{num_pending := Num} = ra_log:overview(L),
+                                     Num == 0
+                             end),
+    {Res0, _Log} = ra_log:sparse_read(Indexes, Log0b),
+    ?assertMatch([{1, _, _},
+                  {3, _, _},
+                  {5, _, _},
+                  {7, _, _},
+                  {9, _, _}], Res0),
+
+    %% roll wal and assert we can read sparsely from segments
+    ra_log_wal:force_roll_over(ra_log_wal),
+    Log1 = assert_log_events(Log0b,
+                             fun (L) ->
+                                     #{num_segments := Segs} = ra_log:overview(L),
+                                     Segs > 0
+                             end),
+
+    {Res, Log2} = ra_log:sparse_read(Indexes, Log1),
+    ?assertMatch([{1, _, _},
+                  {3, _, _},
+                  {5, _, _},
+                  {7, _, _},
+                  {9, _, _}], Res),
+
+    ct:pal("ov: ~p", [ra_log:overview(Log2)]),
+
+    %% the snapshot is written after live index replication
+    Meta = meta(15, 2, [?N1]),
+    Context = #{},
+    %% passing all Indexes but first one as snapshot state
+    LiveIndexes = tl(Indexes),
+    Chunk = create_snapshot_chunk(Config, Meta, LiveIndexes, LiveIndexes, Context),
+    SnapState0 = ra_log:snapshot_state(Log2),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexesSeq, AEffs} = ra_snapshot:complete_accept(Chunk, 1,
+                                                                        Machine,
+                                                                        SnapState1),
+    ?assertEqual(LiveIndexes, lists:reverse(ra_seq:expand(LiveIndexesSeq))),
+    run_effs(AEffs),
+    Log3 = ra_log:set_snapshot_state(SnapState, Log2),
+    {ok, Log4, _} = ra_log:install_snapshot({15, 2}, ?MODULE,
+                                            LiveIndexes, Log3),
+
+    ct:pal("overview Log4 ~p", [ra_log:overview(Log4)]),
+    ?assertEqual(16, ra_log:next_index(Log4)),
+
+    {ok, Log} = ra_log:write([{16, 1, <<>>}], Log4),
+    {ResFinal, _} = ra_log:sparse_read(LiveIndexes, Log),
+    ?assertMatch([{3, _, _},
+                  {5, _, _},
+                  {7, _, _},
+                  {9, _, _}], ResFinal),
+
+    ReInitLog= ra_log_init(Config),
+    {ResReInit, _} = ra_log:sparse_read(LiveIndexes, ReInitLog),
+    ?assertMatch([{3, _, _},
+                  {5, _, _},
+                  {7, _, _},
+                  {9, _, _}], ResReInit),
+    ok.
+
+sparse_write_resend(Config) ->
+    Log00 = ra_log_init(Config),
+    Indexes = lists:seq(1, 10, 2),
+    Log0 = write_sparse(Indexes, 0, Log00),
+    Log1 = assert_log_events(Log0,
+                             fun (L) ->
+                                     #{num_pending := Num} = ra_log:overview(L),
+                                     Num == 0
+                             end),
+    WalPid = whereis(ra_log_wal),
+    true = ra_log_wal_SUITE:suspend_process(WalPid),
+    Log2 = write_sparse([11, 15], 9, Log1),
+    exit(WalPid, kill),
+    await_cond(fun () ->
+                       P = whereis(ra_log_wal),
+                       is_pid(P) andalso P =/= WalPid
+               end, 100),
+
+    Log3 = write_sparse([20], 15, Log2),
+    Log4 = assert_log_events(Log3,
+                             fun (L) ->
+                                     #{num_pending := Num} = ra_log:overview(L),
+                                     Num == 0
+                             end),
+    ct:pal("o ~p", [ra_log:overview(Log4)]),
+    % {Res0, _Log} = ra_log:sparse_read(Indexes, Log2),
+    % ?assertMatch([{1, _, _},
+    %               {3, _, _},
+    %               {5, _, _},
+    %               {7, _, _},
+    %               {9, _, _}], Res0),
+    ok.
+
+overwritten_segment_is_cleared(Config) ->
+    Log0 = ra_log_init(Config, #{}),
+    % write a few entries
+    Log1 = write_and_roll(1, 256, 1, Log0),
+    Log2 = assert_log_events(Log1,
+                             fun(L) ->
+                                     #{num_segments := N} = ra_log:overview(L),
+                                     N == 2
+                             end),
+    Log3 = write_and_roll(128, 256 + 128, 2, Log2),
+    UId = ?config(uid, Config),
+    Log = assert_log_events(Log3,
+                            fun(L) ->
+                                    #{num_segments := N} = ra_log:overview(L),
+                                    N == 3 andalso
+                                    3 == length(ra_log_segment_writer:my_segments(ra_log_segment_writer, UId))
+                            end),
+
+    ct:pal("Log overview ~p", [ra_log:overview(Log)]),
+    ok.
+
+overwritten_segment_is_cleared_on_init(Config) ->
+    Log0 = ra_log_init(Config, #{}),
+    % write a few entries
+    Log1 = write_and_roll(1, 256, 1, Log0),
+    Log2 = assert_log_events(Log1,
+                             fun(L) ->
+                                     #{num_segments := N} = ra_log:overview(L),
+                                     N == 2
+                             end),
+    Log3 = write_n(128, 256 + 128, 2, Log2),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    ra_log:close(Log3),
+    % _Log3 = write_and_roll(128, 256 + 128, 2, Log2),
+    UId = ?config(uid, Config),
+    timer:sleep(1000),
+    flush(),
+    Log = ra_log_init(Config, #{}),
+
+    ct:pal("my segments ~p",
+           [ra_log_segment_writer:my_segments(ra_log_segment_writer, UId)]),
+    ct:pal("Log overview ~p", [ra_log:overview(Log)]),
+    ?assertEqual(3, length(
+                      ra_log_segment_writer:my_segments(ra_log_segment_writer, UId))),
+
+    ok.
+
+%% @doc Test that concurrent snapshot installation and compaction don't cause
+%% segment leaks or corruption. This tests the race condition where:
+%% 1. Follower installs snapshot A (triggers minor compaction)
+%% 2. then a major compaction is triggered
+%% 3. before major compaction is completed another snapshot is installed
+%% 4. Verify that a subsequent minor compaction is performed after the major
+%% compaction completes.
+concurrent_snapshot_install_and_compaction(Config) ->
+    Log00 = ra_log_init(Config, #{}),
+    Log0 = assert_log_events(write_and_roll(1, 1000, 1, Log00),
+                             fun(L) ->
+                                     #{num_segments := N} = ra_log:overview(L),
+                                     N == 8
+                             end),
+
+    %% Setup: Create a log with multiple segments
+
+    %% Create first snapshot with live indexes
+    LiveIndexes1 = ra_seq:from_list([100, 200, 300]),
+    SnapIdx1 = 500,
+    SnapTerm1 = 1,
+
+    Machine = {machine, ?MODULE, #{}},
+    Context = #{},
+    CreateSnapshot =
+        fun (Meta, LiveIndexes, L0) ->
+                Chunk = create_snapshot_chunk(Config, Meta, LiveIndexes,
+                                              LiveIndexes1, Context),
+                SnapState0 = ra_log:snapshot_state(L0),
+                {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+                {SnapState, _, LiveIndexes, AEffs} =
+                ra_snapshot:complete_accept(Chunk, 1, Machine, SnapState1),
+                {ra_log:set_snapshot_state(SnapState, L0), AEffs}
+        end,
+    {Log1, AEffs} = CreateSnapshot(meta(500, 1, [?N1]), LiveIndexes1, Log0),
+    run_effs(AEffs),
+    %% Install first snapshot - this triggers minor compaction
+    {ok, Log2, Effects1} = ra_log:install_snapshot({SnapIdx1, SnapTerm1},
+                                                   test_machine,
+                                                   LiveIndexes1, Log1),
+
+    %% Verify compaction was scheduled
+    ?assert(lists:any(fun({next_event, {ra_log_event, {compaction_result, _}}}) -> true;
+                         (_) -> false
+                      end, Effects1)),
+    [{next_event, {ra_log_event, Evt}}] = Effects1,
+    {Log3, []} = ra_log:handle_event(Evt, Log2),
+
+    {Log4, Effects3} = ra_log:handle_event(major_compaction, Log3),
+    run_effs(Effects3),
+    %% Before processing major compaction result, install second snapshot
+    LiveIndexes2 = ra_seq:from_list([600, 700]),
+    SnapIdx2 = 800,
+    SnapTerm2 = 1,
+    {Log5, AEffs2} = CreateSnapshot(meta(800, 1, [?N1]), LiveIndexes2, Log4),
+    run_effs(AEffs2),
+    %% no minor compaction here, i.e. no compaction result as part of effects
+    {ok, Log6, []} = ra_log:install_snapshot({SnapIdx2, SnapTerm2},
+                                             test_machine,
+                                             LiveIndexes2,
+                                             Log5),
+
+    %% Now process both compaction results until we have only 4 left
+    Log7 = assert_log_events(Log6,
+                             fun(L) ->
+                                     #{num_segments := N} = ra_log:overview(L),
+                                     N == 4
+                             end),
+
+    %% Verify log state is consistent
+    {SnapIdx2, SnapTerm2} = ra_log:snapshot_index_term(Log7),
+
+    %% Verify no segment leaks by checking all segments are accounted for
+    %% Cleanup
+    ra_log:close(Log6),
+    ok.
+
+init_with_dangling_symlink(Config) ->
+    %% This test verifies that ra_log:init handles dangling symlinks correctly.
+    %% During compaction, segment files can be replaced with symlinks pointing
+    %% to a compacted segment. If the target segment is deleted (e.g., due to
+    %% incomplete compaction recovery), the symlink becomes dangling.
+    %%
+    %% purge_dangling_symlinks should clean these up, but there's a bug where
+    %% it uses term_to_binary(File) instead of just File, causing it to check
+    %% the wrong filenames and never actually purge dangling symlinks.
+    %%
+    %% This causes ra_log:init to crash when my_segrefs tries to read info
+    %% from a dangling symlink.
+    UId = ?config(uid, Config),
+    ServerDataDir = ra_env:server_data_dir(default, UId),
+
+    %% First, create a valid log with some segments
+    Log0 = ra_log_init(Config),
+    Log1 = write_and_roll(1, 256, 1, Log0),
+    Log2 = assert_log_events(Log1,
+                             fun(L) ->
+                                     #{num_segments := N} = ra_log:overview(L),
+                                     N >= 2
+                             end),
+    ra_log:close(Log2),
+
+    %% Find the segment files
+    Segments = filelib:wildcard(filename:join(ServerDataDir, "*.segment")),
+    ?assert(length(Segments) >= 2),
+
+    %% Pick the first segment as the "target" and create a dangling symlink
+    %% that looks like a compacted segment pointing to a non-existent target
+    [_FirstSeg | _] = lists:sort(Segments),
+    DanglingSymlinkName = filename:join(ServerDataDir, "99999999.segment"),
+
+    %% Create a symlink pointing to a non-existent file (simulating a
+    %% compaction where the target was deleted but the symlink remains)
+    NonExistentTarget = "deleted_segment.segment",
+    ok = file:make_symlink(NonExistentTarget, DanglingSymlinkName),
+
+    %% Verify the symlink exists and is dangling
+    {ok, #file_info{type = symlink}} = file:read_link_info(DanglingSymlinkName),
+    {error, enoent} = file:read_file_info(DanglingSymlinkName),
+
+    %% Now try to re-init the log - this should NOT crash
+    %% Currently it crashes because:
+    %% 1. purge_dangling_symlinks has a bug (uses term_to_binary)
+    %% 2. my_segrefs lists all .segment files including the dangling symlink
+    %% 3. ra_log_segment:info tries to open the dangling symlink and fails
+    Log3 = ra_log_init(Config),
+
+    %% If we get here, the dangling symlink was handled correctly
+    %% Verify the dangling symlink was cleaned up
+    ?assertEqual({error, enoent}, file:read_link_info(DanglingSymlinkName)),
+
+    ra_log:close(Log3),
+    ok.
+
+init_after_missing_segments_event(Config) ->
+    %% This test verifies that ra_log:init handles the case where a segments
+    %% event was missed (e.g., due to a crash or message loss). The log should
+    %% recover correctly and be able to read all entries.
+
+    %% Step 1: Write entries 1-127 and roll, but discard the segments event
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 111, 1, Log0),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    %% Only deliver written events, discard segments events
+    Log2 = deliver_all_log_events_except_segments(Log1, 500),
+    {110, 1} = ra_log:last_written(Log2),
+
+
+    %% set_last_index 100 - this opens a new mt table
+    {ok, Log3} = ra_log:set_last_index(100, Log2),
+    % ct:pal("O3 ~p", [ra_log:overview(Log3)]),
+    %%
+    %% sparse writes, [105, 110, 115]
+    {ok, Log4}  = ra_log:write_sparse({105, 1, 105}, 100, Log3),
+    {ok, Log5}  = ra_log:write_sparse({110, 1, 110}, 105, Log4),
+    {ok, Log6}  = ra_log:write_sparse({115, 1, 110}, 110, Log5),
+
+
+    %% the install snapshot, but all I think we need to do is force a new mt,
+    %% set_last_index 115
+    {ok, Log7} = ra_log:set_last_index(115, Log6),
+    % ct:pal("O7 ~p", [ra_log:overview(Log7)]),
+    %% write {116, 130} and roll
+    %% this _should_ clear all previous mem tables
+
+    Log8 = write_and_roll(116, 131, 1, Log7),
+    Log9 = write_n(131, 140, 1, Log8),
+
+    ct:pal("O9 ~p", [ra_log:overview(Log9)]),
+    ra_log:close(Log9),
+    %%
+    %% re-init
+    Log = ra_log_init(Config),
+    ct:pal("O ~p", [ra_log:overview(Log)]),
+
+    %% validate all indexes since "snapshot" (115) can be read during recovery
+    validate_fold(116, 139, 1, Log),
+
+    ok.
+
+
+
+%% INTERNAL
 validate_fold(From, To, Term, Log0) ->
-    {Entries0, Log} = ra_log:fold(From, To,
-                                  fun (E, A) -> [E | A] end,
-                                  [], Log0),
+    {Entries0, Log} = ra_log:fold(From, To, fun ra_lib:cons/2, [], Log0),
     ?assertEqual(To - From + 1, length(Entries0)),
     % validate entries are correctly read
-    Expected = [ {I, Term, <<I:64/integer>>} ||
-                 I <- lists:seq(To, From, -1) ],
+    Expected = [{I, Term, <<I:64/integer>>} ||
+                I <- lists:seq(To, From, -1)],
     ?assertEqual(Expected, Entries0),
     Log.
 
@@ -1583,6 +2448,13 @@ write_n(From, To, Term, Log0) ->
     {ok, Log} = ra_log:write(Entries, Log0),
     Log.
 
+write_sparse([], _, Log0) ->
+    Log0;
+write_sparse([I | Rem], LastIdx, Log0) ->
+    ct:pal("write_sparse index ~b last ~w", [I, LastIdx]),
+    {ok, Log} = ra_log:write_sparse({I, 1, <<I:64/integer>>}, LastIdx, Log0),
+    write_sparse(Rem, I, Log).
+
 %% Utility functions
 
 deliver_log_events_cond(Log0, _CondFun, 0) ->
@@ -1599,17 +2471,20 @@ deliver_log_events_cond(Log0, CondFun, N) ->
                             P ! E,
                             Acc;
                        ({next_event, {ra_log_event, E}}, Acc0) ->
-                            {Acc, _} = ra_log:handle_event(E, Acc0),
+                            {Acc, Effs1} = ra_log:handle_event(E, Acc0),
+                            run_effs(Effs1),
+                            Acc;
+                       ({bg_work, Fun, _}, Acc) ->
+                            Fun(),
                             Acc;
                        (_, Acc) ->
                             Acc
                     end, Log1, Effs),
-            [P ! E || {send_msg, P, E, _} <- Effs],
             case CondFun(Log2) of
                 {false, Log} ->
                     deliver_log_events_cond(Log, CondFun, N-1);
                 false ->
-                    deliver_log_events_cond(Log2, CondFun, N-1);
+                    deliver_log_events_cond(Log1, CondFun, N-1);
                 {true, Log} ->
                     ct:pal("condition was true!!"),
                     Log;
@@ -1642,12 +2517,15 @@ deliver_all_log_events(Log0, Timeout) ->
                             P ! E,
                             Acc;
                        ({next_event, {ra_log_event, E}}, Acc0) ->
-                            {Acc, _} = ra_log:handle_event(E, Acc0),
+                            {Acc, Effs} = ra_log:handle_event(E, Acc0),
+                            run_effs(Effs),
+                            Acc;
+                       ({bg_work, Fun, _}, Acc) ->
+                            Fun(),
                             Acc;
                        (_, Acc) ->
                             Acc
                     end, Log1, Effs),
-            [P ! E || {send_msg, P, E, _} <- Effs],
             % ct:pal("log evt effs: ~p", [Effs]),
             deliver_all_log_events(Log, Timeout)
     after Timeout ->
@@ -1658,28 +2536,31 @@ assert_log_events(Log0, AssertPred) ->
     assert_log_events(Log0, AssertPred, 2000).
 
 assert_log_events(Log0, AssertPred, Timeout) ->
-    receive
-        {ra_log_event, Evt} ->
-            ct:pal("log evt: ~p", [Evt]),
-            {Log1, Effs} = ra_log:handle_event(Evt, Log0),
-            %% handle any next events
-            Log = lists:foldl(
-                    fun ({next_event, {ra_log_event, E}}, Acc0) ->
-                            ct:pal("eff log evt: ~p", [E]),
-                            {Acc, _Effs} = ra_log:handle_event(E, Acc0),
-                            Acc;
-                        (_, Acc) ->
-                            Acc
-                    end, Log1, Effs),
-            case AssertPred(Log) of
-                true ->
-                    Log;
-                false ->
+    case AssertPred(Log0) of
+        true ->
+            Log0;
+        false ->
+            receive
+                {ra_log_event, Evt} ->
+                    ct:pal("log evt: ~p", [Evt]),
+                    {Log1, Effs} = ra_log:handle_event(Evt, Log0),
+                    run_effs(Effs),
+                    %% handle any next events
+                    Log = lists:foldl(
+                            fun ({next_event, {ra_log_event, E}}, Acc0) ->
+                                    ct:pal("log evt: ~p", [E]),
+                                    {Acc, Effs1} = ra_log:handle_event(E, Acc0),
+                                    run_effs(Effs1),
+                                    Acc;
+                                (_, Acc) ->
+                                    Acc
+                            end, Log1, Effs),
                     assert_log_events(Log, AssertPred, Timeout)
+
+            after Timeout ->
+                      flush(),
+                      exit({assert_log_events_timeout, Log0})
             end
-    after Timeout ->
-              flush(),
-              exit({assert_log_events_timeout, Log0})
     end.
 
 wait_for_segments(Log0, Timeout) ->
@@ -1770,20 +2651,28 @@ meta(Idx, Term, Cluster) ->
       cluster => Cluster,
       machine_version => 1}.
 
-create_snapshot_chunk(Config, #{index := Idx} = Meta, Context) ->
+create_snapshot_chunk(Config, Meta, Context) ->
+    create_snapshot_chunk(Config, Meta, <<"9">>, [], Context).
+
+create_snapshot_chunk(Config, #{index := Idx,
+                                term := Term} = Meta, MacState, LiveIndexes, Context) ->
     OthDir = filename:join(?config(work_dir, Config), "snapshot_installation"),
     CPDir = filename:join(?config(work_dir, Config), "checkpoints"),
     ok = ra_lib:make_dir(OthDir),
     ok = ra_lib:make_dir(CPDir),
     Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
                            OthDir, CPDir, undefined, ?DEFAULT_MAX_CHECKPOINTS),
-    MacRef = <<"9">>,
-    {Sn1, _} = ra_snapshot:begin_snapshot(Meta, MacRef, snapshot, Sn0),
+    % LiveIndexes = [],
+    {Sn1, [{bg_work, Fun, _ErrFun}]} =
+        ra_snapshot:begin_snapshot(Meta, ?MODULE, MacState, snapshot, Sn0),
+    Fun(),
     Sn2 =
         receive
-            {ra_log_event, {snapshot_written, {Idx, 2} = IdxTerm, snapshot}} ->
-                ra_snapshot:complete_snapshot(IdxTerm, snapshot, Sn1)
+            {ra_log_event, {snapshot_written, {Idx, Term} = IdxTerm, _, snapshot, _}} ->
+                ra_snapshot:complete_snapshot(IdxTerm, snapshot,
+                                              LiveIndexes, Sn1)
         after 1000 ->
+                  flush(),
                   exit(snapshot_timeout)
         end,
     {ok, Meta, ChunkSt} = ra_snapshot:begin_read(Sn2, Context),
@@ -1821,3 +2710,18 @@ wait_for_wal(OldPid) ->
                               P = whereis(ra_log_wal),
                               is_pid(P) andalso P =/= OldPid
                       end, 100, 100).
+run_effs(Effs) ->
+    [Fun() || {bg_work, Fun, _} <- Effs].
+
+
+%% ra_machine fakes
+version() -> 1.
+which_module(_) -> ?MODULE.
+live_indexes(MacState) when is_list(MacState) ->
+    %% fake returning live indexes
+    MacState;
+live_indexes(_) ->
+    [].
+
+macctx() ->
+    {version(), ?MODULE}.

@@ -21,7 +21,7 @@ start_link(Conf) ->
     supervisor:start_link(?MODULE, [Conf]).
 
 init([WalConf]) ->
-    SupFlags = #{strategy => one_for_one, intensity => 1, period => 5},
+    SupFlags = #{strategy => one_for_one, intensity => 2, period => 5},
     Wal = #{id => ra_log_wal,
             start => {ra_log_wal, start_link, [WalConf]}},
     {ok, {SupFlags, [Wal]}}.
