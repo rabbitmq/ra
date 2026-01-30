@@ -177,7 +177,7 @@ next(#i{seq = [{Next, End} | Rem]}) ->
 %% @doc Returns a chunk of up to ChunkSize expanded indices from the sequence
 %% without eagerly expanding the entire sequence. On first call, pass a state().
 %% On subsequent calls, pass the returned iterator.
-%% Returns `{Chunk, NewIterator}` or `end_of_seq` when exhausted.
+%% Returns `{Chunk, NewIterator}' or `end_of_seq' when exhausted.
 %% Indices are returned in ascending order.
 -spec list_chunk(ChunkSize :: pos_integer(), state() | iter()) ->
     {[ra:index()], iter()} | end_of_seq.
