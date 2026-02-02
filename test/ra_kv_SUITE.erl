@@ -198,7 +198,7 @@ snapshot_replication(_Config) ->
                        ra:member_overview(KvId3),
                    Kv1LastIndex == LastIdx
            end, 100, 100),
-    ct:pal("counters ~p", [ra_counters:counters(KvId3, [last_applied])]),
+    ct:pal("counters ~p", [ra_counters:counters(?SYS, KvId3, [last_applied])]),
     %% ensure Kv3 did not crash during snapshot replication
     ?assertEqual(KvId3Pid, whereis(Kv3)),
 
@@ -293,13 +293,13 @@ basics(_Config) ->
     ok = ra_lib:retry(
            fun () ->
                    #{major_compactions := Maj} =
-                       ra_counters:counters(KvId, [major_compactions]),
+                       ra_counters:counters(?SYS, KvId, [major_compactions]),
                    Maj == 1
            end, 10, 100),
     {ok, {Reads5, _}} = ra_server_proc:read_entries(KvId, [LastIdx | Live],
                                                     undefined, 1000),
     ?assertEqual(Reads4, Reads5),
-    ct:pal("counters ~p", [ra_counters:overview(KvId)]),
+    ct:pal("counters ~p", [ra_counters:overview(?SYS, KvId)]),
     ok = ra_kv:remove_member(?SYS, KvId2, KvId),
     ct:pal("members ~p", [ra:members(KvId)]),
     ra:delete_cluster([KvId]),

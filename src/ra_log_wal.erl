@@ -266,19 +266,22 @@ init(#{system := System,
       garbage_collect := Gc,
       min_heap_size := MinHeapSize,
       min_bin_vheap_size := MinBinVheapSize,
+      system := System,
       names := #{wal := WalName,
                  segment_writer := SegWriter,
-                 open_mem_tbls := MemTablesName} = Names} =
+                 open_mem_tbls := MemTablesName} = Names0} =
         merge_conf_defaults(Conf0),
     ?NOTICE("WAL in ~ts initialising with name ~ts", [System, WalName]),
     process_flag(trap_exit, true),
     % given ra_log_wal is effectively a fan-in sink it is likely that it will
     % at times receive large number of messages from a large number of
     % writers
+    Names = Names0#{system => System},
     process_flag(message_queue_data, off_heap),
     process_flag(min_bin_vheap_size, MinBinVheapSize),
     process_flag(min_heap_size, MinHeapSize),
-    CRef = ra_counters:new(WalName,
+    CRef = ra_counters:new(System,
+                           WalName,
                            ?COUNTER_FIELDS,
                            #{ra_system => System, module => ?MODULE}),
     Conf = #conf{dir = Dir,
@@ -329,7 +332,7 @@ terminate(Reason, #state{conf = #conf{system = System}} = State) ->
 
 format_status(#state{conf = #conf{sync_method = SyncMeth,
                                   compute_checksums = Cs,
-                                  names = #{wal := WalName},
+                                  names = #{system := System, wal := WalName},
                                   max_size_bytes = MaxSize},
                      writers = Writers,
                      wal = #wal{file_size = FSize,
@@ -340,7 +343,7 @@ format_status(#state{conf = #conf{sync_method = SyncMeth,
       filename => filename:basename(Fn),
       current_size => FSize,
       max_size_bytes => MaxSize,
-      counters => ra_counters:overview(WalName)
+      counters => ra_counters:overview(System, WalName)
      }.
 
 %% Internal
@@ -1094,4 +1097,3 @@ named_cast(Wal, Msg) ->
         Pid ->
             named_cast(Pid, Msg)
     end.
-

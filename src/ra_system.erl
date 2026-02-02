@@ -15,7 +15,8 @@
          stop_default/0
          ]).
 
--type names() :: #{wal := atom(),
+-type names() :: #{system := atom(),
+                   wal := atom(),
                    wal_sup := atom(),
                    log_sup := atom(),
                    log_ets := atom(),
@@ -145,7 +146,8 @@ default_config() ->
       low_priority_commands_flush_size => LowPriorityCommandsFlushSize,
       low_priority_commands_in_memory_size => LowPriorityInMemSize,
       machine_upgrade_strategy => MachineUpgradeStrategy,
-      names => #{wal => ra_log_wal,
+      names => #{system => default,
+                 wal => ra_log_wal,
                  wal_sup => ra_log_wal_sup,
                  log_sup => ra_log_sup,
                  log_ets => ra_log_ets,
@@ -158,7 +160,8 @@ default_config() ->
                 }}.
 
 derive_names(SysName) when is_atom(SysName) ->
-    #{wal => derive(SysName, <<"log_wal">>),
+    #{system => SysName,
+      wal => derive(SysName, <<"log_wal">>),
       wal_sup => derive(SysName, <<"log_wal_sup">>),
       log_sup => derive(SysName, <<"log_sup">>),
       log_ets => derive(SysName, <<"log_ets">>),

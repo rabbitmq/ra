@@ -57,7 +57,8 @@ init([#{data_dir := DataDir,
 
 make_wal_conf(#{data_dir := DataDir,
                 name := System,
-                names := #{} = Names} = Cfg) ->
+                names := #{} = Names0} = Cfg) ->
+    Names = Names0#{system => System},
     WalDir = case Cfg of
                  #{wal_data_dir := D} -> D;
                  _ -> DataDir

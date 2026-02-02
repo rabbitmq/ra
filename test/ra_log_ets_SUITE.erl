@@ -29,6 +29,8 @@ groups() ->
      {tests, [], all_tests()}
     ].
 
+-define(SYS, default).
+
 init_per_suite(Config) ->
     Config.
 
@@ -48,7 +50,7 @@ init_per_testcase(TestCase, Config) ->
     SysCfg = (ra_system:default_config())#{data_dir => Dir},
     ra_system:store(SysCfg),
     _ = ra_log_ets:start_link(SysCfg),
-    ra_counters:init(),
+    ra_counters:init(?SYS),
     [{sys_cfg, SysCfg}, {data_dir, Dir} | Config].
 
 end_per_testcase(_TestCase, _Config) ->

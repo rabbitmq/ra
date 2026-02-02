@@ -10,6 +10,8 @@
 %%
 %%
 
+-define(SYS, default).
+
 all() ->
     [
      {group, random},
@@ -307,15 +309,15 @@ delete_during_segment_flush(Config) ->
     ok.
 
 read_one(Config) ->
-    ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
-    Log0 = ra_log_init(Config, #{counter => ra_counters:fetch(?FUNCTION_NAME)}),
+    ra_counters:new(?SYS, ?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
+    Log0 = ra_log_init(Config, #{counter => ra_counters:fetch(?SYS, ?FUNCTION_NAME)}),
     Log1 = append_n(1, 2, 1, Log0),
     % ensure the written event is delivered
     Log2 = deliver_all_log_events(Log1, 200),
     {[_], Log} = ra_log_take(1, 1, Log2),
     % read out of range
     #{?FUNCTION_NAME := #{read_mem_table := M1,
-                          read_segment := M2}} = ra_counters:overview(),
+                          read_segment := M2}} = ra_counters:overview(?SYS),
     % read two entries
     ?assertEqual(1, M1 + M2),
     ra_log:close(Log),
@@ -341,8 +343,8 @@ take_after_overwrite_and_init(Config) ->
 
 
 validate_sequential_fold(Config) ->
-    ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
-    Log0 = ra_log_init(Config, #{counter => ra_counters:fetch(?FUNCTION_NAME),
+    ra_counters:new(?SYS, ?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
+    Log0 = ra_log_init(Config, #{counter => ra_counters:fetch(?SYS, ?FUNCTION_NAME),
                                  max_open_segments => 2}),
     % write 1000 entries
     Log1 = append_and_roll(1, 500, 1, Log0),
@@ -366,7 +368,7 @@ validate_sequential_fold(Config) ->
 
     #{read_mem_table := M1,
       open_segments := 2, %% as this is the max
-      read_segment := M4} = O = ra_counters:overview(?FUNCTION_NAME),
+      read_segment := M4} = O = ra_counters:overview(?SYS, ?FUNCTION_NAME),
     ct:pal("counters ~p", [O]),
     ?assertEqual(1000, M1 + M4),
 
@@ -374,9 +376,9 @@ validate_sequential_fold(Config) ->
     ok.
 
 validate_reads_for_overlapped_writes(Config) ->
-    ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
-    Log0 = ra_log_init(Config, #{counter => ra_counters:fetch(?FUNCTION_NAME)
-                        }),
+    ra_counters:new(?SYS, ?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
+    Log0 = ra_log_init(Config,
+                       #{counter => ra_counters:fetch(?SYS, ?FUNCTION_NAME)}),
     % write a segment and roll 1 - 299 - term 1
     Log1 = write_and_roll(1, 300, 1, Log0),
     % write 300 - 399 in term 1 - no roll
@@ -397,11 +399,11 @@ validate_reads_for_overlapped_writes(Config) ->
     Log8 = validate_fold(200, 550, 2, Log7),
 
     #{?FUNCTION_NAME := #{read_mem_table := M1,
-                          read_segment := M2}} = ra_counters:overview(),
+                          read_segment := M2}} = ra_counters:overview(?SYS),
     ?assertEqual(550, M1 + M2),
     ra_log:close(Log8),
     %% re open to test init with overlapping segments
-    Log = ra_log_init(Config, #{counter => ra_counters:fetch(?FUNCTION_NAME)}),
+    Log = ra_log_init(Config, #{counter => ra_counters:fetch(?SYS, ?FUNCTION_NAME)}),
     ra_log:close(Log),
     ok.
 
@@ -726,9 +728,9 @@ writes_lower_than_snapshot_index_are_dropped(Config) ->
     ok.
 
 updated_segment_can_be_read(Config) ->
-    ra_counters:new(?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
+    ra_counters:new(?SYS, ?FUNCTION_NAME, ?RA_COUNTER_FIELDS),
     Log0 = ra_log_init(Config,
-                       #{counter => ra_counters:fetch(?FUNCTION_NAME),
+                       #{counter => ra_counters:fetch(?SYS, ?FUNCTION_NAME),
                          min_snapshot_interval => 1}),
     %% append a few entries
     Log2 = append_and_roll(1, 5, 1, Log0),
@@ -742,6 +744,9 @@ updated_segment_can_be_read(Config) ->
     % this should return all entries
     {Entries1, _} = ra_log_take(1, 15, Log4),
     ?assertEqual(15, length(Entries1)),
+    ct:pal("Entries: ~p", [Entries]),
+    ct:pal("Entries1: ~p", [Entries1]),
+    ct:pal("Counters ~p", [ra_counters:overview(?SYS, ?FUNCTION_NAME)]),
     ?assertEqual(15, length(Entries1)),
     ok.
 
