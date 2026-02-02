@@ -1598,6 +1598,7 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
                                         cluster => make_cluster(Id, ClusterIds),
                                         membership => get_membership(ClusterIds, State0),
                                         machine_state => MacState}),
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapIndex),
             %% it was the last snapshot chunk so we can revert back to
             %% follower status
             {follower, persist_last_applied(State), [{reply, Reply} |
