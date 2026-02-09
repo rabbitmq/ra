@@ -714,6 +714,8 @@ sync(Fd, Meth) ->
 
 complete_batch(#state{batch = undefined} = State) ->
     State;
+complete_batch(#state{batch = #batch{num_writes = 0}} = State) ->
+    State#state{batch = undefined};
 complete_batch(#state{batch = #batch{waiting = Waiting,
                                      num_writes = NumWrites},
                       wal = Wal,
