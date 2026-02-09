@@ -28,6 +28,7 @@
          dump_index/1]).
 
 -include("ra.hrl").
+-include("ra_file.hrl").
 
 -include_lib("kernel/include/file.hrl").
 
@@ -270,9 +271,9 @@ flush(#state{cfg = #cfg{fd = Fd},
              data_offset = DataOffs,
              index_write_offset = IdxWriteOffs,
              data_write_offset = DataWriteOffs} = State) ->
-    case file:pwrite(Fd, DataWriteOffs, PendData) of
+    case ?file_pwrite(Fd, DataWriteOffs, PendData) of
         ok ->
-            case file:pwrite(Fd, IdxWriteOffs, PendIndex) of
+            case ?file_pwrite(Fd, IdxWriteOffs, PendIndex) of
                 ok ->
                     {ok, State#state{pending_data = [],
                                      pending_index = [],
@@ -600,7 +601,7 @@ parse_index_data_v1(<<Idx:64/unsigned, Term:64/unsigned,
 write_header(MaxCount, Fd) ->
     Header = <<?MAGIC, ?VERSION:16/unsigned, MaxCount:16/unsigned>>,
     {ok, 0} = file:position(Fd, 0),
-    ok = file:write(Fd, Header),
+    ok = ?file_write(Fd, Header),
     ok = ra_file:sync(Fd).
 
 read_header(Fd) ->

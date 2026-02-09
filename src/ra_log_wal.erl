@@ -27,6 +27,7 @@
 -compile(inline).
 
 -include("ra.hrl").
+-include("ra_file.hrl").
 
 -define(CURRENT_VERSION, 1).
 -define(MAGIC, "RAWA").
@@ -635,7 +636,7 @@ prepare_file(File, Modes) ->
 make_tmp(File) ->
     Tmp = filename:rootname(File) ++ ".tmp",
     {ok, Fd} = file:open(Tmp, [write, binary, raw]),
-    ok = file:write(Fd, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>),
+    ok = ?file_write(Fd, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>),
     ok = ra_file:sync(Fd),
     ok = file:close(Fd),
     Tmp.
@@ -684,10 +685,10 @@ flush_pending(#state{wal = #wal{fd = Fd},
 
     case WriteStrategy of
         default ->
-            ok = file:write(Fd, Pend),
+            ok = ?file_write(Fd, Pend),
             sync(Fd, SyncMeth);
         _ ->
-            ok = file:write(Fd, Pend)
+            ok = ?file_write(Fd, Pend)
     end,
     State0#state{batch = undefined}.
 
