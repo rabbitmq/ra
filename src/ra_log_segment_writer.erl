@@ -441,6 +441,10 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                             append_to_segment(UId, Tid, StartIdx, EndIdx, Seg,
                                               [Seg0 | Closed], State)
                     end;
+                {error, hole} ->
+                    FileName = ra_log_segment:filename(Seg0),
+                    Range = ra_log_segment:range(Seg0),
+                    exit({segment_writer_append_hole, FileName, Idx, Range});
                 {error, Posix} ->
                     FileName = ra_log_segment:filename(Seg0),
                     exit({segment_writer_append_error, FileName, Posix})

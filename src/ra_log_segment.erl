@@ -221,8 +221,17 @@ append(#state{cfg = #cfg{version = Version,
               pending_data = DataPend0} = State,
        Index, Term, {Length, Data}) ->
 
-    case is_full(State) of
-        false ->
+    IsValid = case Range0 of
+        undefined ->
+            true;
+        {_, LastIdx} when (Index - LastIdx) =< 1 ->
+            true;
+        {_, _} ->
+            {error, hole}
+    end,
+    IsFull = is_full(State),
+    case IsValid of
+        true when not IsFull ->
             % TODO: check length is less than #FFFFFFFF ??
             Checksum = compute_checksum(Cfg, Data),
             OSize = offset_size(Version),
@@ -238,8 +247,10 @@ append(#state{cfg = #cfg{version = Version,
                              pending_data = [DataPend0, Data],
                              pending_count = PendCnt + 1}
             };
-        true ->
-            {error, full}
+        true when IsFull ->
+            {error, full};
+        Error ->
+            Error
      end;
 append(State, Index, Term, Data)
   when is_list(Data) orelse
