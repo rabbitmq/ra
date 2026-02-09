@@ -110,7 +110,7 @@ ioerrors_recovery_segment(Config) ->
     ok = restart_ra(DataDir),
     ok = ra:restart_server(N1),
 
-    %% Log segment is corrupted now, having a hole is considered unrecoverable:
+    %% Should now succeed:
     {ok, _, _} = ra:process_command(N1, {?LINE, <<?MODULE_STRING, ": healed">>}),
 
     terminate_cluster([N1]).
@@ -157,7 +157,8 @@ ioerrors_recovery_empty_wal(Config) ->
     persistent_term:put(FailurePT, [
         {error, enospc},
         passthrough,
-        passthrough,
+        %% WAL now knows next entry is out-of-seq and does not write it.
+        %% passthrough,
         {error, enospc}
     ]),
     _ = ra:process_command(N1, {?LINE, <<?MODULE_STRING, ": simulated enospc 1">>}, 1000),
@@ -167,7 +168,7 @@ ioerrors_recovery_empty_wal(Config) ->
     ok = restart_ra(DataDir),
     ok = ra:restart_server(N1),
 
-    %% Log segment is corrupted now, having a hole is considered unrecoverable:
+    %% Should now succeed:
     {ok, _, _} = ra:process_command(N1, {?LINE, <<?MODULE_STRING, ": healed">>}),
     
     terminate_cluster([N1]).

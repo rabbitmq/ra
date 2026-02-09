@@ -111,7 +111,8 @@
                    ranges = #{} :: #{ra_uid() =>
                                      [{ets:tid(), {ra:index(), ra:index()}}]},
                    tables = #{} :: #{ra_uid() => ra_mt:state()},
-                   writers = #{} :: #{ra_uid() => {in_seq, ra:index()}}
+                   writers = #{} :: #{ra_uid() => {in_seq, ra:index()}},
+                   skipped = #{} :: #{ra_uid() => ra_range:range()}
                   }).
 -record(state, {conf = #conf{},
                 file_num = 0 :: non_neg_integer(),
@@ -356,7 +357,8 @@ handle_op({info, {'EXIT', _, Reason}}, _State) ->
     %% this is here for testing purposes only
     throw({stop, Reason}).
 
-recover_wal(Dir, #conf{segment_writer = SegWriter,
+recover_wal(Dir, #conf{names = Names,
+                       segment_writer = SegWriter,
                        mem_tables_tid = MemTblsTid} = Conf) ->
     % ensure configured directory exists
     ok = ra_lib:make_dir(Dir),
@@ -380,26 +382,38 @@ recover_wal(Dir, #conf{segment_writer = SegWriter,
              end || File <- Files0,
                     filename:extension(File) == ".wal"],
     WalFiles = lists:sort(Files),
-    AllWriters =
-        [begin
+
+    %% Seed writers from existing segment files so that we know the last
+    %% flushed index per writer. This prevents accepting WAL entries that
+    %% would create holes relative to segment state.
+    Registered = ra_directory:list_registered(Names),
+    SegWriters = seed_writers_from_segments(SegWriter, Registered),
+
+    FinalWriters = lists:foldl(
+        fun (F, AccWriters) ->
              ?DEBUG("wal: recovering ~ts, Mode ~s", [F, Mode]),
              WalFile = filename:join(Dir, F),
              Fd = open_at_first_record(WalFile),
              {Time, #recovery{ranges = Ranges,
-                              writers = Writers}} =
-                 timer:tc(fun () -> recover_wal_chunks(Conf, Fd, Mode) end),
+                              writers = Writers,
+                              skipped = Skipped}} =
+                 timer:tc(fun () ->
+                                recover_wal_chunks(Conf, Fd, Mode, AccWriters)
+                          end),
+
+                 map_size(Skipped) > 0 andalso maps:foreach(
+                    fun(UId, SkippedRanges) ->
+                            ?WARN("wal: skipped non-contiguous ranges ~p for ~s",
+                                  [SkippedRanges, UId])
+                    end, Skipped),
 
              ok = ra_log_segment_writer:accept_mem_tables(SegWriter, Ranges, WalFile),
 
              close_existing(Fd),
              ?DEBUG("wal: recovered ~ts time taken ~bms - recovered ~b writers",
                     [F, Time div 1000, map_size(Writers)]),
-             Writers
-         end || F <- WalFiles],
-
-    FinalWriters = lists:foldl(fun (New, Acc) ->
-                                       maps:merge(Acc, New)
-                               end, #{}, AllWriters),
+            maps:merge(AccWriters, Writers)
+        end, SegWriters, WalFiles),
 
     ?DEBUG("wal: recovered ~b writers", [map_size(FinalWriters)]),
 
@@ -512,7 +526,7 @@ handle_msg({append, {UId, Pid} = Id, MtTid, Idx, Term, Entry},
         {ok, {in_seq, PrevIdx}} ->
             % writer was in seq but has sent an out of seq entry
             % notify writer
-            ?DEBUG("WAL: requesting resend from `~w`, "
+            ?DEBUG("WAL: requesting resend from ~s, "
                    "last idx ~b idx received ~b",
                    [UId, PrevIdx, Idx]),
             Pid ! {ra_log_event, {resend_write, PrevIdx + 1}},
@@ -798,9 +812,10 @@ dump_records(<<_:1/unsigned, 1:1/unsigned, _:22/unsigned,
 dump_records(<<>>, Entries) ->
     Entries.
 
-recover_wal_chunks(#conf{} = Conf, Fd, Mode) ->
+recover_wal_chunks(#conf{} = Conf, Fd, Mode, Writers0) ->
     Chunk = read_wal_chunk(Fd, Conf#conf.recovery_chunk_size),
-    recover_records(Conf, Fd, Chunk, #{}, #recovery{mode = Mode}).
+    recover_records(Conf, Fd, Chunk, #{},
+                    #recovery{mode = Mode, writers = Writers0}).
 % All zeros indicates end of a pre-allocated wal file
 recover_records(_, _Fd, <<0:1/unsigned, 0:1/unsigned, 0:22/unsigned,
                           IdDataLen:16/unsigned, _:IdDataLen/binary,
@@ -820,19 +835,9 @@ recover_records(#conf{names = Names} = Conf, Fd,
     case ra_directory:is_registered_uid(Names, UId) of
         true ->
             Cache = Cache0#{IdRef => {UId, <<1:1/unsigned, IdRef:22/unsigned>>}},
-            SnapIdx = recover_snap_idx(Conf, UId, Trunc == 1, Idx),
-            case validate_checksum(Checksum, Idx, Term, EntryData) of
-                ok when Idx > SnapIdx ->
-                    State1 = handle_trunc(Trunc == 1, UId, Idx, State0),
-                    case recover_entry(Names, UId,
-                                       {Idx, Term, binary_to_term(EntryData)},
-                                       SnapIdx, State1) of
-                        {ok, State} ->
-                            recover_records(Conf, Fd, Rest, Cache, State);
-                        {retry, State} ->
-                            recover_records(Conf, Fd, Chunk, Cache, State)
-                    end;
-                ok ->
+            case recover_record(Conf, UId, Idx, Term,
+                                EntryData, Checksum, Trunc == 1, State0) of
+                {next, {in_snapshot, SnapIdx}, State} ->
                     %% best the the snapshot index as the last
                     %% writer index
                     Writers = case State0#recovery.writers of
@@ -842,19 +847,19 @@ recover_records(#conf{names = Names} = Conf, Fd,
                                       W#{UId => {in_seq, SnapIdx}}
                               end,
                     recover_records(Conf, Fd, Rest, Cache,
-                                    State0#recovery{writers = Writers});
-                error ->
-                    ?DEBUG("WAL: record failed CRC check. If this is the last record"
-                           " recovery can resume", []),
-                    %% if this is the last entry in the wal we can just drop the
-                    %% record;
+                                   State#recovery{writers = Writers});
+                {next, _, State} ->
+                    recover_records(Conf, Fd, Rest, Cache, State);
+                {retry, State} ->
+                    recover_records(Conf, Fd, Chunk, Cache, State);
+                {stop, State} ->
                     ok = is_last_record(Fd, Rest),
-                    State0
+                    State
             end;
         false ->
             recover_records(Conf, Fd, Rest, Cache0, State0)
     end;
-recover_records(#conf{names = Names} = Conf, Fd,
+recover_records(Conf, Fd,
                 <<Trunc:1/unsigned, 1:1/unsigned, IdRef:22/unsigned,
                   Checksum:32/integer,
                   EntryDataLen:32/unsigned,
@@ -864,27 +869,15 @@ recover_records(#conf{names = Names} = Conf, Fd,
                 Cache, State0) ->
     case Cache of
         #{IdRef := {UId, _}} ->
-            SnapIdx = recover_snap_idx(Conf, UId, Trunc == 1, Idx),
-            case validate_checksum(Checksum, Idx, Term, EntryData) of
-                ok when Idx > SnapIdx ->
-                    State1 = handle_trunc(Trunc == 1, UId, Idx, State0),
-                    case recover_entry(Names, UId,
-                                       {Idx, Term, binary_to_term(EntryData)},
-                                       SnapIdx, State1) of
-                        {ok, State} ->
-                            recover_records(Conf, Fd, Rest, Cache, State);
-                        {retry, State} ->
-                            recover_records(Conf, Fd, Chunk, Cache, State)
-                    end;
-                ok ->
-                    recover_records(Conf, Fd, Rest, Cache, State0);
-                error ->
-                    ?DEBUG("WAL: record failed CRC check. If this is the last record"
-                           " recovery can resume", []),
-                    %% if this is the last entry in the wal we can just drop the
-                    %% record;
+            case recover_record(Conf, UId, Idx, Term,
+                                EntryData, Checksum, Trunc == 1, State0) of
+                {next, _, State} ->
+                    recover_records(Conf, Fd, Rest, Cache, State);
+                {retry, State} ->
+                    recover_records(Conf, Fd, Chunk, Cache, State);
+                {stop, State} ->
                     ok = is_last_record(Fd, Rest),
-                    State0
+                    State
             end;
         _ ->
             %% if the IdRef is not in the cache this refers to a deleted
@@ -903,6 +896,56 @@ recover_records(Conf, Fd, Chunk, Cache, State) ->
             Chunk0 = <<Chunk/binary, NextChunk/binary>>,
             recover_records(Conf, Fd, Chunk0, Cache, State)
     end.
+
+recover_record(#conf{names = Names} = Conf,
+                   UId, Idx, Term, EntryData, Checksum, IsTrunc, State0) ->
+    SnapIdx = recover_snap_idx(Conf, UId, IsTrunc, Idx),
+    case validate_checksum(Checksum, Idx, Term, EntryData) of
+        ok when Idx > SnapIdx ->
+            case IsTrunc orelse is_recovery_contiguous(UId, Idx, State0) of
+                true ->
+                    State1 = handle_trunc(IsTrunc, UId, Idx, State0),
+                    case recover_entry(Names, UId,
+                                       {Idx, Term, binary_to_term(EntryData)},
+                                       SnapIdx, State1) of
+                        {ok, State} ->
+                            {next, ok, State};
+                        {retry, State} ->
+                            {retry, State}
+                    end;
+                false ->
+                    Skipped = accumulate_skip(UId, Idx, State0#recovery.skipped),
+                    {next, skipped, State0#recovery{skipped = Skipped}}
+            end;
+        ok ->
+            {next, {in_snapshot, SnapIdx}, State0};
+        error ->
+            ?DEBUG("WAL: record failed CRC check. If this is the last record"
+                   " recovery can resume", []),
+            {stop, State0}
+    end.
+
+is_recovery_contiguous(UId, Idx, #recovery{writers = Writers}) ->
+    case Writers of
+        #{UId := {_, LastIdx}} ->
+            Idx =< LastIdx + 1;
+        _ ->
+            %% First entry for this writer in recovery (not seeded from
+            %% segments either). Accept unconditionally.
+            true
+    end.
+
+accumulate_skip(UId, Idx, Skipped) ->
+    UIdSkips0 = maps:get(UId, Skipped, []),
+    UIdSkips = case UIdSkips0 of
+        [{First, Last} | Rest] when Idx == Last + 1 ->
+            [{First, Idx} | Rest];
+        [_Range | _Rest] ->
+            [{Idx, Idx} | UIdSkips0];
+        [] ->
+            [{Idx, Idx}]
+    end,
+    Skipped#{UId => UIdSkips}.
 
 recover_snap_idx(Conf, UId, Trunc, CurIdx) ->
     case Trunc of
@@ -1074,6 +1117,30 @@ handle_trunc(true, UId, Idx, #recovery{mode = Mode,
         _ ->
             State
     end.
+
+seed_writers_from_segments(SegWriter, Registered) ->
+    lists:foldl(
+      fun ({_Name, UId}, Acc) ->
+            case ra_log_segment_writer:my_segments(SegWriter, UId) of
+                [] ->
+                    Acc;
+                SegFiles ->
+                    Latest = lists:last(SegFiles),
+                    case ra_log_segment:open(Latest, #{mode => read}) of
+                        {ok, Seg} ->
+                            Range = ra_log_segment:range(Seg),
+                            ra_log_segment:close_dirty(Seg),
+                            case Range of
+                                {_First, Last} ->
+                                    Acc#{UId => {in_seq, Last}};
+                                _ ->
+                                    Acc
+                            end;
+                        _ ->
+                            Acc
+                    end
+            end
+      end, #{}, Registered).
 
 named_cast(To, Msg) when is_pid(To) ->
     gen_batch_server:cast(To, Msg),
