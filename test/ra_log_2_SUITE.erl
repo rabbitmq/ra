@@ -2453,12 +2453,11 @@ init_after_missing_segments_event(Config) ->
     ok.
 
 segment_close_flush_error_recovery(Config) ->
-    %% This test demonstrates that `ra_log_segment:close/1` silently discards
-    %% the return value of `flush/1`, causing the segment writer to report
-    %% segment refs covering entries that were never persisted to disk.
-    %% After restart the WAL file has already been deleted, hence:
-    %% 1. Those entries are permanently lost.
-    %% 2. Subsequent writes may lead to holes in log segments.
+    %% This test verifies that any IO errors during log segment flush
+    %% are propagated back to the log segment writer, including those
+    %% that happen at the time when log segment need to be closed.
+    %% Also correct recovery from such failures is verified, assuming
+    %% they are transient in nature.
 
     %% 1. Write entries 1-5 and flush them to a segment
     Log0 = ra_log_init(Config),
@@ -2488,8 +2487,8 @@ segment_close_flush_error_recovery(Config) ->
                 end),
 
     %% 4. Force WAL roll-over.
-    %%    Segment flush will fail but the log will still report success with a
-    %%    segref covering {0, 10}.
+    %%    Segment flush will fail initially and cause WAL to crash, but
+    %%    will succeed on WAL restart.
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     Log6 = deliver_log_events_cond(
              Log5,
@@ -2498,7 +2497,6 @@ segment_close_flush_error_recovery(Config) ->
              end, 100),
 
     %% 5. Write two more entries to the log.
-    %%    Assuming there's just enough disk space for them.
     Log7 = write_n(11, 13, 1, Log6),
     Log8 = assert_log_events(Log7,
                              fun (L) -> {12, 1} =:= ra_log:last_written(L) end),
@@ -2509,8 +2507,6 @@ segment_close_flush_error_recovery(Config) ->
     start_ra(Config),
 
     %% 7. Re-init the log and verify all entries are persisted.
-    %%    With the bug, the segment on disk only contains entries 1-5 and 11-12,
-    %%    but not 6-10.
     Log9 = ra_log_init(Config),
     ct:pal("after recovery: ~p", [ra_log:overview(Log9)]),
 
