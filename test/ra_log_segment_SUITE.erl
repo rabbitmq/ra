@@ -417,12 +417,12 @@ term_query(Config) ->
     {ok, Seg0} = ra_log_segment:open(Fn),
     {ok, Seg1} = ra_log_segment:append(Seg0, 5, 2, <<"a">>),
     {ok, Seg2} = ra_log_segment:append(Seg1, 6, 3, <<"b">>),
-    _ = ra_log_segment:close(Seg2),
+    ok = ra_log_segment:close(Seg2),
     {ok, Seg} = ra_log_segment:open(Fn, #{mode => read}),
     2 = ra_log_segment:term_query(Seg, 5),
     3 = ra_log_segment:term_query(Seg, 6),
     undefined = ra_log_segment:term_query(Seg, 7),
-    _ = ra_log_segment:close(Seg),
+    ok = ra_log_segment:close(Seg),
     ok.
 
 write_many(Config) ->
@@ -510,13 +510,13 @@ copy(Config) ->
                      {ok, S} = ra_log_segment:append(S0, I, 1, term_to_binary(I)),
                      S
              end, SrcSeg0, Indexes),
-    _ = ra_log_segment:close(SrcSeg1),
+    ok = ra_log_segment:close(SrcSeg1),
 
     Fn = filename:join(Dir, <<"TARGET.segment">>),
     {ok, Seg0} = ra_log_segment:open(Fn),
     CopyIndexes = lists:seq(1, 100, 2),
     {ok, Seg} = ra_log_segment:copy(Seg0, SrcFn, CopyIndexes),
-    ra_log_segment:close(Seg),
+    ok = ra_log_segment:close(Seg),
     {ok, R} = ra_log_segment:open(Fn, #{mode => read,
                                         access_pattern => random}),
     %%TODO: consider makeing read_sparse tolerant to missing indexes somehow
@@ -570,7 +570,7 @@ binary_mode_term_query(Config) ->
     {ok, Seg1} = ra_log_segment:append(Seg0, 5, 2, <<"a">>),
     {ok, Seg2} = ra_log_segment:append(Seg1, 6, 3, <<"b">>),
     {ok, Seg3} = ra_log_segment:append(Seg2, 7, 4, <<"c">>),
-    _ = ra_log_segment:close(Seg3),
+    ok = ra_log_segment:close(Seg3),
     
     %% Query with binary mode
     {ok, Seg} = ra_log_segment:open(Fn, #{mode => read, index_mode => binary}),
@@ -579,7 +579,7 @@ binary_mode_term_query(Config) ->
     4 = ra_log_segment:term_query(Seg, 7),
     undefined = ra_log_segment:term_query(Seg, 8),
     undefined = ra_log_segment:term_query(Seg, 4),
-    _ = ra_log_segment:close(Seg),
+    ok = ra_log_segment:close(Seg),
     ok.
 
 binary_mode_sequential_ascending(Config) ->

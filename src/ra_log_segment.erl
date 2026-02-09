@@ -313,6 +313,8 @@ sync(State0) ->
     end.
 
 -spec flush(state()) -> {ok, state()} | {error, term()}.
+flush(#state{pending_index = []} = State) ->
+    {ok, State};
 flush(#state{cfg = #cfg{fd = Fd},
              pending_data = PendData,
              pending_index = PendIndex,
@@ -711,7 +713,7 @@ segref(#state{range = Range,
 segref(Filename) ->
     {ok, Seg} = open(Filename, #{mode => read}),
     SegRef = segref(Seg),
-    close(Seg),
+    close_fd(Seg),
     SegRef.
 
 -type infos() :: #{size => non_neg_integer(),
@@ -788,13 +790,20 @@ info(Filename, Live0)
 is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
     is_same_filename_all(Fn0, Fn).
 
--spec close(state()) -> ok.
-close(#state{cfg = #cfg{fd = Fd,
-                        mode = append,
-                        file_advise = FileAdvise}} = State) ->
-    % close needs to be defensive and idempotent so we ignore the return
-    % values here
-    _ = sync(State),
+-spec close(state()) -> ok | {error, term()}.
+close(#state{cfg = #cfg{mode = read}} = State) ->
+    close_fd(State);
+close(#state{} = State0) ->
+    case sync(State0) of
+        {ok, State} ->
+            close_fd(State);
+        {error, _} = Err ->
+            Err
+    end.
+
+close_fd(#state{cfg = #cfg{fd = Fd,
+                           mode = append,
+                           file_advise = FileAdvise}} = State) ->
     _ = case is_full(State) of
             true ->
                 file:advise(Fd, 0, 0, FileAdvise);
@@ -803,7 +812,7 @@ close(#state{cfg = #cfg{fd = Fd,
         end,
     _ = file:close(Fd),
     ok;
-close(#state{cfg = #cfg{fd = Fd}}) ->
+close_fd(#state{cfg = #cfg{fd = Fd}}) ->
     _ = file:close(Fd),
     ok.
 
@@ -814,7 +823,7 @@ copy(#state{} = State0, FromFile, Indexes)
     {ok, From} = open(FromFile, #{mode => read}),
     SortedIndexes = lists:sort(Indexes),
     State = copy_with_cache(From, State0, SortedIndexes),
-    close(From),
+    close_fd(From),
     sync(State).
 
 %% Optimized copy that batches reads for consecutive index runs.
@@ -1025,7 +1034,7 @@ dump(File, Fun) ->
     {Idx, Last} = range(S0),
     L = fold(S0, Idx, Last, Fun,
              fun (E, A) -> [E | A] end, []),
-    close(S0),
+    close_fd(S0),
     lists:reverse(L).
 
 
