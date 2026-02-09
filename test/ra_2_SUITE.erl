@@ -49,7 +49,8 @@ all_tests() ->
      force_start_follower_as_single_member,
      force_start_follower_as_single_member_nonvoter,
      force_start_nonvoter_as_single_member,
-     initial_members_query
+     initial_members_query,
+     recovery_checkpoint_written_on_shutdown
     ].
 
 groups() ->
@@ -876,6 +877,71 @@ initial_members_query(Config) ->
 
 format_ra_event(SrvId, Evt, my_arg) ->
     {custom_event, SrvId, Evt}.
+
+%% Test that recovery checkpoint is written on shutdown when enough entries
+%% have been applied since the last snapshot/checkpoint
+recovery_checkpoint_written_on_shutdown(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    PrivDir = ?config(priv_dir, Config),
+    ServerId = ?config(server_id, Config),
+    UId = ?config(uid, Config),
+    %% Configure with a low min_recovery_checkpoint_interval (100 entries)
+    %% to trigger recovery checkpoint writing
+    Conf = conf(ClusterName, UId, ServerId, PrivDir, []),
+    Conf1 = Conf#{min_recovery_checkpoint_interval => 100},
+    ok = ra:start_server(?SYS, Conf1),
+    ok = ra:trigger_election(ServerId),
+    {ok, _, _} = ra:members(ServerId),
+
+    %% Write enough entries to exceed the min_recovery_checkpoint_interval
+    %% We need more than 100 entries since last snapshot
+    ct:pal("Writing 200 entries..."),
+    [begin
+         ok = enqueue(ServerId, N)
+     end || N <- lists:seq(1, 200)],
+
+    %% Get the server's data directory to check for recovery checkpoint
+    DataDir = data_dir(),
+    ServerDir = filename:join(DataDir, UId),
+    RecoveryCheckpointDir = filename:join(ServerDir, <<"recovery_checkpoint">>),
+
+    %% Verify no recovery checkpoint exists yet (server is still running)
+    RCFilesBefore = case file:list_dir(RecoveryCheckpointDir) of
+                        {ok, Files} -> Files;
+                        {error, enoent} -> []
+                    end,
+    ct:pal("Recovery checkpoint files before shutdown: ~p", [RCFilesBefore]),
+
+    %% Stop the server - this should trigger recovery checkpoint writing
+    ct:pal("Stopping server..."),
+    ok = ra:stop_server(?SYS, ServerId),
+
+    %% Check that a recovery checkpoint was written
+    {ok, RCFilesAfter} = file:list_dir(RecoveryCheckpointDir),
+    ct:pal("Recovery checkpoint files after shutdown: ~p", [RCFilesAfter]),
+    ?assert(length(RCFilesAfter) > 0),
+
+    %% Verify the recovery checkpoint directory contains the expected files
+    [RCSubDir | _] = RCFilesAfter,
+    RCPath = filename:join(RecoveryCheckpointDir, RCSubDir),
+    {ok, RCContents} = file:list_dir(RCPath),
+    ct:pal("Recovery checkpoint contents: ~p", [RCContents]),
+    ?assert(lists:member("snapshot.dat", RCContents) orelse
+            lists:member(<<"snapshot.dat">>, RCContents)),
+
+    %% Restart the server and verify it recovers correctly
+    ct:pal("Restarting server..."),
+    ok = ra:restart_server(?SYS, ServerId, #{min_recovery_checkpoint_interval => 100}),
+    {ok, _, _} = ra:members(ServerId),
+
+    %% Verify state was recovered - dequeue should return the first message
+    Dequeued = dequeue(ServerId),
+    ct:pal("Dequeued after restart: ~p", [Dequeued]),
+    ?assertEqual(1, Dequeued),
+
+    %% Clean up
+    ok = ra:stop_server(?SYS, ServerId),
+    ok.
 
 enq_deq_n(N, ServerId) ->
     enq_deq_n(N, ServerId, []).

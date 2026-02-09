@@ -16,7 +16,8 @@
            [init_test/1,
             higher_term_detected/1,
             follower_aer_term_mismatch_snapshot/1,
-            follower_aer_term_mismatch_at_snapshot/1]}).
+            follower_aer_term_mismatch_at_snapshot/1,
+            setup_log/0]}).
 
 all() ->
     [
@@ -162,6 +163,9 @@ setup_log() ->
     ok = meck:new(ra_snapshot, [passthrough]),
     ok = meck:new(ra_machine, [passthrough]),
     meck:expect(ra_log, init, fun(C) -> ra_log_memory:init(C) end),
+    meck:expect(ra_log, recover_snapshot, fun(Log) ->
+        ra_log_memory:recover_snapshot(Log)
+    end),
     meck:expect(ra_log_meta, store, fun (_, U, K, V) ->
                                             put({U, K}, V), ok
                                     end),
@@ -188,11 +192,13 @@ setup_log() ->
                 end),
     meck:expect(ra_snapshot, abort_accept, fun(_SS) -> undefined end),
     meck:expect(ra_snapshot, accepting, fun({Meta, _}) ->
-                                                {maps:get(index, Meta),
-                                                 maps:get(term, Meta)};
+                                               {maps:get(index, Meta),
+                                                maps:get(term, Meta)};
                                            (_) ->
                                                 undefined
                                         end),
+    %% Mock recovery_checkpoint to return undefined (no recovery checkpoint)
+    meck:expect(ra_snapshot, recovery_checkpoint, fun(_) -> undefined end),
     meck:expect(ra_log, snapshot_state, fun ra_log_memory:snapshot_state/1),
     meck:expect(ra_log, set_snapshot_state, fun ra_log_memory:set_snapshot_state/2),
     meck:expect(ra_log, install_snapshot, fun ra_log_memory:install_snapshot/4),

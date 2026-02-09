@@ -250,7 +250,11 @@
                               membership => ra_membership(),
                               system_config => ra_system:config(),
                               has_changed => boolean(),
-                              parent => term() %% the supervisor
+                              parent => term(), %% the supervisor
+                              %% minimum number of log entries since last
+                              %% snapshot/checkpoint before writing a recovery
+                              %% checkpoint on shutdown. 0 disables (default).
+                              min_recovery_checkpoint_interval => non_neg_integer()
                              }.
 
 -type ra_server_info_key() :: machine_version | atom().
@@ -282,7 +286,11 @@
                             install_snap_rpc_timeout => non_neg_integer(), % ms
                             await_condition_timeout => non_neg_integer(),
                             max_pipeline_count => non_neg_integer(),
-                            ra_event_formatter => {module(), atom(), [term()]}}.
+                            ra_event_formatter => {module(), atom(), [term()]},
+                            %% minimum number of log entries since last
+                            %% snapshot/checkpoint before writing a recovery
+                            %% checkpoint on shutdown. 0 disables (default).
+                            min_recovery_checkpoint_interval => non_neg_integer()}.
 
 -type config() :: ra_server_config().
 
@@ -395,6 +403,8 @@ init(#{id := Id,
     MacMod = ra_machine:which_module(Machine, EffectiveMacVer),
 
     CommitIndex = max(LastApplied, SnapshotIdx),
+    MinRecoveryCheckpointInterval = maps:get(min_recovery_checkpoint_interval,
+                                              Config, 0),
     Cfg = #cfg{id = Id,
                uid = UId,
                log_id = LogId,
@@ -409,7 +419,8 @@ init(#{id := Id,
                max_pipeline_count = MaxPipelineCount,
                max_append_entries_rpc_batch_size = MaxAERBatchSize,
                counter = maps:get(counter, Config, undefined),
-               system_config = SystemConfig},
+               system_config = SystemConfig,
+               min_recovery_checkpoint_interval = MinRecoveryCheckpointInterval},
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX, CommitIndex),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapshotIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_TERM, CurrentTerm),
@@ -444,38 +455,47 @@ init(#{id := Id,
       pending_consistent_queries => []}.
 
 recover(#{cfg := #cfg{log_id = LogId,
-                      machine_version = MacVer,
-                      effective_machine_version = EffMacVer} = Cfg,
+                      machine_version = MacVer},
           commit_index := CommitIndex,
-          last_applied := LastApplied} = State0) ->
-    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, LastApplied),
+          last_applied := LastApplied,
+          log := Log} = State0) ->
+    %% Check if we can skip some log replay using a recovery checkpoint
+    SnapState = ra_log:snapshot_state(Log),
+    {LastApplied1, #{cfg := Cfg} = State1} =
+        maybe_recover_from_recovery_checkpoint(LastApplied, CommitIndex,
+                                               SnapState, State0),
+    put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, LastApplied1),
     ?DEBUG("~ts: recovering state machine version ~b:~b from index ~b to ~b",
-           [LogId, EffMacVer, MacVer, LastApplied, CommitIndex]),
+           [LogId, Cfg#cfg.effective_machine_version, MacVer,
+            LastApplied1, CommitIndex]),
     Before = erlang:system_time(millisecond),
     {#{log := Log0,
-       cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State1, _} =
+       cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State2, _} =
         apply_to(CommitIndex,
                  fun({_Idx, _, _} = E, S0) ->
                          %% Clear out the effects and notifies map
                          %% to avoid memory explosion
-                         {Mod, LastAppl, S, MacSt, _E, _N, LastTs} = apply_with(E, S0),
+                         {Mod, LastAppl, S, MacSt, _E, _N, LastTs} =
+                             apply_with(E, S0),
                          put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, LastAppl),
                          {Mod, LastAppl, S, MacSt, [], #{}, LastTs}
                  end,
-                 State0, []),
+                 State1, []),
     After = erlang:system_time(millisecond),
     ?DEBUG("~ts: recovery of state machine version ~b:~b "
            "from index ~b to ~b took ~bms",
-           [LogId, EffMacVerAfter, MacVer, LastApplied, CommitIndex, After - Before]),
+           [LogId, EffMacVerAfter, MacVer, LastApplied1, CommitIndex,
+            After - Before]),
     %% scan from CommitIndex + 1 until NextIndex - 1 to see if there are
     %% any further cluster changes
     FromScan = CommitIndex + 1,
     {ToScan, _} = ra_log:last_index_term(Log0),
-    ?DEBUG("~ts: scanning for cluster changes ~b:~b ", [LogId, FromScan, ToScan]),
+    ?DEBUG("~ts: scanning for cluster changes ~b:~b ",
+           [LogId, FromScan, ToScan]),
     %% if we're recovering after a partial sparse write phase this will fail
-    {{LastScannedIdx, State2}, Log1} = ra_log:fold(FromScan, ToScan,
+    {{LastScannedIdx, State3}, Log1} = ra_log:fold(FromScan, ToScan,
                                                    fun cluster_scan_fun/2,
-                                                   {CommitIndex, State1}, Log0,
+                                                   {CommitIndex, State2}, Log0,
                                                    return),
 
     State = case LastScannedIdx < ToScan of
@@ -484,10 +504,10 @@ recover(#{cfg := #cfg{log_id = LogId,
                            "resetting log to last contiguous index ~b",
                            [LogId, LastScannedIdx, ToScan, LastScannedIdx]),
                     %% the end of the log is sparse and needs to be reset
-                    {ok, Log} = ra_log:set_last_index(LastScannedIdx, Log1),
-                    State2#{log => Log};
+                    {ok, Log2} = ra_log:set_last_index(LastScannedIdx, Log1),
+                    State3#{log => Log2};
                 false ->
-                    State2
+                    State3
             end,
 
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
@@ -2626,9 +2646,134 @@ terminate(#{log := Log,
     ok;
 terminate(#{cfg := #cfg{log_id = LogId}} = State, Reason) ->
     ?DEBUG("~ts: terminating with reason '~w'", [LogId, Reason]),
-    #{log := Log} = persist_last_applied(State),
+    State1 = maybe_write_recovery_checkpoint(State),
+    #{log := Log} = persist_last_applied(State1),
     catch ra_log:close(Log),
     ok.
+
+%% @doc Maybe write a recovery checkpoint during shutdown.
+%% Only writes if min_recovery_checkpoint_interval is configured (> 0) and
+%% enough entries have been applied since the last snapshot/checkpoint.
+maybe_write_recovery_checkpoint(#{cfg := #cfg{log_id = LogId,
+                                              machine = Machine},
+                                  log := Log0,
+                                  cluster := Cluster,
+                                  last_applied := LastApplied,
+                                  machine_state := MacState} = State) ->
+    SnapState = ra_log:snapshot_state(Log0),
+    MinInterval = get_min_recovery_checkpoint_interval(State),
+    case MinInterval of
+        0 ->
+            %% Feature disabled
+            State;
+        _ ->
+            HighestIdx = ra_snapshot:highest_idx(SnapState),
+            case LastApplied - HighestIdx >= MinInterval of
+                true ->
+                    %% Fetch the term for the LastApplied index
+                    {Term, Log} = ra_log:fetch_term(LastApplied, Log0),
+                    case Term of
+                        undefined ->
+                            ?WARN("~ts: cannot write recovery checkpoint, "
+                                  "term not found for index ~b",
+                                  [LogId, LastApplied]),
+                            State#{log => Log};
+                        _ ->
+                            %% Write recovery checkpoint
+                            SnapModule = ra_machine:snapshot_module(Machine),
+                            %% Include cluster membership for proper recovery
+                            ClusterServerIds =
+                                maps:map(fun (_, V) ->
+                                                 maps:with([voter_status], V)
+                                         end, Cluster),
+                            Meta = #{index => LastApplied,
+                                     term => Term,
+                                     cluster => ClusterServerIds,
+                                     machine_version => ra_machine:version(Machine)},
+                            case ra_snapshot:write_recovery_checkpoint(
+                                   Meta, MacState, SnapModule, SnapState) of
+                                {ok, SnapState1} ->
+                                    ?DEBUG("~ts: wrote recovery checkpoint at index ~b",
+                                           [LogId, LastApplied]),
+                                    Log1 = ra_log:set_snapshot_state(SnapState1, Log),
+                                    State#{log => Log1};
+                                {error, Err} ->
+                                    ?WARN("~ts: failed to write recovery checkpoint: ~p",
+                                          [LogId, Err]),
+                                    State#{log => Log}
+                            end
+                    end;
+                false ->
+                    %% Not enough entries since last snapshot/checkpoint
+                    State
+            end
+    end.
+
+get_min_recovery_checkpoint_interval(#{cfg := #cfg{min_recovery_checkpoint_interval = Interval}}) ->
+    Interval.
+
+%% @doc Check if we can skip some log replay using a recovery checkpoint.
+%% If a recovery checkpoint exists with an index higher than LastApplied,
+%% recover its machine state and update LastApplied to skip log replay.
+maybe_recover_from_recovery_checkpoint(LastApplied, CommitIndex, SnapState,
+                                       #{cfg := #cfg{log_id = LogId,
+                                                     machine = Machine,
+                                                     machine_versions = MachineVersions,
+                                                     effective_machine_version = CurEffMacVer
+                                                    } = Cfg0} = State) ->
+    case ra_snapshot:recovery_checkpoint(SnapState) of
+        {RCIdx, _} when RCIdx > LastApplied andalso
+                        RCIdx =< CommitIndex ->
+            %% Recovery checkpoint exists with higher index - try to use it
+            case ra_snapshot:recover_recovery_checkpoint(SnapState) of
+                {ok, #{index := RCIdx,
+                       term := RCTerm,
+                       cluster := ClusterNodes,
+                       machine_version := RCMacVer}, RCMacState} ->
+                    ?INFO("~ts: using recovery checkpoint at index ~b, machine version ~b "
+                          "to skip log replay from ~b",
+                          [LogId, RCIdx, RCMacVer, LastApplied]),
+                    %% Update effective machine version if recovery checkpoint
+                    %% has a higher version (we're skipping log entries that
+                    %% may have included machine version upgrades)
+                    Cfg = case RCMacVer > CurEffMacVer of
+                              true ->
+                                  EffMacMod = ra_machine:which_module(Machine, RCMacVer),
+                                  put_counter(Cfg0, ?C_RA_SVR_METRIC_EFFECTIVE_MACHINE_VERSION, RCMacVer),
+                                  Cfg0#cfg{effective_machine_version = RCMacVer,
+                                           machine_versions = [{RCIdx, RCMacVer}
+                                                               | MachineVersions],
+                                           effective_machine_module = EffMacMod,
+                                           effective_handle_aux_fun =
+                                               ra_machine:which_aux_fun(EffMacMod)};
+                              false ->
+                                  Cfg0
+                          end,
+                    %% Update state with recovery checkpoint's machine state
+                    State1 = State#{cfg => Cfg,
+                                    machine_state => RCMacState,
+                                    last_applied => RCIdx},
+                    %% Update cluster if recovery checkpoint has it
+                    State2 = case ClusterNodes of
+                                 Nodes when map_size(Nodes) > 0 ->
+                                     #{cfg := #cfg{id = Id}} = State1,
+                                     Cluster = make_cluster(Id, Nodes),
+                                     State1#{cluster => Cluster,
+                                             cluster_index_term => {RCIdx, RCTerm}};
+                                 _ ->
+                                     State1
+                             end,
+                    {RCIdx, State2};
+                {error, Reason} ->
+                    ?WARN("~ts: failed to recover from recovery checkpoint: ~p, "
+                          "falling back to log replay",
+                          [LogId, Reason]),
+                    {LastApplied, State}
+            end;
+        _ ->
+            %% No recovery checkpoint or not useful
+            {LastApplied, State}
+    end.
 
 -spec log_fold(ra_server_state(), fun((term(), State) -> State), State) ->
     {ok, State, ra_server_state()} |
