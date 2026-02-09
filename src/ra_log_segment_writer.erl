@@ -206,7 +206,7 @@ handle_cast({truncate_segments, Who, {_Range, Name} = SegRef},
                 {ok, Seg} ->
                     case ra_log_segment:segref(Seg) of
                         SegRef ->
-                            _ = ra_log_segment:close(Seg),
+                            _ = ra_log_segment:close_dirty(Seg),
                             %% it has not changed - we can delete that too
                             _ = prim_file:delete(Pivot),
                             %% as we are deleting the last segment - create an empty
@@ -222,7 +222,7 @@ handle_cast({truncate_segments, Who, {_Range, Name} = SegRef},
                                     %% segment was opened
                                     {noreply, State0};
                                 Succ ->
-                                    _ = ra_log_segment:close(Succ),
+                                    _ = ra_log_segment:close_dirty(Succ),
                                     {noreply, State0}
                             end;
                         _ ->
@@ -232,7 +232,7 @@ handle_cast({truncate_segments, Who, {_Range, Name} = SegRef},
                                                             millisecond),
                             ?DEBUG("segment_writer in '~w': ~s for ~s took ~bms",
                                    [System, ?FUNCTION_NAME, Who, Diff]),
-                            _ = ra_log_segment:close(Seg),
+                            _ = ra_log_segment:close_dirty(Seg),
                             {noreply, State0}
                     end;
                 {error, enoent} ->
@@ -346,7 +346,7 @@ flush_mem_table_range(ServerUId, {Tid, {StartIdx0, EndIdx}},
                                       [SRef | ClosedSegRefs]
                               end,
 
-                    _ = ra_log_segment:close(Segment),
+                    ok = sync_close_segment(Segment),
                     SegRefs
             end
     end.
@@ -427,6 +427,7 @@ append_to_segment(UId, Tid, Idx, EndIdx, Seg0, Closed, State) ->
                     append_to_segment(UId, Tid, Idx+1, EndIdx, Seg, Closed, State);
                 {error, full} ->
                     % close and open a new segment
+                    ok = sync_close_segment(Seg0),
                     case open_successor_segment(Seg0, State#state.segment_conf) of
                         undefined ->
                             %% a successor cannot be opened - this is most likely due
@@ -472,7 +473,6 @@ segment_files(Dir) ->
 open_successor_segment(CurSeg, SegConf) ->
     Fn0 = ra_log_segment:filename(CurSeg),
     Fn = ra_lib:zpad_filename_incr(Fn0),
-    ok = ra_log_segment:close(CurSeg),
     case ra_log_segment:open(Fn, SegConf) of
         {error, enoent} ->
             %% the directory has been deleted whilst segments were being
@@ -480,6 +480,21 @@ open_successor_segment(CurSeg, SegConf) ->
             undefined;
         {ok, Seg} ->
             Seg
+    end.
+
+sync_close_segment(Seg0) ->
+    case ra_log_segment:flush(Seg0) of
+        {ok, Seg1} ->
+            case ra_log_segment:sync(Seg1) of
+                {ok, Seg} ->
+                    ra_log_segment:close_dirty(Seg);
+                {error, Posix} ->
+                    FileName = ra_log_segment:filename(Seg0),
+                    exit({segment_writer_close_sync_error, FileName, Posix})
+            end;
+        {error, Posix} ->
+            FileName = ra_log_segment:filename(Seg0),
+            exit({segment_writer_close_flush_error, FileName, Posix})
     end.
 
 open_file(Dir, SegConf) ->
