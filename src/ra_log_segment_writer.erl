@@ -158,10 +158,12 @@ handle_cast({mem_tables, Ranges, WalFile}, #state{system = System} = State) ->
                            end
                    end, [], Ranges),
 
+    Self = self(),
     _ = [begin
              {ok, _, Failures} =
                 ra_lib:partition_parallel(
                     fun (TidRange) ->
+                            _ = link(Self),
                             ok = flush_mem_table_ranges(TidRange, State),
                             true
                     end, Tabs, infinity),
