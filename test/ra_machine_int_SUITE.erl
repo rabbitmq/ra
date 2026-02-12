@@ -573,7 +573,8 @@ timer_effect(Config) ->
                                     {State, ok, {timer, Name, Ts + 1000,
                                                  {abs, true}}};
                                 (_, {timeout, Name}, State) ->
-                                    {State, ok, {send_msg, Self, {got_timeout, Name}}}
+                                    {State, ok, {send_msg, Self,
+                                                 {got_timeout, Name}}}
                             end),
     ClusterName = ?config(cluster_name, Config),
     ServerId = ?config(server_id, Config),

@@ -1754,7 +1754,8 @@ handle_effect(leader, {timer, Name, T0, Option}, _, State,
               Actions) ->
     T = case Option of
             {abs, true} when is_number(T0) ->
-                T0 - erlang:time_offset(millisecond);
+                M = erlang:monotonic_time(millisecond),
+                max(M, T0 - erlang:time_offset(millisecond));
             _ ->
                 T0
         end,
