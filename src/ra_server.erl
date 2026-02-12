@@ -108,7 +108,8 @@
                                  [ra_machine:release_cursor_condition()]},
       %% temporary state for handle_receive_snapshot
       current_event_type => term(),
-      snapshot_has_live_indexes => boolean()
+      snapshot_has_live_indexes => boolean(),
+      meta_fd => option(file:fd())
      }.
 
 -type state() :: ra_server_state().
@@ -368,9 +369,11 @@ init(#{id := Id,
     end,
 
     MetaName = meta_name(SystemConfig),
-    CurrentTerm = ra_log_meta:fetch(MetaName, UId, current_term, 0),
-    LastApplied = ra_log_meta:fetch(MetaName, UId, last_applied, 0),
-    VotedFor = ra_log_meta:fetch(MetaName, UId, voted_for, undefined),
+    DataDir = maps:get(data_dir, SystemConfig),
+    MetaFile = ra_server_meta:path(DataDir, UId),
+
+    {ok, {VotedFor, CurrentTerm, LastApplied}} = ra_server_meta:fetch(MetaFile, MetaName, UId),
+    {ok, MetaFd} = file:open(MetaFile, [read, write, raw, binary]),
 
     LatestMacVer = ra_machine:version(Machine),
     InitialMachineVersion = min(LatestMacVer,
@@ -441,7 +444,8 @@ init(#{id := Id,
       aux_state => ra_machine:init_aux(MacMod, Name),
       query_index => 0,
       queries_waiting_heartbeats => queue:new(),
-      pending_consistent_queries => []}.
+      pending_consistent_queries => [],
+      meta_fd => MetaFd}.
 
 recover(#{cfg := #cfg{log_id = LogId,
                       machine_version = MacVer,
@@ -2472,7 +2476,7 @@ persist_last_applied(#{persisted_last_applied := PLA,
     State;
 persist_last_applied(#{last_applied := LastApplied0,
                        log := Log,
-                       cfg := #cfg{uid = UId} = Cfg} = State) ->
+                       meta_fd := MetaFd} = State) ->
     {LastWrittenIdx, _} = ra_log:last_written(Log),
     LastApplied = min(LastApplied0, LastWrittenIdx),
 
@@ -2481,12 +2485,11 @@ persist_last_applied(#{last_applied := LastApplied0,
     %% else it is possible that on recovery the last applied index refers to
     %% indexes that never were durably written
     if LastApplied > PersistedLastApplied ->
-           ok = ra_log_meta:store(meta_name(Cfg), UId, last_applied, LastApplied),
+           ok = ra_server_meta:update_last_applied(MetaFd, LastApplied),
            State#{persisted_last_applied => LastApplied};
        true ->
            State
     end.
-
 
 
 -spec update_peer(ra_server_id(),
@@ -2620,13 +2623,17 @@ handle_node_status(RaftState, Type, Node, Status, _Info,
 
 -spec terminate(ra_server_state(), Reason :: {shutdown, delete} | term()) -> ok.
 terminate(#{log := Log,
+            meta_fd := MetaFd,
             cfg := #cfg{log_id = LogId}} = _State, {shutdown, delete}) ->
     ?NOTICE("~ts: terminating with reason 'delete'", [LogId]),
+    _ = file:close(MetaFd),
     catch ra_log:delete_everything(Log),
     ok;
-terminate(#{cfg := #cfg{log_id = LogId}} = State, Reason) ->
+terminate(#{cfg := #cfg{log_id = LogId}, meta_fd := MetaFd} = State, Reason) ->
     ?DEBUG("~ts: terminating with reason '~w'", [LogId, Reason]),
     #{log := Log} = persist_last_applied(State),
+    _ = file:sync(MetaFd),
+    _ = file:close(MetaFd),
     catch ra_log:close(Log),
     ok.
 
@@ -2836,18 +2843,17 @@ peer(PeerId, #{cluster := Nodes}) ->
 put_peer(PeerId, Peer, #{cluster := Peers} = State) ->
     State#{cluster => Peers#{PeerId => Peer}}.
 
-update_term_and_voted_for(Term, VotedFor, #{cfg := #cfg{uid = UId} = Cfg,
-                                            current_term := CurTerm} = State) ->
+update_term_and_voted_for(Term, VotedFor, #{cfg := Cfg,
+                                            current_term := CurTerm,
+                                            meta_fd := MetaFd} = State) ->
     CurVotedFor = maps:get(voted_for, State, undefined),
     case Term =:= CurTerm andalso VotedFor =:= CurVotedFor of
         true ->
             %% no update needed
             State;
         false ->
-            MetaName = meta_name(Cfg),
-            %% as this is a rare event it is ok to go sync here
-            ok = ra_log_meta:store(MetaName, UId, current_term, Term),
-            ok = ra_log_meta:store_sync(MetaName, UId, voted_for, VotedFor),
+            LastApplied = maps:get(last_applied, State, 0),
+            ok = ra_server_meta:store_sync(MetaFd, VotedFor, Term, LastApplied),
             incr_counter(Cfg, ?C_RA_SRV_TERM_AND_VOTED_FOR_UPDATES, 1),
             put_counter(Cfg, ?C_RA_SVR_METRIC_TERM, Term),
             %% this is probably not necessary
@@ -3689,8 +3695,6 @@ put_counter(#cfg{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
 put_counter(#cfg{counter = undefined}, _Ix, _N) ->
     ok.
 
-meta_name(#cfg{system_config = #{names := #{log_meta := Name}}}) ->
-    Name;
 meta_name(#{names := #{log_meta := Name}}) ->
     Name.
 
