@@ -17,6 +17,7 @@
          read_sparse_no_checks/4,
          term_query/2,
          close/1,
+         close_dirty/1,
          range/1,
          flush/1,
          max_count/1,
@@ -28,6 +29,7 @@
          dump_index/1]).
 
 -include("ra.hrl").
+-include("ra_file.hrl").
 
 -include_lib("kernel/include/file.hrl").
 
@@ -219,8 +221,17 @@ append(#state{cfg = #cfg{version = Version,
               pending_data = DataPend0} = State,
        Index, Term, {Length, Data}) ->
 
-    case is_full(State) of
-        false ->
+    IsValid = case Range0 of
+        undefined ->
+            true;
+        {_, LastIdx} when (Index - LastIdx) =< 1 ->
+            true;
+        {_, _} ->
+            {error, hole}
+    end,
+    IsFull = is_full(State),
+    case IsValid of
+        true when not IsFull ->
             % TODO: check length is less than #FFFFFFFF ??
             Checksum = compute_checksum(Cfg, Data),
             OSize = offset_size(Version),
@@ -236,8 +247,10 @@ append(#state{cfg = #cfg{version = Version,
                              pending_data = [DataPend0, Data],
                              pending_count = PendCnt + 1}
             };
-        true ->
-            {error, full}
+        true when IsFull ->
+            {error, full};
+        Error ->
+            Error
      end;
 append(State, Index, Term, Data)
   when is_list(Data) orelse
@@ -263,6 +276,8 @@ sync(State0) ->
     end.
 
 -spec flush(state()) -> {ok, state()} | {error, term()}.
+flush(#state{pending_index = []} = State) ->
+    {ok, State};
 flush(#state{cfg = #cfg{fd = Fd},
              pending_data = PendData,
              pending_index = PendIndex,
@@ -270,9 +285,9 @@ flush(#state{cfg = #cfg{fd = Fd},
              data_offset = DataOffs,
              index_write_offset = IdxWriteOffs,
              data_write_offset = DataWriteOffs} = State) ->
-    case file:pwrite(Fd, DataWriteOffs, PendData) of
+    case ?file_pwrite(Fd, DataWriteOffs, PendData) of
         ok ->
-            case file:pwrite(Fd, IdxWriteOffs, PendIndex) of
+            case ?file_pwrite(Fd, IdxWriteOffs, PendIndex) of
                 ok ->
                     {ok, State#state{pending_data = [],
                                      pending_index = [],
@@ -448,7 +463,7 @@ segref(#state{range = Range,
 segref(Filename) ->
     {ok, Seg} = open(Filename, #{mode => read}),
     SegRef = segref(Seg),
-    close(Seg),
+    close_dirty(Seg),
     SegRef.
 
 -spec is_same_as(state(), file:filename_all()) -> boolean().
@@ -456,12 +471,16 @@ is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
     is_same_filename_all(Fn0, Fn).
 
 -spec close(state()) -> ok.
-close(#state{cfg = #cfg{fd = Fd,
-                        mode = append,
-                        file_advise = FileAdvise}} = State) ->
+close(#state{} = State) ->
     % close needs to be defensive and idempotent so we ignore the return
     % values here
     _ = sync(State),
+    close_dirty(State).
+
+-spec close_dirty(state()) -> ok.
+close_dirty(#state{cfg = #cfg{fd = Fd,
+                              mode = append,
+                              file_advise = FileAdvise}} = State) ->
     _ = case is_full(State) of
             true ->
                 file:advise(Fd, 0, 0, FileAdvise);
@@ -470,7 +489,7 @@ close(#state{cfg = #cfg{fd = Fd,
         end,
     _ = file:close(Fd),
     ok;
-close(#state{cfg = #cfg{fd = Fd}}) ->
+close_dirty(#state{cfg = #cfg{fd = Fd}}) ->
     _ = file:close(Fd),
     ok.
 
@@ -600,7 +619,7 @@ parse_index_data_v1(<<Idx:64/unsigned, Term:64/unsigned,
 write_header(MaxCount, Fd) ->
     Header = <<?MAGIC, ?VERSION:16/unsigned, MaxCount:16/unsigned>>,
     {ok, 0} = file:position(Fd, 0),
-    ok = file:write(Fd, Header),
+    ok = ?file_write(Fd, Header),
     ok = ra_file:sync(Fd).
 
 read_header(Fd) ->
