@@ -404,7 +404,7 @@ init(#{id := Id,
 
     CommitIndex = max(LastApplied, SnapshotIdx),
     MinRecoveryCheckpointInterval = maps:get(min_recovery_checkpoint_interval,
-                                              Config, 0),
+                                             Config, 0),
     Cfg = #cfg{id = Id,
                uid = UId,
                log_id = LogId,

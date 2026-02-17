@@ -226,12 +226,8 @@ init(#{uid := UId,
                               undefined -> {-1, 0};
                               Curr -> Curr
                           end,
-    %% TODO: error handling
-    %% TODO: the "indexes" file isn't authoritative when it comes to live
-    %% indexes, we need to recover the snapshot and query it for live indexes
-    %% to get the actual value
-    {ok, LiveIndexes} = ra_snapshot:indexes(
-                          ra_snapshot:current_snapshot_dir(SnapshotState)),
+    %% Live indexes are already loaded into ETS by ra_snapshot:init
+    LiveIndexes = ra_log_snapshot_state:live_indexes(?ETSTBL, UId),
 
     AccessPattern = maps:get(initial_access_pattern, Conf, sequential),
     {ok, Mt0} = ra_log_ets:mem_table_please(Names, UId),
