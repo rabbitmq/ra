@@ -89,8 +89,17 @@
     {wal_max_size_bytes, non_neg_integer()} |
     {wal_compute_checksums, boolean()}.
 
--type query_mfa() :: {M :: module(), F :: atom(), A :: list()}.
--type query_fun() :: fun((term()) -> term()) | query_mfa().
+-type query_ctx() :: #{index := ra:index(),
+                       term := ra_term(),
+                       machine_version := non_neg_integer()}.
+-type query_opts() :: with_context | [query_opts()].
+-type query_mfa() ::
+    {M :: module(), F :: atom(), A :: list()} |
+    {M :: module(), F :: atom(), A :: list(), query_opts()}.
+-type query_fun() ::
+    fun((term()) -> term()) |
+    fun((query_ctx(), term()) -> term()) |
+        query_mfa().
 
 %% export some internal types
 -type index() :: ra_index().
@@ -117,6 +126,8 @@
               server_id/0,
               cluster_name/0,
               range/0,
+              query_ctx/0,
+              query_opts/0,
               query_mfa/0,
               query_fun/0,
               query_condition/0,
