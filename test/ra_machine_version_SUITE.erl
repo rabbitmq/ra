@@ -37,7 +37,8 @@ all_tests() ->
      server_upgrades_machine_state_on_noop_command,
      server_applies_with_new_module,
      initial_machine_version,
-     initial_machine_version_quorum
+     initial_machine_version_quorum,
+     recovery_checkpoint_updates_machine_version
      % snapshot_persists_machine_version
     ].
 
@@ -575,6 +576,91 @@ initial_machine_version_quorum(Config) ->
           end, 100),
     ct:pal("overview ~p", [ra:member_overview(ServerId)]),
     ok.
+
+%% Test that recovery checkpoint with higher machine version updates effective
+%% machine version during recovery, skipping the machine version upgrade commands
+%% that would have been in the log.
+recovery_checkpoint_updates_machine_version(Config) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> init_state end),
+    meck:expect(Mod, version, fun () -> 1 end),
+    meck:expect(Mod, which_module, fun (_) -> Mod end),
+    meck:expect(Mod, apply, fun (_, dummy, S) ->
+                                    {S, ok};
+                                (_, {machine_version, 0, 1}, init_state) ->
+                                    {state_v1, ok};
+                                (_, {machine_version, 1, 2}, state_v1) ->
+                                    {state_v2, ok}
+                            end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    _ = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
+    %% Execute a command to ensure noop is applied and we're at v1
+    {ok, ok, _} = ra:process_command(ServerId, dummy),
+    {ok, {_, state_v1}, _} = ra:leader_query(ServerId, ?IDMFA),
+    ?assertMatch({ok, #{effective_machine_version := 1}, _},
+                 ra:member_overview(ServerId)),
+
+    %% Now upgrade to v2 and apply more commands
+    meck:expect(Mod, version, fun () -> 2 end),
+    ok = ra:stop_server(?SYS, ServerId),
+    ok = ra:restart_server(?SYS, ServerId),
+    %% This triggers the machine version upgrade
+    {ok, ok, _} = ra:process_command(ServerId, dummy),
+    {ok, {_, state_v2}, _} = ra:leader_query(ServerId, ?IDMFA),
+    ?assertMatch({ok, #{effective_machine_version := 2}, _},
+                 ra:member_overview(ServerId)),
+
+    %% Apply many more commands to exceed min_recovery_checkpoint_interval
+    %% We need to configure the server with min_recovery_checkpoint_interval
+
+    %% Get the actual UId from the server before stopping
+    {ok, #{uid := UId}, _} = ra:member_overview(ServerId),
+    DataDir = maps:get(data_dir, ra_system:fetch(?SYS)),
+    ct:pal("DataDir: ~p, UId: ~p", [DataDir, UId]),
+    ServerDir = filename:join(DataDir, UId),
+    RecoveryCheckpointDir = filename:join(ServerDir, <<"recovery_checkpoint">>),
+    ct:pal("RecoveryCheckpointDir: ~p", [RecoveryCheckpointDir]),
+
+    ok = ra:stop_server(?SYS, ServerId),
+
+    %% Restart with recovery checkpoint enabled and a low interval
+    ok = ra:restart_server(?SYS, ServerId, #{min_recovery_checkpoint_interval => 10}),
+    {ok, _, _} = ra:members(ServerId),
+
+    %% Apply enough commands to trigger recovery checkpoint on shutdown
+    lists:foreach(fun(_) ->
+                          {ok, ok, _} = ra:process_command(ServerId, dummy)
+                  end, lists:seq(1, 50)),
+
+    %% Stop the server - should write a recovery checkpoint at v2
+    ok = ra:stop_server(?SYS, ServerId),
+
+    %% Verify recovery checkpoint was written
+    RCFiles = case file:list_dir(RecoveryCheckpointDir) of
+                  {ok, Files} -> Files;
+                  {error, enoent} -> []
+              end,
+    ct:pal("Recovery checkpoint files: ~p", [RCFiles]),
+    ?assert(length(RCFiles) > 0),
+
+    %% Now simulate a scenario where we restart with the recovery checkpoint
+    %% The recovery checkpoint should have machine_version = 2
+    %% and the server should recover with effective_machine_version = 2
+    %% without needing to replay the machine version upgrade commands
+    ok = ra:restart_server(?SYS, ServerId, #{min_recovery_checkpoint_interval => 10}),
+    {ok, _, _} = ra:members(ServerId),
+
+    %% Verify the effective machine version is still 2 after recovery
+    ?assertMatch({ok, #{effective_machine_version := 2,
+                        machine_version := 2}, _},
+                 ra:member_overview(ServerId)),
+
+    %% Verify state is correct
+    {ok, {_, state_v2}, _} = ra:leader_query(ServerId, ?IDMFA),
+    ok.
+
 %% Utility
 
 validate_state_enters(States) ->

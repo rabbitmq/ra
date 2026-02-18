@@ -26,5 +26,8 @@
          max_pipeline_count = ?DEFAULT_MAX_PIPELINE_COUNT :: non_neg_integer(),
          max_append_entries_rpc_batch_size = ?AER_CHUNK_SIZE :: non_neg_integer(),
          counter :: undefined | counters:counters_ref(),
-         system_config :: ra_system:config()
+         system_config :: ra_system:config(),
+         %% minimum number of log entries since last snapshot/checkpoint
+         %% before writing a recovery checkpoint on shutdown. 0 disables (default).
+         min_recovery_checkpoint_interval = 0 :: non_neg_integer()
         }).

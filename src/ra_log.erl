@@ -65,6 +65,7 @@
 -define(MIN_CHECKPOINT_INTERVAL, 16384).
 -define(LOG_APPEND_TIMEOUT, 5000).
 -define(WAL_RESEND_TIMEOUT, 5000).
+-define(ETSTBL, ra_log_snapshot_state).
 
 -type ra_meta_key() :: atom().
 -type segment_ref() :: {File :: binary(), ra_range:range()}.
@@ -175,6 +176,7 @@
 
 -define(SNAPSHOTS_DIR, <<"snapshots">>).
 -define(CHECKPOINTS_DIR, <<"checkpoints">>).
+-define(RECOVERY_CHECKPOINT_DIR, <<"recovery_checkpoint">>).
 
 pre_init(#{uid := UId,
            system_config := #{data_dir := DataDir}} = Conf) ->
@@ -183,8 +185,9 @@ pre_init(#{uid := UId,
     MaxCheckpoints = maps:get(max_checkpoints, Conf, ?DEFAULT_MAX_CHECKPOINTS),
     SnapshotsDir = filename:join(Dir, ?SNAPSHOTS_DIR),
     CheckpointsDir = filename:join(Dir, ?CHECKPOINTS_DIR),
+    RecoveryCheckpointDir = filename:join(Dir, ?RECOVERY_CHECKPOINT_DIR),
     _ = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
-                         CheckpointsDir, undefined, MaxCheckpoints),
+                         CheckpointsDir, RecoveryCheckpointDir, undefined, MaxCheckpoints),
     ok.
 
 -spec init(ra_log_init_args()) -> state().
@@ -207,25 +210,24 @@ init(#{uid := UId,
     MaxCheckpoints = maps:get(max_checkpoints, Conf, ?DEFAULT_MAX_CHECKPOINTS),
     SnapshotsDir = filename:join(Dir, ?SNAPSHOTS_DIR),
     CheckpointsDir = filename:join(Dir, ?CHECKPOINTS_DIR),
+    RecoveryCheckpointDir = filename:join(Dir, ?RECOVERY_CHECKPOINT_DIR),
     Counter = maps:get(counter, Conf, undefined),
 
     %% ensure directories are there
     ok = ra_lib:make_dir(Dir),
     ok = ra_lib:make_dir(SnapshotsDir),
     ok = ra_lib:make_dir(CheckpointsDir),
+    ok = ra_lib:make_dir(RecoveryCheckpointDir),
     % initialise metrics for this server
     SnapshotState = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
-                                     CheckpointsDir, Counter, MaxCheckpoints),
+                                     CheckpointsDir, RecoveryCheckpointDir,
+                                     Counter, MaxCheckpoints),
     {SnapIdx, SnapTerm} = case ra_snapshot:current(SnapshotState) of
                               undefined -> {-1, 0};
                               Curr -> Curr
                           end,
-    %% TODO: error handling
-    %% TODO: the "indexes" file isn't authoritative when it comes to live
-    %% indexes, we need to recover the snapshot and query it for live indexes
-    %% to get the actual value
-    {ok, LiveIndexes} = ra_snapshot:indexes(
-                          ra_snapshot:current_snapshot_dir(SnapshotState)),
+    %% Live indexes are already loaded into ETS by ra_snapshot:init
+    LiveIndexes = ra_log_snapshot_state:live_indexes(?ETSTBL, UId),
 
     AccessPattern = maps:get(initial_access_pattern, Conf, sequential),
     {ok, Mt0} = ra_log_ets:mem_table_please(Names, UId),
@@ -1192,6 +1194,11 @@ recover_snapshot(#?MODULE{snapshot_state = SnapState}) ->
         {ok, Meta, MacState} ->
             {Meta, MacState};
         {error, no_current_snapshot} ->
+            undefined;
+        {error, Reason} ->
+            %% Other errors during recovery - log and return undefined
+            %% This allows the system to start fresh if snapshots are corrupted
+            ?WARN("ra_log: snapshot recovery failed: ~p", [Reason]),
             undefined
     end.
 
@@ -1465,7 +1472,7 @@ delete_everything(#?MODULE{cfg = #cfg{uid = UId,
     %% if there is a snapshot process pending it could cause the directory
     %% deletion to fail, best kill the snapshot process first
     ok = ra_log_ets:delete_mem_tables(Names, UId),
-    catch ra_log_snapshot_state:delete(ra_log_snapshot_state, UId),
+    catch ra_log_snapshot_state:delete(?ETSTBL, UId),
     try ra_lib:recursive_delete(Dir) of
         ok -> ok
     catch

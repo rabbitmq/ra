@@ -16,12 +16,14 @@
 
 -export([
          recover/1,
+         recover_recovery_checkpoint/1,
          read_meta/2,
          begin_read/2,
          read_chunk/3,
          delete/2,
 
          init/6,
+         init/7,
          init_ets/0,
          current/1,
          pending/1,
@@ -44,21 +46,27 @@
          current_snapshot_dir/1,
 
          latest_checkpoint/1,
+         recovery_checkpoint/1,
+         highest_idx/1,
 
          take_older_checkpoints/2,
          take_extra_checkpoints/1,
 
          make_snapshot_dir/3,
          write_indexes/2,
-         indexes/1
+         indexes/1,
+
+         write_recovery_checkpoint/4,
+         delete_recovery_checkpoint/1
         ]).
 
 -type effect() :: {monitor, process, snapshot_writer, pid()} |
                   {bg_work, fun(), fun()}.
 
--type kind() :: snapshot | checkpoint.
+-type kind() :: snapshot | checkpoint | recovery_checkpoint.
 
 -type checkpoint() :: ra_idxterm().
+-type recovery_checkpoint() :: ra_idxterm().
 
 -export_type([
               meta/0,
@@ -66,7 +74,8 @@
               effect/0,
               chunk_flag/0,
               kind/0,
-              checkpoint/0
+              checkpoint/0,
+              recovery_checkpoint/0
              ]).
 
 -record(accept, {%% the next expected chunk
@@ -87,11 +96,18 @@
          %% like snapshots, these are also stored in subdirs
          %% as <data_dir>/checkpoints/Term_Index
          checkpoint_directory :: file:filename_all(),
+         %% <data_dir>/recovery_checkpoint
+         %% recovery checkpoints are written synchronously during shutdown
+         %% to speed up recovery. Only one exists at a time.
+         %% undefined when recovery checkpoints are not configured
+         recovery_checkpoint_directory :: option(file:filename_all()),
          pending :: option({ra_idxterm(), kind()}),
          accepting :: option(#accept{}),
          current :: option(ra_idxterm()),
          checkpoints = [] :: list(checkpoint()),
-         max_checkpoints :: pos_integer()}).
+         max_checkpoints :: pos_integer(),
+         %% recovery checkpoint - written during shutdown, used to speed up recovery
+         recovery_checkpoint :: option(recovery_checkpoint())}).
 
 -define(ETSTBL, ra_log_snapshot_state).
 
@@ -183,14 +199,27 @@
            undefined | counters:counters_ref(), pos_integer()) ->
     state().
 init(UId, Module, SnapshotsDir, CheckpointDir, Counter, MaxCheckpoints) ->
+    %% Backward compatible init without recovery checkpoint directory.
+    %% Note: This function is deprecated - use init/7 with RecoveryCheckpointDir.
+    %% The 5th argument here is Counter, not RecoveryCheckpointDir.
+    init(UId, Module, SnapshotsDir, CheckpointDir, undefined, Counter, MaxCheckpoints).
+
+-spec init(ra_uid(), module(), file:filename_all(), file:filename_all(),
+           option(file:filename_all()),
+           undefined | counters:counters_ref(), pos_integer()) ->
+    state().
+init(UId, Module, SnapshotsDir, CheckpointDir, RecoveryCheckpointDir,
+     Counter, MaxCheckpoints) ->
     State = #?MODULE{uid = UId,
                      counter = Counter,
                      module = Module,
                      snapshot_directory = SnapshotsDir,
                      checkpoint_directory = CheckpointDir,
+                     recovery_checkpoint_directory = RecoveryCheckpointDir,
                      max_checkpoints = MaxCheckpoints},
     State1 = find_snapshots(State),
-    find_checkpoints(State1).
+    State2 = find_checkpoints(State1),
+    find_recovery_checkpoint(State2).
 
 find_snapshots(#?MODULE{uid = UId,
                         module = Module,
@@ -334,6 +363,42 @@ delete_stale_checkpoints(UId, CheckpointDir, Files) ->
      end || File <- Files],
     ok.
 
+%% Find and validate recovery checkpoint if present
+find_recovery_checkpoint(#?MODULE{recovery_checkpoint_directory = undefined} = State) ->
+    State;
+find_recovery_checkpoint(#?MODULE{uid = UId,
+                                  module = Module,
+                                  recovery_checkpoint_directory = RecoveryDir} = State) ->
+    case ra_lib:is_dir(RecoveryDir) of
+        false ->
+            State;
+        true ->
+            {ok, Files0} = prim_file:list_dir(RecoveryDir),
+            %% Reverse-sort to get most recent first
+            Files = lists:reverse(lists:sort(Files0)),
+            case Files of
+                [] ->
+                    State;
+                [Latest | OldFiles] ->
+                    RecoveryPath = filename:join(RecoveryDir, Latest),
+                    case Module:validate(RecoveryPath) of
+                        ok ->
+                            {ok, #{index := Idx, term := Term}} = Module:read_meta(RecoveryPath),
+                            %% Delete any older recovery checkpoints
+                            _ = [ra_lib:recursive_delete(filename:join(RecoveryDir, F))
+                                 || F <- OldFiles],
+                            State#?MODULE{recovery_checkpoint = {Idx, Term}};
+                        Err ->
+                            ?INFO("ra_snapshot: ~ts: removing recovery checkpoint ~s "
+                                  "as it did not validate. Err: ~w",
+                                  [UId, RecoveryPath, Err]),
+                            _ = ra_lib:recursive_delete(RecoveryPath),
+                            %% Try next one if any
+                            find_recovery_checkpoint(State)
+                    end
+            end
+    end.
+
 -spec init_ets() -> ok.
 init_ets() ->
     TableFlags = [set,
@@ -351,6 +416,28 @@ current(#?MODULE{current = Current}) -> Current.
 latest_checkpoint(#?MODULE{checkpoints = [Current | _]}) -> Current;
 latest_checkpoint(#?MODULE{checkpoints = _}) -> undefined.
 
+-spec recovery_checkpoint(state()) -> option(recovery_checkpoint()).
+recovery_checkpoint(#?MODULE{recovery_checkpoint = RC}) -> RC.
+
+%% Returns the highest index among snapshot, checkpoint, and recovery checkpoint
+-spec highest_idx(state()) -> ra_index().
+highest_idx(#?MODULE{current = Current,
+                     checkpoints = Checkpoints,
+                     recovery_checkpoint = RecoveryCheckpoint}) ->
+    SnapIdx = case Current of
+                  undefined -> -1;
+                  {I, _} -> I
+              end,
+    CPIdx = case Checkpoints of
+                [] -> -1;
+                [{I2, _} | _] -> I2
+            end,
+    RCIdx = case RecoveryCheckpoint of
+                undefined -> -1;
+                {I3, _} -> I3
+            end,
+    max(SnapIdx, max(CPIdx, RCIdx)).
+
 -spec pending(state()) -> option({ra_idxterm(), kind()}).
 pending(#?MODULE{pending = Pending}) ->
     Pending.
@@ -361,9 +448,10 @@ accepting(#?MODULE{accepting = undefined}) ->
 accepting(#?MODULE{accepting = #accept{idxterm = Accepting}}) ->
     Accepting.
 
--spec directory(state(), kind()) -> file:filename_all().
+-spec directory(state(), kind()) -> option(file:filename_all()).
 directory(#?MODULE{snapshot_directory = Dir}, snapshot) -> Dir;
-directory(#?MODULE{checkpoint_directory = Dir}, checkpoint) -> Dir.
+directory(#?MODULE{checkpoint_directory = Dir}, checkpoint) -> Dir;
+directory(#?MODULE{recovery_checkpoint_directory = Dir}, recovery_checkpoint) -> Dir.
 
 -spec last_index_for(ra_uid()) -> option(ra_index()).
 last_index_for(UId) ->
@@ -520,7 +608,8 @@ complete_snapshot(_IdxTerm, snapshot, _LiveIndexes,
     %% index was accepted concurrently
     State;
 complete_snapshot({Idx, _} = IdxTerm, snapshot, LiveIndexes,
-                  #?MODULE{uid = UId} = State) ->
+                  #?MODULE{uid = UId,
+                           recovery_checkpoint = RecoveryCheckpoint} = State0) ->
     SmallestIdx = case ra_seq:first(LiveIndexes) of
                       undefined ->
                           Idx + 1;
@@ -530,6 +619,13 @@ complete_snapshot({Idx, _} = IdxTerm, snapshot, LiveIndexes,
     %% live indexes
     ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, SmallestIdx,
                                       LiveIndexes),
+    %% Delete recovery checkpoint if snapshot overtakes it
+    State = case RecoveryCheckpoint of
+                {RCIdx, _} when Idx >= RCIdx ->
+                    delete_recovery_checkpoint(State0);
+                _ ->
+                    State0
+            end,
     State#?MODULE{pending = undefined,
                   current = IdxTerm};
 complete_snapshot(IdxTerm, checkpoint, _LiveIndexes,
@@ -580,7 +676,14 @@ complete_accept(Chunk, Num, Machine,
                            %% reset any pending snapshot writes
                            pending = undefined,
                            current = IdxTerm},
-    {ok, #{machine_version := SnapMacVer}, MacState} = recover(State),
+    %% recover should always succeed here since we just accepted a snapshot
+    {SnapMacVer, MacState} =
+        case recover(State) of
+            {ok, #{machine_version := SMV}, MS} ->
+                {SMV, MS};
+            {error, Reason} ->
+                error({snapshot_recovery_failed, Reason})
+        end,
     SnapMacMod  = ra_machine:which_module(Machine, SnapMacVer),
     LiveIndexes = ra_machine:live_indexes(SnapMacMod, MacState),
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
@@ -684,6 +787,8 @@ read_chunk(ReadState, ChunkSizeBytes, #?MODULE{module = Mod,
     Mod:read_chunk(ReadState, ChunkSizeBytes, Location).
 
 %% Recovers from the latest checkpoint or snapshot, if available.
+%% Note: This does NOT consider recovery checkpoints - those are handled
+%% separately in ra_server:recover/1 to skip log replay.
 -spec recover(state()) ->
     {ok, Meta :: meta(), State :: term()} |
     {error, no_current_snapshot} |
@@ -695,17 +800,44 @@ recover(#?MODULE{module = Mod,
                  snapshot_directory = SnapDir,
                  checkpoints = Checkpoints,
                  checkpoint_directory = CheckpointDir}) ->
-    %% If there are checkpoints and a snapshot, recover from whichever has the
-    %% highest index. Otherwise recover from whichever exists.
-    Dir = case {Snapshot, Checkpoints} of
-              {{SnapIdx, _}, [{CPIdx, CPTerm} | _]} when CPIdx > SnapIdx ->
+    %% Recover from snapshot or checkpoint, whichever has the highest index.
+    SnapIdx = case Snapshot of
+                  undefined -> -1;
+                  {SI, _} -> SI
+              end,
+    CPIdx = case Checkpoints of
+                [] -> -1;
+                [{CI, _} | _] -> CI
+            end,
+    %% At least one of Snapshot or Checkpoints must be non-empty
+    %% (guaranteed by the first clause matching {undefined, []})
+    Dir = if
+              CPIdx > SnapIdx ->
+                  [{_, CPTerm} | _] = Checkpoints,
                   make_snapshot_dir(CheckpointDir, CPIdx, CPTerm);
-              {{Idx, Term}, _} ->
+              Snapshot =/= undefined ->
+                  {Idx, Term} = Snapshot,
                   make_snapshot_dir(SnapDir, Idx, Term);
-              {undefined, [{Idx, Term} | _]} ->
+              Checkpoints =/= [] ->
+                  [{Idx, Term} | _] = Checkpoints,
                   make_snapshot_dir(CheckpointDir, Idx, Term)
           end,
     Mod:recover(Dir).
+
+%% @doc Recover from the recovery checkpoint if it exists.
+%% This is used by ra_server:recover/1 to skip log replay when a recovery
+%% checkpoint with a higher index than the snapshot exists.
+-spec recover_recovery_checkpoint(state()) ->
+    {ok, Meta :: meta(), State :: term()} |
+    {error, no_recovery_checkpoint} |
+    {error, term()}.
+recover_recovery_checkpoint(#?MODULE{recovery_checkpoint = undefined}) ->
+    {error, no_recovery_checkpoint};
+recover_recovery_checkpoint(#?MODULE{module = Mod,
+                                     recovery_checkpoint = {Idx, Term},
+                                     recovery_checkpoint_directory = Dir}) ->
+    SnapDir = make_snapshot_dir(Dir, Idx, Term),
+    Mod:recover(SnapDir).
 
 -spec read_meta(Module :: module(), Location :: file:filename_all()) ->
     {ok, meta()} |
@@ -847,6 +979,49 @@ err_fun(IdxTerm, Kind) ->
             Self ! {ra_log_event,
                     {snapshot_error, IdxTerm, Kind, Error}}
     end.
+
+%% Recovery checkpoint functions
+
+%% @doc Write a recovery checkpoint synchronously during shutdown.
+%% Recovery checkpoints store the machine state to skip log replay on restart.
+%% They don't include live indexes - those are recovered from the last snapshot/checkpoint.
+-spec write_recovery_checkpoint(meta(), term(), module(), state()) ->
+    {ok, state()} | {error, term()}.
+write_recovery_checkpoint(#{index := Idx, term := Term} = Meta, MacState,
+                          SnapModule,
+                          #?MODULE{recovery_checkpoint_directory = RecoveryDir,
+                                   recovery_checkpoint = OldRC} = State) ->
+    SnapDir = make_snapshot_dir(RecoveryDir, Idx, Term),
+    ok = ra_lib:make_dir(SnapDir),
+    %% Write snapshot data without fsync (Sync=false) since this is during
+    %% ordered shutdown
+    case SnapModule:write(SnapDir, Meta, MacState, false) of
+        Res when Res =:= ok orelse element(1, Res) =:= ok ->
+            %% Delete old recovery checkpoint(s) after successful write
+            case OldRC of
+                undefined ->
+                    ok;
+                {OldIdx, OldTerm} ->
+                    OldDir = make_snapshot_dir(RecoveryDir, OldIdx, OldTerm),
+                    _ = ra_lib:recursive_delete(OldDir),
+                    ok
+            end,
+            {ok, State#?MODULE{recovery_checkpoint = {Idx, Term}}};
+        {error, _} = Err ->
+            _ = ra_lib:recursive_delete(SnapDir),
+            Err
+    end.
+
+%% @doc Delete the current recovery checkpoint.
+-spec delete_recovery_checkpoint(state()) -> state().
+delete_recovery_checkpoint(#?MODULE{recovery_checkpoint = undefined} = State) ->
+    State;
+delete_recovery_checkpoint(#?MODULE{recovery_checkpoint = {Idx, Term},
+                                    recovery_checkpoint_directory = RecoveryDir} = State) ->
+    Dir = make_snapshot_dir(RecoveryDir, Idx, Term),
+    _ = ra_lib:recursive_delete(Dir),
+    State#?MODULE{recovery_checkpoint = undefined}.
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 

@@ -9,6 +9,62 @@ erlang and therefore it implements a "chunked transfer" approach where the
 snapshot is divided up into fixed size blocks that are transferred one by one
 so as to not block the distribution port when snapshot become very large.
 
+## Snapshot Types
+
+Ra supports three types of persistent state captures:
+
+### Snapshots
+
+Full snapshots are the primary mechanism for log compaction. When a snapshot is
+taken, the log entries up to the snapshot index can be safely deleted. Snapshots
+are replicated to followers and are used for recovery after crashes.
+
+### Checkpoints
+
+Checkpoints are similar to snapshots but are not replicated to followers. They
+provide a way to capture state at a point in time without triggering log
+truncation. Checkpoints can be promoted to full snapshots when needed.
+
+### Recovery Checkpoints
+
+Recovery checkpoints are a lightweight persistence mechanism designed to avoid
+expensive log recovery after ordered shutdowns. Key characteristics:
+
+- **Written only during ordered shutdown**: Never written during normal operation
+- **Written synchronously**: Bypasses the worker process for immediate persistence
+- **No fsync required**: Since they only occur during ordered shutdowns, the OS
+  will flush data to disk
+- **No live indexes stored**: Live indexes are always recovered from the last
+  snapshot or checkpoint, not from recovery checkpoints
+- **Not replicated**: Recovery checkpoints are local optimizations only
+
+#### Configuration
+
+Recovery checkpoints are controlled by the `min_recovery_checkpoint_interval`
+configuration option (part of the mutable `ra_server` config):
+
+- Default: `0` (feature disabled)
+- When set to a positive integer N: A recovery checkpoint is written during
+  shutdown if `LastApplied - HighestIdx >= N`, where `HighestIdx` is the maximum
+  of the current snapshot index, current recovery checkpoint index, or highest
+  checkpoint index.
+
+#### Recovery Behavior
+
+During server recovery (`ra_server:recover/1`), if a recovery checkpoint exists
+with a higher index than `LastApplied`, its machine state is used to skip log
+replay. Live indexes are always recovered from the last snapshot or checkpoint,
+ensuring correct log compaction behavior.
+
+If a recovery checkpoint's integrity check fails (CRC validation), the system
+logs a warning and falls back to normal log replay.
+
+#### Cleanup
+
+Recovery checkpoints are automatically deleted when:
+- A new recovery checkpoint is written (old one deleted after new one succeeds)
+- A regular snapshot is taken with an index >= the recovery checkpoint's index
+
 ## The `ra_snapshot` behaviour
 
 The `ra_snapshot` behaviour has 9 (!) callbacks:
@@ -66,12 +122,28 @@ Raft index and term as well as a list of member servers.
 
 ## On disk layout
 
-Snapshots are stored inside a `snapshots` directory inside the Ra server
-data directory. Each snapshot is a directory of the format: `Term_Index` in
-64 bit hex encoded and zero padded format. E.g.:
+Snapshots, checkpoints, and recovery checkpoints are stored in separate
+directories inside the Ra server data directory. Each is a directory of the
+format: `Term_Index` in 64 bit hex encoded and zero padded format.
+
+### Directory Structure
 
 ```
-<<ra_data_dir>>\2F_QXJY4UDOE1SI0\snapshots\0000000000000014_0000000000253BEA
+<<ra_data_dir>>/<<server_uid>>/
+├── snapshots/
+│   └── 0000000000000014_0000000000253BEA/
+│       └── snapshot.dat
+├── checkpoints/
+│   └── 0000000000000015_0000000000300000/
+│       └── snapshot.dat
+└── recovery_checkpoint/
+    └── 0000000000000016_0000000000400000/
+        └── snapshot.dat
 ```
+
+### File Contents
+
+- `snapshot.dat`: The serialized machine state (format depends on the
+  `ra_snapshot` implementation)
 
 

@@ -53,7 +53,11 @@ all_tests() ->
      write_and_read_indexes,
      indexes_invalid_version,
      indexes_checksum_error,
-     indexes_backward_compat
+     indexes_backward_compat,
+     %% recovery checkpoint tests
+     recovery_checkpoint_write_and_recover,
+     recovery_checkpoint_deleted_when_snapshot_overtakes,
+     recovery_checkpoint_corrupt_fallback
     ].
 
 groups() ->
@@ -79,11 +83,15 @@ init_per_testcase(TestCase, Config) ->
                              TestCase, "snapshots"]),
     CheckpointDir = filename:join([?config(priv_dir, Config),
                                    TestCase, "checkpoints"]),
+    RecoveryCheckpointDir = filename:join([?config(priv_dir, Config),
+                                           TestCase, "recovery_checkpoint"]),
     ok = ra_lib:make_dir(SnapDir),
     ok = ra_lib:make_dir(CheckpointDir),
+    ok = ra_lib:make_dir(RecoveryCheckpointDir),
     [{uid, ra_lib:to_binary(TestCase)},
      {snap_dir, SnapDir},
      {checkpoint_dir, CheckpointDir},
+     {recovery_checkpoint_dir, RecoveryCheckpointDir},
      {max_checkpoints, ?DEFAULT_MAX_CHECKPOINTS} | Config].
 
 end_per_testcase(_TestCase, _Config) ->
@@ -648,10 +656,112 @@ indexes_backward_compat(Config) ->
     ?assertEqual(Indexes, ReadIndexes),
     ok.
 
+%% Test writing and recovering from a recovery checkpoint
+recovery_checkpoint_write_and_recover(Config) ->
+    State0 = init_state(Config),
+    Meta = meta(100, 3, [node()]),
+    MacState = ?FUNCTION_NAME,
+
+    %% Write a recovery checkpoint
+    {ok, State1} = ra_snapshot:write_recovery_checkpoint(
+                     Meta, MacState, ra_log_snapshot, State0),
+
+    %% Verify recovery checkpoint is set
+    {100, 3} = ra_snapshot:recovery_checkpoint(State1),
+    100 = ra_snapshot:highest_idx(State1),
+
+    %% Recover from the recovery checkpoint using dedicated function
+    {ok, RecoveredMeta, RecoveredState} =
+        ra_snapshot:recover_recovery_checkpoint(State1),
+    ?assertEqual(Meta, RecoveredMeta),
+    ?assertEqual(MacState, RecoveredState),
+
+    %% ra_snapshot:recover/1 should return no_current_snapshot since
+    %% there's no regular snapshot or checkpoint
+    {error, no_current_snapshot} = ra_snapshot:recover(State1),
+    ok.
+
+%% Test that recovery checkpoint is deleted when a snapshot overtakes it
+recovery_checkpoint_deleted_when_snapshot_overtakes(Config) ->
+    State0 = init_state(Config),
+    RecoveryDir = ?config(recovery_checkpoint_dir, Config),
+
+    %% First write a recovery checkpoint at index 50
+    RCMeta = meta(50, 2, [node()]),
+    {ok, State1} = ra_snapshot:write_recovery_checkpoint(
+                     RCMeta, rc_state, ra_log_snapshot, State0),
+    {50, 2} = ra_snapshot:recovery_checkpoint(State1),
+
+    %% Verify the recovery checkpoint directory exists
+    RCSnapDir = ra_snapshot:make_snapshot_dir(RecoveryDir, 50, 2),
+    true = filelib:is_dir(RCSnapDir),
+
+    %% Now write a snapshot at index 100 (higher than recovery checkpoint)
+    SnapMeta = meta(100, 3, [node()]),
+    {State2, [{bg_work, Fun, _}]} =
+        ra_snapshot:begin_snapshot(SnapMeta, ?MACMOD, snap_state, snapshot, State1),
+    Fun(),
+    receive
+        {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
+            State3 = ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State2),
+            %% Recovery checkpoint should be deleted
+            undefined = ra_snapshot:recovery_checkpoint(State3),
+            %% Directory should be gone
+            false = filelib:is_dir(RCSnapDir),
+            ok
+    after 1000 ->
+              error(snapshot_event_timeout)
+    end,
+    ok.
+
+%% Test that corrupt recovery checkpoint falls back to snapshot
+recovery_checkpoint_corrupt_fallback(Config) ->
+    State0 = init_state(Config),
+    RecoveryDir = ?config(recovery_checkpoint_dir, Config),
+
+    %% First write a snapshot at index 50
+    SnapMeta = meta(50, 2, [node()]),
+    {State1, [{bg_work, Fun, _}]} =
+        ra_snapshot:begin_snapshot(SnapMeta, ?MACMOD, snap_state, snapshot, State0),
+    Fun(),
+    State2 = receive
+                 {ra_log_event, {snapshot_written, IdxTerm, Indexes, snapshot, _}} ->
+                     ra_snapshot:complete_snapshot(IdxTerm, snapshot, Indexes, State1)
+             after 1000 ->
+                       error(snapshot_event_timeout)
+             end,
+    {50, 2} = ra_snapshot:current(State2),
+
+    %% Write a recovery checkpoint at index 100 (higher)
+    RCMeta = meta(100, 3, [node()]),
+    {ok, State3} = ra_snapshot:write_recovery_checkpoint(
+                     RCMeta, rc_state, ra_log_snapshot, State2),
+    {100, 3} = ra_snapshot:recovery_checkpoint(State3),
+
+    %% Corrupt the recovery checkpoint by deleting the snapshot.dat file
+    RCSnapDir = ra_snapshot:make_snapshot_dir(RecoveryDir, 100, 3),
+    ok = file:delete(filename:join(RCSnapDir, "snapshot.dat")),
+
+    %% Re-initialize to simulate restart - corrupt RC should be detected
+    %% and deleted, falling back to the snapshot
+    ets:delete_all_objects(ra_log_snapshot_state),
+    Recover = init_state(Config),
+
+    %% Recovery checkpoint should be undefined (deleted due to corruption)
+    undefined = ra_snapshot:recovery_checkpoint(Recover),
+    %% Snapshot should still be current
+    {50, 2} = ra_snapshot:current(Recover),
+
+    %% Recover should use the snapshot (now returns 3-tuple without Kind)
+    {ok, RecoveredMeta, snap_state} = ra_snapshot:recover(Recover),
+    ?assertEqual(SnapMeta, RecoveredMeta),
+    ok.
+
 init_state(Config) ->
     ra_snapshot:init(?config(uid, Config), ra_log_snapshot,
                      ?config(snap_dir, Config),
                      ?config(checkpoint_dir, Config),
+                     ?config(recovery_checkpoint_dir, Config),
                      undefined, ?config(max_checkpoints, Config)).
 
 meta(Idx, Term, Cluster) ->
