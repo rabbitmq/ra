@@ -2115,13 +2115,17 @@ machine_version(#{cfg := #cfg{machine_version = MacVer}}) ->
 machine(#{cfg := #cfg{machine = Machine}}) ->
     Machine.
 
--spec machine_query(fun((term()) -> term()), ra_server_state()) ->
+-spec machine_query(ra:query_fun(), ra_server_state()) ->
     {ra_idxterm(), term()}.
-machine_query(QueryFun, #{cfg := #cfg{effective_machine_module = MacMod},
+machine_query(QueryFun, #{cfg := #cfg{effective_machine_module = MacMod,
+                                      effective_machine_version = MacVer},
                           machine_state := MacState,
                           last_applied := Last,
                           current_term := Term}) ->
-    Res = ra_machine:query(MacMod, QueryFun, MacState),
+    Ctx = #{index => Last,
+            term => Term,
+            machine_version => MacVer},
+    Res = ra_machine:query(MacMod, QueryFun, MacState, Ctx),
     {{Last, Term}, Res}.
 
 % Internal
@@ -3799,9 +3803,15 @@ apply_consistent_queries_effects(QueryRefs,
 
 process_consistent_query({query, From, QueryFun, _ReadCommitIndex},
                          #{cfg := #cfg{id = Id,
-                                       machine = {machine, MacMod, _}},
-                           machine_state := MacState}) ->
-    Result = ra_machine:query(MacMod, QueryFun, MacState),
+                                       machine = {machine, MacMod, _},
+                                       effective_machine_version = MacVer},
+                           machine_state := MacState,
+                           last_applied := Last,
+                           current_term := Term}) ->
+    Ctx = #{index => Last,
+            term => Term,
+            machine_version => MacVer},
+    Result = ra_machine:query(MacMod, QueryFun, MacState, Ctx),
     {reply, From, {ok, Result, Id}};
 process_consistent_query({aux, From, AuxCmd, _ReadCommitIndex}, _State0) ->
     {next_event, {call, From}, {aux_command, {'$wrap_reply', AuxCmd}}}.
