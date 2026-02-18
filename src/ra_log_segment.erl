@@ -29,6 +29,7 @@
          copy/3]).
 
 -export([dump/1,
+         dump/2,
          dump_index/1]).
 
 -include("ra.hrl").
