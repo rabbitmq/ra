@@ -20,7 +20,8 @@
          write/7,
          write_batch/2,
          last_writer_seq/2,
-         force_roll_over/1]).
+         force_roll_over/1,
+         forget_writer/2]).
 
 -export([wal2list/1]).
 
@@ -210,6 +211,11 @@ force_roll_over(Wal) ->
     ok = gen_batch_server:cast(Wal, rollover),
     ok.
 
+-spec forget_writer(atom() | pid(), ra_uid()) -> ok.
+forget_writer(Wal, UId) ->
+    gen_batch_server:cast(Wal, {forget_writer, UId}),
+    ok.
+
 %% ra_log_wal
 %%
 %% Writes Raft entries to shared persistent storage for multiple "writers"
@@ -381,7 +387,7 @@ recover_wal(Dir, #conf{system = System,
                     filename:extension(File) == ".wal"],
     WalFiles = lists:sort(Files),
     SeedWriters = recover_writers(Dir),
-    ?DEBUG("WAL in ~ts: recovered ~b writers from sidecar file",
+    ?DEBUG("WAL in ~ts: recovered ~b writers from snapshot file",
            [System, map_size(SeedWriters)]),
     FinalWriters =
     lists:foldl(fun (F, Writers0) ->
@@ -408,9 +414,23 @@ recover_wal(Dir, #conf{system = System,
     ?DEBUG("WAL in ~ts: final writers recovered ~b",
            [System, map_size(FinalWriters)]),
 
+    %% trim writers for UIDs that are no longer registered
+    RegisteredUIds = sets:from_list(
+                       [UId || {_, UId}
+                               <- ra_directory:list_registered(Conf#conf.names)],
+                       [{version, 2}]),
+    TrimmedWriters = maps:filter(
+                       fun (UId, _) ->
+                               sets:is_element(UId, RegisteredUIds)
+                       end, FinalWriters),
+    NumTrimmed = map_size(FinalWriters) - map_size(TrimmedWriters),
+    NumTrimmed > 0 andalso
+        ?DEBUG("WAL in ~ts: trimmed ~b stale writers",
+               [System, NumTrimmed]),
+
     FileNum = extract_file_num(lists:reverse(WalFiles)),
     State = roll_over(#state{conf = Conf,
-                             writers = FinalWriters,
+                             writers = TrimmedWriters,
                              file_num = FileNum}),
     true = erlang:garbage_collect(),
     State.
@@ -535,7 +555,9 @@ handle_msg({query, Fun}, State) ->
     _ = catch Fun(State),
     State;
 handle_msg(rollover, State) ->
-    complete_batch_and_roll(State).
+    complete_batch_and_roll(State);
+handle_msg({forget_writer, UId}, #state{writers = Writers} = State) ->
+    State#state{writers = maps:remove(UId, Writers)}.
 
 incr_batch(#batch{num_writes = Writes,
                   waiting = Waiting0,
@@ -637,8 +659,10 @@ open_wal(File, Max, #conf{} = Conf0) ->
 
 persist_writers(Dir, Writers) ->
     File = writers_snapshot_file(Dir),
-    Bin = term_to_binary(Writers, [compressed]),
-    ok = ra_lib:write_file(File, Bin, false).
+    Tmp = File ++ ".tmp",
+    Bin = term_to_binary(Writers),
+    ok = ra_lib:write_file(Tmp, Bin),
+    ok = prim_file:rename(Tmp, File).
 
 recover_writers(Dir) ->
     File = writers_snapshot_file(Dir),

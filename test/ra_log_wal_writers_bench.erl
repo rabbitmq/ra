@@ -3,7 +3,7 @@
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
 %% Micro-benchmark for measuring the overhead of persisting the WAL
-%% writers sidecar file at roll-over time.
+%% writers snapshot file at roll-over time.
 %%
 %% Usage from an Erlang shell (after compiling):
 %%   ra_log_wal_writers_bench:run().
@@ -16,7 +16,7 @@ run() ->
                          integer_to_list(erlang:system_time(microsecond))]),
     ok = filelib:ensure_dir(filename:join(Dir, "dummy")),
     try
-        io:format("~n=== WAL Writers Sidecar Micro-Benchmark ===~n~n"),
+        io:format("~n=== WAL Writers Snapshot Micro-Benchmark ===~n~n"),
         io:format("~-15s ~-15s ~-15s ~-15s~n",
                   ["Writers", "Serialize(us)", "Write(us)", "Total(us)"]),
         io:format("~s~n", [lists:duplicate(60, $-)]),
@@ -38,14 +38,16 @@ bench_writers(Dir, NumWriters) ->
                  || I <- lists:seq(1, NumWriters)]),
     Iters = 100,
     WritersFile = filename:join(Dir, "writers.snapshot"),
+    TmpFile = WritersFile ++ ".tmp",
     {SerUs, WriteUs} =
         lists:foldl(
           fun (_I, {SAcc, WAcc}) ->
                   {SerTime, Bin} = timer:tc(fun () ->
-                                                    term_to_binary(Writers, [compressed])
+                                                    term_to_binary(Writers)
                                             end),
                   {WriteTime, ok} = timer:tc(fun () ->
-                                                     ra_lib:write_file(WritersFile, Bin, false)
+                                                     ok = ra_lib:write_file(TmpFile, Bin),
+                                                     prim_file:rename(TmpFile, WritersFile)
                                              end),
                   {SAcc + SerTime, WAcc + WriteTime}
           end, {0, 0}, lists:seq(1, Iters)),

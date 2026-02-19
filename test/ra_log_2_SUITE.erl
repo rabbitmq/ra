@@ -1165,14 +1165,14 @@ writes_not_lost_after_multiple_wal_crashes(Config) ->
     Log2b = append_n(10, 11, 2, Log2),
     exit(WalPid, kill),
     wait_for_wal(WalPid),
-    %% one more kill -- the writers sidecar preserves tracking so the
+    %% one more kill -- the writers snapshot preserves tracking so the
     %% gap will still be detected
     WalPid2 = whereis(ra_log_wal),
     exit(WalPid2, kill),
     wait_for_wal(WalPid2),
 
     %% write 11..12 which should trigger resend because the WAL recovered
-    %% writers from the sidecar file and detects the gap at index 10
+    %% writers from the snapshot file and detects the gap at index 10
     Log3 = append_n(11, 13, 2, Log2b),
     Log4 = receive
                {ra_log_event, {resend_write, 10} = Evt} ->
