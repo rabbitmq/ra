@@ -20,7 +20,8 @@
          write/7,
          write_batch/2,
          last_writer_seq/2,
-         force_roll_over/1]).
+         force_roll_over/1,
+         forget_writer/2]).
 
 -export([wal2list/1]).
 
@@ -210,6 +211,11 @@ force_roll_over(Wal) ->
     ok = gen_batch_server:cast(Wal, rollover),
     ok.
 
+-spec forget_writer(atom() | pid(), ra_uid()) -> ok.
+forget_writer(Wal, UId) ->
+    gen_batch_server:cast(Wal, {forget_writer, UId}),
+    ok.
+
 %% ra_log_wal
 %%
 %% Writes Raft entries to shared persistent storage for multiple "writers"
@@ -380,6 +386,9 @@ recover_wal(Dir, #conf{system = System,
              end || File <- Files0,
                     filename:extension(File) == ".wal"],
     WalFiles = lists:sort(Files),
+    SeedWriters = recover_writers(Dir),
+    ?DEBUG("WAL in ~ts: recovered ~b writers from snapshot file",
+           [System, map_size(SeedWriters)]),
     FinalWriters =
     lists:foldl(fun (F, Writers0) ->
                         ?DEBUG("WAL in ~ts: recovering ~ts, Mode ~s",
@@ -400,14 +409,28 @@ recover_wal(Dir, #conf{system = System,
                         ?DEBUG("WAL in ~ts: recovered ~ts time taken ~bms - recovered ~b writers",
                                [System, F, Time div 1000, map_size(Writers)]),
                         Writers
-                end, #{}, WalFiles),
+                end, SeedWriters, WalFiles),
 
     ?DEBUG("WAL in ~ts: final writers recovered ~b",
            [System, map_size(FinalWriters)]),
 
+    %% trim writers for UIDs that are no longer registered
+    RegisteredUIds = sets:from_list(
+                       [UId || {_, UId}
+                               <- ra_directory:list_registered(Conf#conf.names)],
+                       [{version, 2}]),
+    TrimmedWriters = maps:filter(
+                       fun (UId, _) ->
+                               sets:is_element(UId, RegisteredUIds)
+                       end, FinalWriters),
+    NumTrimmed = map_size(FinalWriters) - map_size(TrimmedWriters),
+    NumTrimmed > 0 andalso
+        ?DEBUG("WAL in ~ts: trimmed ~b stale writers",
+               [System, NumTrimmed]),
+
     FileNum = extract_file_num(lists:reverse(WalFiles)),
     State = roll_over(#state{conf = Conf,
-                             writers = FinalWriters,
+                             writers = TrimmedWriters,
                              file_num = FileNum}),
     true = erlang:garbage_collect(),
     State.
@@ -532,7 +555,9 @@ handle_msg({query, Fun}, State) ->
     _ = catch Fun(State),
     State;
 handle_msg(rollover, State) ->
-    complete_batch_and_roll(State).
+    complete_batch_and_roll(State);
+handle_msg({forget_writer, UId}, #state{writers = Writers} = State) ->
+    State#state{writers = maps:remove(UId, Writers)}.
 
 incr_batch(#batch{num_writes = Writes,
                   waiting = Waiting0,
@@ -580,6 +605,7 @@ complete_batch_and_roll(#state{} = State0) ->
     roll_over(start_batch(State)).
 
 roll_over(#state{wal = Wal0, file_num = Num0,
+                 writers = Writers,
                  conf = #conf{dir = Dir,
                               system = System,
                               segment_writer = SegWriter,
@@ -592,6 +618,9 @@ roll_over(#state{wal = Wal0, file_num = Num0,
     %% if this is the first wal since restart randomise the first
     %% max wal size to reduce the likelihood that each erlang node will
     %% flush mem tables at the same time
+    %% persist writers map so that sequence tracking survives crashes
+    %% even after all WAL files have been deleted by the segment writer
+    ok = persist_writers(Dir, Writers),
     NextMaxBytes =
         case Wal0 of
             undefined ->
@@ -627,6 +656,34 @@ open_wal(File, Max, #conf{} = Conf0) ->
     {Conf, #wal{fd = Fd,
                 max_size = Max,
                 filename = File}}.
+
+persist_writers(Dir, Writers) ->
+    File = writers_snapshot_file(Dir),
+    Tmp = File ++ ".tmp",
+    Bin = term_to_binary(Writers),
+    ok = ra_lib:write_file(Tmp, Bin),
+    ok = prim_file:rename(Tmp, File).
+
+recover_writers(Dir) ->
+    File = writers_snapshot_file(Dir),
+    case file:read_file(File) of
+        {ok, Bin} ->
+            try binary_to_term(Bin)
+            catch _:Err ->
+                ?WARN("~ts: failed to deserialise writers snapshot ~ts: ~p",
+                      [Dir, File, Err]),
+                #{}
+            end;
+        {error, enoent} ->
+            #{};
+        {error, Reason} ->
+            ?WARN("~ts: failed to read writers snapshot ~ts: ~p",
+                  [Dir, File, Reason]),
+            #{}
+    end.
+
+writers_snapshot_file(Dir) ->
+    filename:join(Dir, "writers.snapshot").
 
 prepare_file(File, Modes) ->
     Tmp = make_tmp(File),

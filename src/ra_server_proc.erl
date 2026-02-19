@@ -1210,6 +1210,7 @@ terminate(Reason, StateName,
             %% This is so that the segment writer can avoid
             %% crashing if it detects a missing key
             catch ra_directory:unregister_name(Names, UId),
+            catch ra_log_wal:forget_writer(maps:get(wal, Names), UId),
             _ = ra_server:terminate(ServerState, Reason),
             catch ra_log_meta:delete_sync(MetaName, UId),
             catch ra_counters:delete(Id),
