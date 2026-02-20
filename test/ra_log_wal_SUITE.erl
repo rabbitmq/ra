@@ -60,7 +60,11 @@ all_tests() ->
      recover_with_last_entry_corruption_pre_allocate,
      checksum_failure_in_middle_of_file_should_fail,
      recover_with_partial_last_entry,
-     sys_get_status
+     sys_get_status,
+     writers_snapshot_persisted_at_rollover,
+     writers_snapshot_survives_empty_wal_recovery,
+     forget_writer_removes_entry,
+     recovery_trims_stale_writers
     ].
 
 groups() ->
@@ -1470,6 +1474,124 @@ checksum_failure_in_middle_of_file_should_fail(Config) ->
     {error, wal_checksum_validation_failure} = ra_log_wal:start_link(Conf),
     empty_mailbox(),
     meck:unload(),
+    ok.
+
+writers_snapshot_persisted_at_rollover(Config) ->
+    ok = logger:set_primary_config(level, all),
+    #{dir := Dir} = Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    Data = <<42:256/unit:8>>,
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    Tid = ets:new(?FUNCTION_NAME, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, Idx, 1, Data)
+     || Idx <- lists:seq(1, 50)],
+    _ = await_written(WriterId, 1, [{1, 50}]),
+    ra_log_wal:force_roll_over(Pid),
+    receive
+        {'$gen_cast', {mem_tables, #{UId := _}, _}} -> ok
+    after 5000 ->
+              flush(),
+              ct:fail("mem_tables timeout")
+    end,
+    %% verify the writers.snapshot file was created
+    WritersFile = filename:join(Dir, "writers.snapshot"),
+    ?assert(filelib:is_file(WritersFile)),
+    {ok, Bin} = file:read_file(WritersFile),
+    Writers = binary_to_term(Bin),
+    ?assertMatch(#{UId := {in_seq, 50}}, Writers),
+    meck:unload(),
+    proc_lib:stop(Pid),
+    ok.
+
+writers_snapshot_survives_empty_wal_recovery(Config) ->
+    ok = logger:set_primary_config(level, all),
+    Conf = ?config(wal_conf, Config),
+    {_UId, _} = WriterId = ?config(writer_id, Config),
+    Data = <<42:256/unit:8>>,
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    Tid = ets:new(?FUNCTION_NAME, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, Idx, 1, Data)
+     || Idx <- lists:seq(1, 10)],
+    _ = await_written(WriterId, 1, [{1, 10}]),
+    flush(),
+    %% stop gracefully so the WAL file is on disk
+    ok = proc_lib:stop(Pid),
+    %% restart -- recovery replays the WAL, then roll_over writes .writers
+    {ok, Pid2} = ra_log_wal:start_link(Conf),
+    flush(),
+    %% stop again to simulate a crash where the new WAL file is empty
+    %% but the writers snapshot from the previous roll_over still exists
+    ok = proc_lib:stop(Pid2),
+    %% restart once more -- the WAL file from Pid2 is empty but the
+    %% writers snapshot should seed the writers map
+    {ok, Pid3} = ra_log_wal:start_link(Conf),
+    %% try an out of sequence write to verify gap detection works
+    {ok, _} = ra_log_wal:write(Pid3, WriterId, Tid, 20, 1, Data),
+    receive
+        {ra_log_event, {resend_write, 11}} -> ok
+    after 500 ->
+              flush(),
+              ct:fail("expected resend_write from snapshot recovery")
+    end,
+    meck:unload(),
+    proc_lib:stop(Pid3),
+    ok.
+
+forget_writer_removes_entry(Config) ->
+    Conf = set_segment_writer(?config(wal_conf, Config),
+                              spawn(fun () -> ok end)),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    Data = <<42:256/unit:8>>,
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    Tid = ets:new(?FUNCTION_NAME, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, Idx, 1, Data)
+     || Idx <- lists:seq(1, 5)],
+    _ = await_written(WriterId, 1, [{1, 5}]),
+    %% verify writer is tracked
+    ?assertMatch({ok, 5}, ra_log_wal:last_writer_seq(Pid, UId)),
+    %% forget the writer
+    ok = ra_log_wal:forget_writer(Pid, UId),
+    %% give the cast time to be processed
+    timer:sleep(100),
+    ?assertMatch({ok, undefined}, ra_log_wal:last_writer_seq(Pid, UId)),
+    meck:unload(),
+    proc_lib:stop(Pid),
+    ok.
+
+recovery_trims_stale_writers(Config) ->
+    #{dir := Dir} = Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    Data = <<42:256/unit:8>>,
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    Tid = ets:new(?FUNCTION_NAME, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, Idx, 1, Data)
+     || Idx <- lists:seq(1, 5)],
+    _ = await_written(WriterId, 1, [{1, 5}]),
+    flush(),
+    ok = proc_lib:stop(Pid),
+    %% manually inject a stale writer into the snapshot file
+    WritersFile = filename:join(Dir, "writers.snapshot"),
+    StaleUId = <<"stale_uid_not_registered">>,
+    {ok, Bin} = file:read_file(WritersFile),
+    Writers0 = binary_to_term(Bin),
+    Writers1 = Writers0#{StaleUId => {in_seq, 99}},
+    ok = file:write_file(WritersFile, term_to_binary(Writers1, [compressed])),
+    %% restart -- recovery should trim the stale entry
+    {ok, Pid2} = ra_log_wal:start_link(Conf),
+    %% the registered UId should still be tracked
+    ?assertMatch({ok, 5}, ra_log_wal:last_writer_seq(Pid2, UId)),
+    %% the stale UId should have been trimmed
+    ?assertMatch({ok, undefined}, ra_log_wal:last_writer_seq(Pid2, StaleUId)),
+    meck:unload(),
+    proc_lib:stop(Pid2),
     ok.
 
 empty_mailbox() ->

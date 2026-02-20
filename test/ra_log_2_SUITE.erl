@@ -20,6 +20,7 @@ all() ->
 all_tests() ->
     [
      resend_write_lost_in_wal_crash,
+     writes_not_lost_after_multiple_wal_crashes,
      resend_after_written_event_lost_in_wal_crash,
      resend_write_after_tick,
      snapshot_before_written,
@@ -326,16 +327,29 @@ take_after_overwrite_and_init(Config) ->
     Log1 = write_and_roll_no_deliver(1, 5, 1, Log0),
     Log2 = deliver_written_log_events(Log1, 200),
     {[_, _, _, _], Log3} = ra_log_take(1, 4, Log2),
-    Log4 = write_and_roll_no_deliver(1, 2, 2, Log3),
+    Log4 = write_n(1, 2, 2, Log3),
     Log5 = deliver_log_events_cond(Log4,
                                    fun (L) ->
                                            {1, 2} =:= ra_log:last_written(L)
                                    end, 100),
 
+    Keys = [range,
+            last_written_index_term,
+            last_term,
+            mem_table_range,
+            num_segments,
+            segments_range,
+            last_index,
+            snapshot_term],
     % ensure we cannot take stale entries
     {[{1, 2, _}], Log6} = ra_log_take(1, 4, Log5),
+    OverviewPre = maps:with(Keys, ra_log:overview(Log6)),
+    ct:pal("overview pre ~p", [ra_log:overview(Log6)]),
     _ = ra_log:close(Log6),
     Log = ra_log_init(Config),
+    OverviewPost = maps:with(Keys, ra_log:overview(Log)),
+    ct:pal("overview ~p", [ra_log:overview(Log)]),
+    ?assertEqual(OverviewPre, OverviewPost),
     {[{1, 2, _}], _} = ra_log_take(1, 4, Log),
     ok.
 
@@ -606,7 +620,7 @@ read_plan_missing_index(Config) ->
     ReadPlan = ra_log:partial_read([128, 301], Log4, fun (_, _, Cmd) -> Cmd end),
     ?assert(is_map(ra_log_read_plan:info(ReadPlan))),
     ct:pal("ReadPlan ~p", [ReadPlan]),
-    {Entries, _} = ra_log_read_plan:execute(ReadPlan, undefined),
+    {_Entries, _} = ra_log_read_plan:execute(ReadPlan, undefined),
     ok.
 
 written_event_after_snapshot(Config) ->
@@ -1140,6 +1154,49 @@ resend_write_lost_in_wal_crash(Config) ->
                      flush(),
                      ct:fail(resend_write_timeout)
            end,
+    Log5 = ra_log:append({13, 2, banana}, Log4),
+    Log6 = assert_log_events(Log5, fun (L) ->
+                                           {13, 2} == ra_log:last_written(L)
+                                   end),
+    {[_, _, _, _, _], _} = ra_log_take(9, 14, Log6),
+    ra_log:close(Log6),
+
+    ok.
+
+writes_not_lost_after_multiple_wal_crashes(Config) ->
+    Log0 = ra_log_init(Config),
+    {0, 0} = ra_log:last_index_term(Log0),
+    %% write 1..9
+    Log1 = append_n(1, 10, 2, Log0),
+    Log2 = assert_log_events(Log1, fun (L) ->
+                                           {9, 2} == ra_log:last_written(L)
+                                   end),
+    WalPid = whereis(ra_log_wal),
+    %% suspend wal, write an entry then kill it so that the entry is never
+    %% actually written
+    erlang:suspend_process(WalPid),
+    Log2b = append_n(10, 11, 2, Log2),
+    exit(WalPid, kill),
+    wait_for_wal(WalPid),
+    %% one more kill -- the writers snapshot preserves tracking so the
+    %% gap will still be detected
+    WalPid2 = whereis(ra_log_wal),
+    exit(WalPid2, kill),
+    wait_for_wal(WalPid2),
+
+    %% write 11..12 which should trigger resend because the WAL recovered
+    %% writers from the snapshot file and detects the gap at index 10
+    Log3 = append_n(11, 13, 2, Log2b),
+    Log4 = receive
+               {ra_log_event, {resend_write, 10} = Evt} ->
+                   ct:pal("resend triggered as expected"),
+                   element(1, ra_log:handle_event(Evt, Log3))
+           after 500 ->
+                     flush(),
+                     ct:fail(resend_write_timeout)
+           end,
+
+    %% append another entry for good measure
     Log5 = ra_log:append({13, 2, banana}, Log4),
     Log6 = assert_log_events(Log5, fun (L) ->
                                            {13, 2} == ra_log:last_written(L)
@@ -2639,7 +2696,7 @@ new_peer() ->
 flush() ->
     receive
         Any ->
-            ct:pal("flush ~p", [Any]),
+            ct:pal("flush ~tp", [Any]),
             flush()
     after 0 ->
               ok
