@@ -327,16 +327,29 @@ take_after_overwrite_and_init(Config) ->
     Log1 = write_and_roll_no_deliver(1, 5, 1, Log0),
     Log2 = deliver_written_log_events(Log1, 200),
     {[_, _, _, _], Log3} = ra_log_take(1, 4, Log2),
-    Log4 = write_and_roll_no_deliver(1, 2, 2, Log3),
+    Log4 = write_n(1, 2, 2, Log3),
     Log5 = deliver_log_events_cond(Log4,
                                    fun (L) ->
                                            {1, 2} =:= ra_log:last_written(L)
                                    end, 100),
 
+    Keys = [range,
+            last_written_index_term,
+            last_term,
+            mem_table_range,
+            num_segments,
+            segments_range,
+            last_index,
+            snapshot_term],
     % ensure we cannot take stale entries
     {[{1, 2, _}], Log6} = ra_log_take(1, 4, Log5),
+    OverviewPre = maps:with(Keys, ra_log:overview(Log6)),
+    ct:pal("overview pre ~p", [ra_log:overview(Log6)]),
     _ = ra_log:close(Log6),
     Log = ra_log_init(Config),
+    OverviewPost = maps:with(Keys, ra_log:overview(Log)),
+    ct:pal("overview ~p", [ra_log:overview(Log)]),
+    ?assertEqual(OverviewPre, OverviewPost),
     {[{1, 2, _}], _} = ra_log_take(1, 4, Log),
     ok.
 

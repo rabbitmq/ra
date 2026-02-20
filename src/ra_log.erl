@@ -251,6 +251,16 @@ init(#{uid := UId,
     %% not do the right thing here as it requires a contiguous range
     Range = ra_range:combine(MtRange, SegmentRange),
 
+    %% if the mt range contains indexes that overwrite part of the segment
+    %% range we need to truncate the segment range to the index before
+    %% the first mem table index
+    TruncSegmentRange = case MtRange of
+                            undefined ->
+                                SegmentRange;
+                            {FstMtIdx, _} ->
+                                ra_range:limit(FstMtIdx, SegmentRange)
+                        end,
+
     case ra_range:overlap(MtRange, SegmentRange) of
         {_, _} = Overlap ->
             ?INFO("~ts: ra_log:init/1 mem table and segment ranges overlap ~w"
@@ -304,7 +314,7 @@ init(#{uid := UId,
                      end,
 
     %% recover the pending seq
-    MaxConfirmedWrittenIdx = case SegmentRange of
+    MaxConfirmedWrittenIdx = case TruncSegmentRange of
                                  {_, LastSegIdx} ->
                                      max(LastWalIdx, LastSegIdx);
                                  _ ->
@@ -360,7 +370,7 @@ init(#{uid := UId,
                               {_, LI} ->
                                   fetch_term(LI, State0)
                           end,
-    LastSegRefIdx = case SegmentRange of
+    LastSegRefIdx = case TruncSegmentRange of
                         undefined ->
                             -1;
                         {_, L} ->
