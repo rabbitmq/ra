@@ -60,13 +60,15 @@ add(AddRange, _Range) ->
     %% no overlap, return add range
     AddRange.
 
+%% @doc Combines two ranges taking the wider start but clamping the upper bound
+%% to AddRange. This is used when AddRange represents newer data that
+%% overwrites the tail of CurRange.
 -spec combine(AddRange :: range(), CurRange :: range()) -> range().
 combine(undefined, Range) ->
     Range;
-combine({AddStart, AddEnd}, {Start, End}) ->
-    {min(AddStart, Start), max(AddEnd, End)};
+combine({AddStart, AddEnd}, {Start, _End}) ->
+    {min(AddStart, Start), AddEnd};
 combine(AddRange, _Range) ->
-    %% no overlap, return combine range
     AddRange.
 
 -spec in(ra:index(), range()) -> boolean().
@@ -235,6 +237,18 @@ extend_test() ->
 fold_test() ->
     ?assertEqual([4,3,2,1], fold({1, 4}, fun ra_lib:cons/2, [])),
     ?assertEqual([], fold(undefined, fun ra_lib:cons/2, [])),
+    ok.
+
+combine_test() ->
+    ?assertEqual(undefined, combine(undefined, undefined)),
+    ?assertEqual({1, 2}, combine({1, 2}, undefined)),
+    ?assertEqual({1, 2}, combine(undefined, {1, 2})),
+    ?assertEqual({1, 5}, combine({1, 5}, {1, 2})),
+    ?assertEqual({1, 5}, combine({4, 5}, {1, 2})),
+    %% the add range has a lower end, in this case it should truncate the
+    %% result to the add
+    ?assertEqual({1, 3}, combine({2, 3}, {1, 5})),
+
     ok.
 
 -endif.
