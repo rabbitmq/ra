@@ -67,6 +67,7 @@
          new_uid/1,
          %% rebalancing
          transfer_leadership/2,
+         transfer_leadership/3,
          %% auxiliary commands
          aux_command/2,
          aux_command/3,
@@ -1130,11 +1131,26 @@ initial_members(ServerId, Timeout) ->
 %% @doc Transfers leadership from the leader to a voter follower.
 %% Returns `already_leader' if the transfer target is already the leader.
 %% Leadership cannot be transferred to non-voters.
+%%
+%% @param ServerId the Ra server to send the command to
+%% @param TargetServerId the desired server to become the new leader
 %% @end
 -spec transfer_leadership(ra_server_id(), ra_server_id()) ->
     ok | already_leader | {error, term()} | {timeout, ra_server_id()}.
 transfer_leadership(ServerId, TargetServerId) ->
-    ra_server_proc:transfer_leadership(ServerId, TargetServerId, ?DEFAULT_TIMEOUT).
+    transfer_leadership(ServerId, TargetServerId, ?DEFAULT_TIMEOUT).
+
+%% @doc Transfers leadership from the leader to a voter follower.
+%% Returns `already_leader' if the transfer target is already the leader.
+%% Leadership cannot be transferred to non-voters.
+%%
+%% @param ServerId the Ra server to send the command to
+%% @param TargetServerId the desired server to become the new leader
+%% @end
+-spec transfer_leadership(ra_server_id(), ra_server_id(), timeout()) ->
+    ok | already_leader | {error, term()} | {timeout, ra_server_id()}.
+transfer_leadership(ServerId, TargetServerId, Timeout) ->
+    ra_server_proc:transfer_leadership(ServerId, TargetServerId, Timeout).
 
 %% @doc Executes (using a call) an auxiliary command that the state machine can handle.
 %%
