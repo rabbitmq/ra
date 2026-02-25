@@ -219,9 +219,10 @@ init(#{uid := UId,
     ok = ra_lib:make_dir(CheckpointsDir),
     ok = ra_lib:make_dir(RecoveryCheckpointDir),
     % initialise metrics for this server
+    SyncServer = maps:get(log_sync, Names, undefined),
     SnapshotState = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
                                      CheckpointsDir, RecoveryCheckpointDir,
-                                     Counter, MaxCheckpoints),
+                                     SyncServer, Counter, MaxCheckpoints),
     {SnapIdx, SnapTerm} = case ra_snapshot:current(SnapshotState) of
                               undefined -> {-1, 0};
                               Curr -> Curr
