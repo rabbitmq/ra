@@ -48,16 +48,16 @@ handle_batch(Ops, State) ->
     %% syncing the most recently written file first flushes the journal,
     %% which tends to make subsequent syncs near-instant since the earlier
     %% files are already durable.
-    Actions = lists:filtermap(
-                fun({call, From, {sync, SyncFun}}) ->
-                        Result = try SyncFun()
-                                 catch _:Err -> {error, Err}
-                                 end,
-                        {true, {reply, From, Result}};
-                   (_) ->
-                        false
-                end, Ops),
-    {ok, Actions, State}.
+    lists:foreach(
+      fun({call, From, {sync, SyncFun}}) ->
+              Result = try SyncFun()
+                       catch _:Err -> {error, Err}
+                       end,
+              gen:reply(From, Result);
+         (_) ->
+              ok
+      end, Ops),
+    {ok, [], State}.
 
 terminate(_Reason, _State) ->
     ok.
