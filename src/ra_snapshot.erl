@@ -24,6 +24,7 @@
 
          init/6,
          init/7,
+         init/8,
          init_ets/0,
          current/1,
          pending/1,
@@ -88,6 +89,9 @@
         {uid :: ra_uid(),
          counter :: undefined | counters:counters_ref(),
          module :: module(),
+         %% Per-system gen_batch_server that serializes and batches fsync
+         %% calls across all Ra servers in the system.
+         sync_server :: undefined | atom(),
          %% typically <data_dir>/snapshots
          %% snapshot subdirs are store below
          %% this as <data_dir>/snapshots/Term_Index
@@ -210,9 +214,20 @@ init(UId, Module, SnapshotsDir, CheckpointDir, Counter, MaxCheckpoints) ->
     state().
 init(UId, Module, SnapshotsDir, CheckpointDir, RecoveryCheckpointDir,
      Counter, MaxCheckpoints) ->
+    init(UId, Module, SnapshotsDir, CheckpointDir, RecoveryCheckpointDir,
+         undefined, Counter, MaxCheckpoints).
+
+-spec init(ra_uid(), module(), file:filename_all(), file:filename_all(),
+           option(file:filename_all()),
+           undefined | atom(),
+           undefined | counters:counters_ref(), pos_integer()) ->
+    state().
+init(UId, Module, SnapshotsDir, CheckpointDir, RecoveryCheckpointDir,
+     SyncServer, Counter, MaxCheckpoints) ->
     State = #?MODULE{uid = UId,
                      counter = Counter,
                      module = Module,
+                     sync_server = SyncServer,
                      snapshot_directory = SnapshotsDir,
                      checkpoint_directory = CheckpointDir,
                      recovery_checkpoint_directory = RecoveryCheckpointDir,
@@ -468,6 +483,7 @@ last_index_for(UId) ->
 begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
                #?MODULE{module = Mod,
                         counter = Counter,
+                        sync_server = SyncServer,
                         snapshot_directory = SnapshotDir,
                         checkpoint_directory = CheckpointDir} = State) ->
     {CounterIdx, Dir} =
@@ -477,9 +493,6 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
             checkpoint ->
                 {?C_RA_LOG_CHECKPOINT_BYTES_WRITTEN, CheckpointDir}
         end,
-    %% Snapshots must be fsync'd but checkpoints are OK to not sync.
-    %% Checkpoints are fsync'd before promotion instead.
-    Sync = SnapKind =:= snapshot,
     %% create directory for this snapshot
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
     %% This needs to be called in the current process to "lock" potentially
@@ -498,7 +511,10 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
     BgWorkFun = fun () ->
                         StartTime = erlang:monotonic_time(),
                         ok = ra_lib:make_dir(SnapDir),
-                        case Mod:write(SnapDir, Meta, Ref, Sync) of
+                        %% Write without fsync. For snapshots, the sync is
+                        %% batched through the per-system ra_log_sync process
+                        %% to avoid N parallel fsyncs saturating the disk.
+                        case Mod:write(SnapDir, Meta, Ref, false) of
                             ok -> ok;
                             {ok, BytesWritten} ->
                                 counters_add(Counter, CounterIdx,
@@ -523,6 +539,10 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
                                     LiveIndexes0
                             end,
 
+                        %% Snapshots must be fsync'd. Checkpoints skip fsync
+                        %% and are synced later when promoted to snapshots.
+                        ok = maybe_sync(SnapKind, SyncServer, Mod, SnapDir),
+
                         EndTime = erlang:monotonic_time(),
                         Duration = erlang:convert_time_unit(EndTime - StartTime,
                                                             native, millisecond),
@@ -541,6 +561,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
     {boolean(), State :: state(), Effects :: [effect()]}.
 promote_checkpoint(PromotionIdx,
                    #?MODULE{module = Mod,
+                            sync_server = SyncServer,
                             snapshot_directory = SnapDir,
                             checkpoint_directory = CheckpointDir,
                             checkpoints = Checkpoints0} = State0) ->
@@ -554,11 +575,8 @@ promote_checkpoint(PromotionIdx,
             Self = self(),
             Fun = fun() ->
                           StartTime = erlang:monotonic_time(),
-                          %% Checkpoints are created without calling
-                          %% fsync. Snapshots must be fsync'd though, so
-                          %% sync the checkpoint before promoting it
-                          %% into a snapshot.
-                          ok = Mod:sync(Checkpoint),
+                          ok = maybe_sync(snapshot, SyncServer,
+                                          Mod, Checkpoint),
                           ok = ra_file:rename(Checkpoint, Snapshot),
                           Indexes = case indexes(Snapshot) of
                                         {ok, Idxs} ->
@@ -906,10 +924,13 @@ write_indexes(Dir, Indexes) ->
     File = filename:join(Dir, <<"indexes">>),
     Data = term_to_binary(Indexes),
     Crc = erlang:crc32(Data),
+    %% Skip fsync here. The indexes file is covered by the subsequent
+    %% snapshot fsync via ra_log_sync, and is recoverable from the
+    %% snapshot data if lost.
     ra_lib:write_file(File, [<<?IDX_MAGIC,
                                 ?IDX_VERSION:8/unsigned,
                                 Crc:32/unsigned>>,
-                              Data]).
+                              Data], false).
 
 -spec indexes(file:filename_all()) ->
     {ok, ra_seq:state()} |
@@ -979,6 +1000,13 @@ err_fun(IdxTerm, Kind) ->
             Self ! {ra_log_event,
                     {snapshot_error, IdxTerm, Kind, Error}}
     end.
+
+maybe_sync(checkpoint, _SyncServer, _Mod, _Dir) ->
+    ok;
+maybe_sync(snapshot, undefined, Mod, Dir) ->
+    ok = Mod:sync(Dir);
+maybe_sync(snapshot, SyncServer, Mod, Dir) ->
+    ok = ra_log_sync:sync(SyncServer, fun() -> Mod:sync(Dir) end).
 
 %% Recovery checkpoint functions
 

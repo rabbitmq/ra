@@ -24,11 +24,16 @@ start_link(#{names := #{log_sup := Name}} = Cfg) ->
 init([#{data_dir := DataDir,
         name := System,
         names := #{wal := _WalName,
+                   log_sync := LogSyncName,
                    segment_writer := SegWriterName}} = Cfg]) ->
     PreInit = #{id => ra_log_pre_init,
                 start => {ra_log_pre_init, start_link, [System]}},
     Meta = #{id => ra_log_meta,
              start => {ra_log_meta, start_link, [Cfg]}},
+    LogSync = #{id => ra_log_sync,
+                start => {ra_log_sync, start_link,
+                          [#{name => LogSyncName}]},
+                shutdown => 5_000},
     SegmentMaxEntries = maps:get(segment_max_entries, Cfg, ?SEGMENT_MAX_ENTRIES),
     SegmentMaxPending = maps:get(segment_max_pending, Cfg, ?SEGMENT_MAX_PENDING),
     SegmentMaxBytes = maps:get(segment_max_size_bytes, Cfg, ?SEGMENT_MAX_SIZE_B),
@@ -52,7 +57,7 @@ init([#{data_dir := DataDir,
     WalSup = #{id => ra_log_wal_sup,
                type => supervisor,
                start => {ra_log_wal_sup, start_link, [WalConf]}},
-    {ok, {SupFlags, [PreInit, Meta, SegWriter, WalSup]}}.
+    {ok, {SupFlags, [PreInit, Meta, LogSync, SegWriter, WalSup]}}.
 
 
 make_wal_conf(#{data_dir := DataDir,
