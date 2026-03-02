@@ -15,7 +15,8 @@
          overview/1,
          log_last_index_term/1,
          log_fetch/2,
-         log_stats/1
+         log_stats/1,
+         wal_fill_ratio/1
         ]).
 
 -include("ra.hrl").
@@ -76,4 +77,9 @@ log_fetch(Idx, #{log := Log0} = State)
 -spec log_stats(ra_aux:internal_state()) -> ra_log:overview().
 log_stats(#{log := Log}) ->
     ra_log:overview(Log).
+
+-spec wal_fill_ratio(ra_aux:internal_state()) -> float().
+wal_fill_ratio(#{cfg := #cfg{system_config =
+                             #{names := #{wal := WalName}}}}) ->
+    ra_log_wal:fill_ratio(WalName).
 

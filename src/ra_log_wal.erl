@@ -21,7 +21,8 @@
          write_batch/2,
          last_writer_seq/2,
          force_roll_over/1,
-         forget_writer/2]).
+         forget_writer/2,
+         fill_ratio/1]).
 
 -export([wal2list/1]).
 
@@ -38,11 +39,17 @@
 -define(C_BATCHES, 2).
 -define(C_WRITES, 3).
 -define(C_BYTES_WRITTEN, 4).
+-define(C_CURRENT_FILE_SIZE, 5).
+-define(C_MAX_FILE_SIZE, 6).
 -define(COUNTER_FIELDS,
         [{wal_files, ?C_WAL_FILES, counter, "Number of write-ahead log files created"},
          {batches, ?C_BATCHES, counter, "Number of batches written"},
          {writes, ?C_WRITES, counter, "Number of entries written"},
-         {bytes_written, ?C_BYTES_WRITTEN, counter, "Number of bytes written"}
+         {bytes_written, ?C_BYTES_WRITTEN, counter, "Number of bytes written"},
+         {current_file_size, ?C_CURRENT_FILE_SIZE, gauge,
+          "Current WAL file size in bytes"},
+         {max_file_size, ?C_MAX_FILE_SIZE, gauge,
+          "Maximum WAL file size in bytes"}
          ]).
 
 -define(FILE_MODES, [raw, write, read, binary]).
@@ -215,6 +222,21 @@ force_roll_over(Wal) ->
 forget_writer(Wal, UId) ->
     gen_batch_server:cast(Wal, {forget_writer, UId}),
     ok.
+
+-spec fill_ratio(atom()) -> float().
+fill_ratio(WalName) ->
+    case ra_counters:fetch(WalName) of
+        undefined ->
+            0.5;
+        CRef ->
+            Max = counters:get(CRef, ?C_MAX_FILE_SIZE),
+            case Max > 0 of
+                true ->
+                    min(1.0, counters:get(CRef, ?C_CURRENT_FILE_SIZE) / Max);
+                false ->
+                    0.5
+            end
+    end.
 
 %% ra_log_wal
 %%
@@ -505,10 +527,12 @@ write_data({UId, Pid} = Id, MtTid, Idx, Term, Data0, Trunc, SmallestIndex,
                       Entry],
             Batch = incr_batch(Batch0, UId, Pid, MtTid,
                                Idx, Term, Record, SmallestIndex),
+            NewFileSize = FileSize + DataSize,
             counters:add(Counter, ?C_BYTES_WRITTEN, DataSize),
+            counters:put(Counter, ?C_CURRENT_FILE_SIZE, NewFileSize),
             State0#state{batch = Batch,
                          wal = Wal#wal{writer_name_cache = Cache,
-                                       file_size = FileSize + DataSize,
+                                       file_size = NewFileSize,
                                        entry_count = Count + 1},
                          writers = Writers#{UId => {in_seq, Idx}}}
     end.
@@ -644,6 +668,8 @@ roll_over(#state{wal = Wal0, file_num = Num0,
         end,
 
     {Conf, Wal} = open_wal(NextFile, NextMaxBytes, Conf0),
+    counters:put(Conf#conf.counter, ?C_CURRENT_FILE_SIZE, 0),
+    counters:put(Conf#conf.counter, ?C_MAX_FILE_SIZE, NextMaxBytes),
     %% ignore the result as not supported on windows
     _ = ra_lib:sync_dir(Dir),
     State0#state{conf = Conf,
