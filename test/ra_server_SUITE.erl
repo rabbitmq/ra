@@ -82,6 +82,7 @@ all() ->
      snapshotted_follower_received_append_entries,
      leader_received_append_entries_reply_with_stale_last_index,
      leader_receives_install_snapshot_result,
+     leader_received_install_snapshot_result_and_promotes_voter,
      leader_received_append_entries_reply_and_promotes_voter,
      leader_replies_to_append_entries_rpc_with_lower_term,
      follower_aer_1,
@@ -3004,7 +3005,22 @@ leader_receives_install_snapshot_result(_Config) ->
                          (_) -> false end, Effects)),
     ok.
 
-leader_received_append_entries_reply_and_promotes_voter(_config) ->
+leader_received_install_snapshot_result_and_promotes_voter(_Config) ->
+    N2 = ?N2, N3 = ?N3, State = base_state(3, ?FUNCTION_NAME),
+    State1 = set_peer_voter_status(State, N3, #{membership => promotable,
+                                                target => 3}),
+    ISR = #install_snapshot_result{term = 5,
+                                   last_index = 3,
+                                   last_term = 5},
+    {leader, _,
+     [{send_rpc, N2, #append_entries_rpc{entries = []}},
+      {next_event,
+       {command, {'$ra_join', _,
+                     #{id := N3, voter_status := #{membership := voter}},
+        noreply}}}]} = ra_server:handle_leader({N3, ISR}, State1),
+    ok.
+
+leader_received_append_entries_reply_and_promotes_voter(_Config) ->
     N3 = ?N3, State = base_state(3, ?FUNCTION_NAME),
     AER = #append_entries_reply{term = 5, success = true,
                                 next_index = 5,

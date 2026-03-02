@@ -775,7 +775,8 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
             %% Check if pending release cursor can now proceed
             %% (no_snapshot_sends condition may now be satisfied)
             {State2, Effects1} = maybe_emit_pending_release_cursor(State1, Effects0),
-            {State, _, Effects} = make_pipelined_rpc_effects(State2, Effects1),
+            Effects2 = maybe_promote_peer(PeerId, State2, Effects1),
+            {State, _, Effects} = make_pipelined_rpc_effects(State2, Effects2),
             {leader, State, Effects}
     end;
 handle_leader(pipeline_rpcs, State0) ->
