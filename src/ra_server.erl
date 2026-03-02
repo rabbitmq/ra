@@ -719,7 +719,8 @@ handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
                            _ -> []
                        end,
 
-            {State, _, Effects} = make_pipelined_rpc_effects(State1, Effects0),
+            Effects1 = maybe_promote_peer(PeerId, State1, Effects0),
+            {State, _, Effects} = make_pipelined_rpc_effects(State1, Effects1),
             {leader, State, Effects}
     end;
 handle_leader(pipeline_rpcs, State0) ->
