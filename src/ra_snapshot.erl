@@ -480,7 +480,9 @@ last_index_for(UId) ->
 -spec begin_snapshot(meta(), MacModule :: module(),
                      MacState :: term(), kind(), state()) ->
     {state(), [effect()]}.
-begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
+begin_snapshot(#{index := Idx,
+                 term := Term} = Meta,
+               MacMod, MacState, SnapKind,
                #?MODULE{module = Mod,
                         counter = Counter,
                         sync_server = SyncServer,
@@ -494,7 +496,6 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
                 {?C_RA_LOG_CHECKPOINT_BYTES_WRITTEN, CheckpointDir}
         end,
     %% create directory for this snapshot
-    SnapDir = make_snapshot_dir(Dir, Idx, Term),
     %% This needs to be called in the current process to "lock" potentially
     %% mutable machine state
     Ref = Mod:prepare(Meta, MacState),
@@ -509,6 +510,7 @@ begin_snapshot(#{index := Idx, term := Term} = Meta, MacMod, MacState, SnapKind,
     Self = self(),
     IdxTerm = {Idx, Term},
     BgWorkFun = fun () ->
+                        SnapDir = make_snapshot_dir(Dir, Idx, Term),
                         StartTime = erlang:monotonic_time(),
                         ok = ra_lib:make_dir(SnapDir),
                         %% Write without fsync. For snapshots, the sync is
