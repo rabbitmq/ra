@@ -33,6 +33,7 @@
 
 -define(AWAIT_TIMEOUT, 60000).
 -define(SEGMENT_WRITER_RECOVERY_TIMEOUT, 30000).
+-define(STALE_SEGMENT_THRESHOLD, 1024). %% 16KB
 
 -define(C_MEM_TABLES, 1).
 -define(C_SEGMENTS, 2).
@@ -345,10 +346,11 @@ flush_mem_table_range(ServerUId, {Tid, Seq},
             ok = ra_log_ets:delete_mem_tables(Names, ServerUId),
             [];
         Segment0 ->
-            case append_to_segment(ServerUId, Tid, Seq, Segment0, State) of
+            Segment1 = maybe_open_new_segment(ServerUId, Segment0, SegConf),
+            case append_to_segment(ServerUId, Tid, Seq, Segment1, State) of
                 undefined ->
                     %% Directory disappeared during write - close segment handle
-                    _ = ra_log_segment:close(Segment0),
+                    _ = ra_log_segment:close(Segment1),
                     ?WARN("segment_writer: skipping segments for ~w as "
                           "directory ~ts disappeared whilst writing",
                           [ServerUId, Dir]),
@@ -507,6 +509,23 @@ segment_files(Dir) ->
             lists:sort(Files);
         {error, enoent} ->
             []
+    end.
+
+maybe_open_new_segment(ServerUId, Seg, SegConf) ->
+    case ra_log_segment:range(Seg) of
+        {_First, Last} ->
+            case Last < smallest_live_idx(ServerUId)
+                 andalso ra_log_segment:data_size(Seg) > ?STALE_SEGMENT_THRESHOLD of
+                true ->
+                    case open_successor_segment(Seg, SegConf) of
+                        enoent -> Seg;
+                        NewSeg -> NewSeg
+                    end;
+                false ->
+                    Seg
+            end;
+        _ ->
+            Seg
     end.
 
 open_successor_segment(CurSeg, SegConf) ->
