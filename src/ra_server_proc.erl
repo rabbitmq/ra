@@ -700,6 +700,11 @@ candidate(EventType, {aux_command, Cmd}, State0) ->
     {keep_state, State, Actions};
 candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
+candidate(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
+    handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
+candidate(info, {Status, Node, InfoList}, State0)
+  when Status =:= nodedown orelse Status =:= nodeup ->
+    handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
 candidate(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
 candidate(_, tick_timeout,
