@@ -315,8 +315,11 @@ init_recover_corrupt(Config) ->
 
     %% Corrupt the latest checkpoint by deleting the snapshot.dat file but
     %% leaving the checkpoint directory intact.
-    CorruptDir = filename:join(?config(checkpoint_dir, Config),
-                               ra_lib:zpad_hex(2) ++ "_" ++ ra_lib:zpad_hex(165)),
+    CorruptDir = filename:join(
+                   ?config(checkpoint_dir, Config),
+                   <<(ra_lib:zpad_hex(2))/binary,
+                     "_",
+                     (ra_lib:zpad_hex(165))/binary>>),
     ok = file:delete(filename:join(CorruptDir, "snapshot.dat")),
 
     Recover = init_state(Config),
@@ -362,8 +365,11 @@ init_recover_multi_corrupt(Config) ->
     {165, 2} = ra_snapshot:latest_checkpoint(State4),
 
     %% Corrupt the latest checkpoint.
-    Corrupt = filename:join(?config(checkpoint_dir, Config),
-                            ra_lib:zpad_hex(2) ++ "_" ++ ra_lib:zpad_hex(165)),
+    Corrupt = filename:join(
+                 ?config(checkpoint_dir, Config),
+                 <<(ra_lib:zpad_hex(2))/binary,
+                   "_",
+                   (ra_lib:zpad_hex(165))/binary>>),
     ok = file:delete(filename:join(Corrupt, "snapshot.dat")),
 
     %% Open a new snapshot state to simulate a restart.

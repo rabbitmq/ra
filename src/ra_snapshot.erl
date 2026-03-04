@@ -543,7 +543,8 @@ begin_snapshot(#{index := Idx,
 
                         %% Snapshots must be fsync'd. Checkpoints skip fsync
                         %% and are synced later when promoted to snapshots.
-                        ok = maybe_sync(SnapKind, SyncServer, Mod, SnapDir),
+                        ok = maybe_sync(SnapKind, SyncServer,
+                                        Mod, SnapDir),
 
                         EndTime = erlang:monotonic_time(),
                         Duration = erlang:convert_time_unit(EndTime - StartTime,
@@ -580,6 +581,8 @@ promote_checkpoint(PromotionIdx,
                           ok = maybe_sync(snapshot, SyncServer,
                                           Mod, Checkpoint),
                           ok = ra_file:rename(Checkpoint, Snapshot),
+                          _ = ra_lib:sync_dir(CheckpointDir),
+                          _ = ra_lib:sync_dir(SnapDir),
                           Indexes = case indexes(Snapshot) of
                                         {ok, Idxs} ->
                                             Idxs;
@@ -988,7 +991,7 @@ find_checkpoint_to_delete(_, _) ->
 make_snapshot_dir(Dir, Index, Term) ->
     I = ra_lib:zpad_hex(Index),
     T = ra_lib:zpad_hex(Term),
-    filename:join(Dir, T ++ "_" ++ I).
+    filename:join(Dir, <<T/binary, "_", I/binary>>).
 
 counters_add(undefined, _, _) ->
     ok;
@@ -1005,9 +1008,20 @@ err_fun(IdxTerm, Kind) ->
 maybe_sync(checkpoint, _SyncServer, _Mod, _Dir) ->
     ok;
 maybe_sync(snapshot, undefined, Mod, Dir) ->
-    ok = Mod:sync(Dir);
+    ok = Mod:sync(Dir),
+    _ = ra_lib:sync_dir(Dir),
+    _ = ra_lib:sync_dir(filename:dirname(Dir)),
+    ok;
 maybe_sync(snapshot, SyncServer, Mod, Dir) ->
-    ok = ra_log_sync:sync(SyncServer, fun() -> Mod:sync(Dir) end).
+    ok = ra_log_sync:sync(
+           SyncServer,
+           fun() ->
+                   ok = Mod:sync(Dir),
+                   _ = ra_lib:sync_dir(Dir),
+                   _ = ra_lib:sync_dir(
+                         filename:dirname(Dir)),
+                   ok
+           end).
 
 %% Recovery checkpoint functions
 

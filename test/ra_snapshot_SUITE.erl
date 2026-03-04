@@ -200,8 +200,11 @@ take_snapshot_with_ra_seq_live_indexes(Config) ->
                 {55, 2} = ra_snapshot:current(State),
                 55 = ra_snapshot:last_index_for(UId),
                 %% Verify the indexes file was written correctly
+                SnapSubDir = <<(ra_lib:zpad_hex(2))/binary,
+                               "_",
+                               (ra_lib:zpad_hex(55))/binary>>,
                 IndexFile = filename:join([SnapDir,
-                                          ra_lib:zpad_hex(2) ++ "_" ++ ra_lib:zpad_hex(55),
+                                          SnapSubDir,
                                           <<"indexes">>]),
                 {ok, ReadIndexes} = ra_snapshot:indexes(
                                       filename:dirname(IndexFile)),
@@ -345,7 +348,9 @@ init_recover_multi_corrupt(Config) ->
     end,
     %% corrupt the latest snapshot
     Corrupt = filename:join(SnapsDir,
-                            ra_lib:zpad_hex(2) ++ "_" ++ ra_lib:zpad_hex(165)),
+                            <<(ra_lib:zpad_hex(2))/binary,
+                              "_",
+                              (ra_lib:zpad_hex(165))/binary>>),
     ok = file:delete(filename:join(Corrupt, "snapshot.dat")),
 
     %% open a new snapshot state to simulate a restart
@@ -381,7 +386,9 @@ init_recover_corrupt(Config) ->
 
     %% delete the snapshot file but leave the current directory
     Corrupt = filename:join(SnapsDir,
-                            ra_lib:zpad_hex(2) ++ "_" ++ ra_lib:zpad_hex(55)),
+                            <<(ra_lib:zpad_hex(2))/binary,
+                              "_",
+                              (ra_lib:zpad_hex(55))/binary>>),
     ok = file:delete(filename:join(Corrupt, "snapshot.dat")),
 
     %% clear out ets table
