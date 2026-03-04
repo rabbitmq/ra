@@ -33,7 +33,7 @@
 
 -define(AWAIT_TIMEOUT, 60000).
 -define(SEGMENT_WRITER_RECOVERY_TIMEOUT, 30000).
--define(STALE_SEGMENT_THRESHOLD, 1024). %% 16KB
+-define(STALE_SEGMENT_THRESHOLD, 1024). %% 1KB
 
 -define(C_MEM_TABLES, 1).
 -define(C_SEGMENTS, 2).
@@ -514,12 +514,14 @@ segment_files(Dir) ->
 maybe_open_new_segment(ServerUId, Seg, SegConf) ->
     case ra_log_segment:range(Seg) of
         {_First, Last} ->
-            case Last < smallest_live_idx(ServerUId)
-                 andalso ra_log_segment:data_size(Seg) > ?STALE_SEGMENT_THRESHOLD of
+            case Last < smallest_live_idx(ServerUId) andalso
+                 ra_log_segment:data_size(Seg) > ?STALE_SEGMENT_THRESHOLD of
                 true ->
                     case open_successor_segment(Seg, SegConf) of
-                        enoent -> Seg;
-                        NewSeg -> NewSeg
+                        enoent ->
+                            Seg;
+                        NewSeg ->
+                            NewSeg
                     end;
                 false ->
                     Seg

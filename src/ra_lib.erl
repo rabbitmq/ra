@@ -255,23 +255,29 @@ make_uid(Prefix0) ->
 -spec make_dir(file:name_all()) ->
     ok | {error, file:posix() | badarg}.
 make_dir(Dir) ->
-    case is_dir(Dir) of
-        true -> ok;
-        false ->
-            handle_ensure_dir(ensure_dir(Dir), Dir)
+    case prim_file:make_dir(Dir) of
+        ok ->
+            ok;
+        {error, eexist} ->
+            ok;
+        {error, enoent} ->
+            %% parent doesn't exist, create it then retry
+            case ensure_dir(Dir) of
+                ok ->
+                    case prim_file:make_dir(Dir) of
+                        ok ->
+                            ok;
+                        {error, eexist} ->
+                            ok;
+                        Error ->
+                            Error
+                    end;
+                Error ->
+                    Error
+            end;
+        Error ->
+            Error
     end.
-
-handle_ensure_dir(ok, Dir) ->
-    handle_make_dir(prim_file:make_dir(Dir));
-handle_ensure_dir(Error, _Dir) ->
-    Error.
-
-handle_make_dir(ok) ->
-    ok;
-handle_make_dir({error, eexist}) ->
-    ok;
-handle_make_dir(Error) ->
-    Error.
 
 -spec validate_base64uri(string()) -> boolean().
 validate_base64uri(Str) ->

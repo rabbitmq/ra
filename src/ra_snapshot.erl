@@ -926,13 +926,12 @@ write_indexes(Dir, Indexes) ->
     File = filename:join(Dir, <<"indexes">>),
     Data = term_to_binary(Indexes),
     Crc = erlang:crc32(Data),
-    %% Skip fsync here. The indexes file is covered by the subsequent
-    %% snapshot fsync via ra_log_sync, and is recoverable from the
+    %% Skip fsync here. The indexes file  recoverable from the
     %% snapshot data if lost.
     ra_lib:write_file(File, [<<?IDX_MAGIC,
-                                ?IDX_VERSION:8/unsigned,
-                                Crc:32/unsigned>>,
-                              Data], false).
+                               ?IDX_VERSION:8/unsigned,
+                               Crc:32/unsigned>>,
+                             Data], false).
 
 -spec indexes(file:filename_all()) ->
     {ok, ra_seq:state()} |
