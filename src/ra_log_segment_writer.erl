@@ -273,8 +273,7 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
     %% Get the sparse sequence of live indexes that must be preserved
     %% beyond the snapshot boundary for compaction.
     LiveIndexes = live_indexes(ServerUId),
-    %% The highest live index - entries above this are part of the normal log
-    LastLive = ra_seq:last(LiveIndexes),
+    SnapIdx = snapshot_idx(ServerUId),
     %% TidSeqs arrive here sorted new -> old.
 
     %% Truncate and limit all seqs to create a non-overlapping list of
@@ -290,8 +289,7 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
                             Seq ->
                                 L = ra_seq:in_range(ra_seq:range(Seq),
                                                     LiveIndexes),
-
-                                [{T, ra_seq:add(ra_seq:floor(LastLive + 1, Seq), L)}]
+                                [{T, ra_seq:add(ra_seq:floor(SnapIdx + 1, Seq), L)}]
                         end;
                     ({T, Seq0}, [{_T, PrevSeq} | _] = Acc) ->
                         Start = ra_seq:first(PrevSeq),
@@ -304,7 +302,7 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
                             Seq ->
                                 L = ra_seq:in_range(ra_seq:range(Seq),
                                                     LiveIndexes),
-                                [{T, ra_seq:add(ra_seq:floor(LastLive + 1, Seq), L)}
+                                [{T, ra_seq:add(ra_seq:floor(SnapIdx + 1, Seq), L)}
                                 | Acc]
                         end
                 end, [], TidSeqs0),
@@ -381,6 +379,9 @@ start_index(ServerUId, StartIdx0) ->
 
 smallest_live_idx(ServerUId) ->
     ra_log_snapshot_state:smallest(ra_log_snapshot_state, ServerUId).
+
+snapshot_idx(ServerUId) ->
+    ra_log_snapshot_state:snapshot(ra_log_snapshot_state, ServerUId).
 
 live_indexes(ServerUId) ->
     ra_log_snapshot_state:live_indexes(ra_log_snapshot_state, ServerUId).
