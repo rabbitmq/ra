@@ -90,7 +90,8 @@ all_tests() ->
      concurrent_snapshot_install_and_compaction,
      snapshot_installation_with_live_indexes,
      init_with_dangling_symlink,
-     init_after_missing_segments_event
+     init_after_missing_segments_event,
+     segment_close_flush_error_recovery
    ].
 
 groups() ->
@@ -2451,6 +2452,71 @@ init_after_missing_segments_event(Config) ->
 
     ok.
 
+segment_close_flush_error_recovery(Config) ->
+    %% This test demonstrates that `ra_log_segment:close/1` silently discards
+    %% the return value of `flush/1`, causing the segment writer to report
+    %% segment refs covering entries that were never persisted to disk.
+    %% After restart the WAL file has already been deleted, hence:
+    %% 1. Those entries are permanently lost.
+    %% 2. Subsequent writes may lead to holes in log segments.
+
+    %% 1. Write entries 1-5 and flush them to a segment
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Log2 = assert_log_events(Log1,
+                             fun (L) -> {5, 1} =:= ra_log:last_written(L) end),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    %% wait for segment delivery — entries 1-5 are now safely on disk
+    Log3 = deliver_log_events_cond(
+             Log2,
+             fun (L) ->
+                     {0, 5} =:= maps:get(segments_range, ra_log:overview(L))
+             end, 100),
+
+    %% 2. Write entries 6-10 and wait for written confirmation
+    Log4 = write_n(6, 11, 1, Log3),
+    Log5 = assert_log_events(Log4,
+                             fun (L) -> {10, 1} =:= ra_log:last_written(L) end),
+
+    %% 3. Meck `ra_log_segment:flush/1` to return IO error.
+    %%    Make sure it fires only once.
+    meck:new(ra_log_segment, [passthrough]),
+    meck:expect(ra_log_segment, flush,
+                fun (_State) ->
+                    spawn(meck, unload, [ra_log_segment]),
+                    {error, enospc}
+                end),
+
+    %% 4. Force WAL roll-over.
+    %%    Segment flush will fail but the log will still report success with a
+    %%    segref covering {0, 10}.
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    Log6 = deliver_log_events_cond(
+             Log5,
+             fun (L) ->
+                     {0, 10} =:= maps:get(segments_range, ra_log:overview(L))
+             end, 100),
+
+    %% 5. Write two more entries to the log.
+    %%    Assuming there's just enough disk space for them.
+    Log7 = write_n(11, 13, 1, Log6),
+    Log8 = assert_log_events(Log7,
+                             fun (L) -> {12, 1} =:= ra_log:last_written(L) end),
+
+    %% 6. Stop and restart Ra.
+    ra_log:close(Log8),
+    application:stop(ra),
+    start_ra(Config),
+
+    %% 7. Re-init the log and verify all entries are persisted.
+    %%    With the bug, the segment on disk only contains entries 1-5 and 11-12,
+    %%    but not 6-10.
+    Log9 = ra_log_init(Config),
+    ct:pal("after recovery: ~p", [ra_log:overview(Log9)]),
+
+    validate_fold(1, 12, 1, Log9),
+
+    ra_log:close(Log9).
 
 
 %% INTERNAL

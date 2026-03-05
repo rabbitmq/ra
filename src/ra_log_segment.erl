@@ -305,7 +305,7 @@ sync(#state{cfg = #cfg{fd = Fd},
             Err
     end;
 sync(State0) ->
-    case flush(State0) of
+    case ?MODULE:flush(State0) of
         {ok, State} ->
             sync(State);
         Err ->
