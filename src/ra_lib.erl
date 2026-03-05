@@ -146,7 +146,14 @@ update_element(Index, T, Update) when is_tuple(T) ->
     setelement(Index, T, Update(element(Index, T))).
 
 zpad_hex(Num) ->
-    lists:flatten(io_lib:format("~16.16.0B", [Num])).
+    Hex = integer_to_binary(Num, 16),
+    Pad = 16 - byte_size(Hex),
+    case Pad > 0 of
+        true ->
+            <<(binary:copy(<<$0>>, Pad))/binary, Hex/binary>>;
+        false ->
+            Hex
+    end.
 
 zpad_filename("", Ext, Num) ->
     lists:flatten(io_lib:format("~16..0B.~ts", [Num, Ext]));
@@ -255,23 +262,29 @@ make_uid(Prefix0) ->
 -spec make_dir(file:name_all()) ->
     ok | {error, file:posix() | badarg}.
 make_dir(Dir) ->
-    case is_dir(Dir) of
-        true -> ok;
-        false ->
-            handle_ensure_dir(ensure_dir(Dir), Dir)
+    case prim_file:make_dir(Dir) of
+        ok ->
+            ok;
+        {error, eexist} ->
+            ok;
+        {error, enoent} ->
+            %% parent doesn't exist, create it then retry
+            case ensure_dir(Dir) of
+                ok ->
+                    case prim_file:make_dir(Dir) of
+                        ok ->
+                            ok;
+                        {error, eexist} ->
+                            ok;
+                        Error ->
+                            Error
+                    end;
+                Error ->
+                    Error
+            end;
+        Error ->
+            Error
     end.
-
-handle_ensure_dir(ok, Dir) ->
-    handle_make_dir(prim_file:make_dir(Dir));
-handle_ensure_dir(Error, _Dir) ->
-    Error.
-
-handle_make_dir(ok) ->
-    ok;
-handle_make_dir({error, eexist}) ->
-    ok;
-handle_make_dir(Error) ->
-    Error.
 
 -spec validate_base64uri(string()) -> boolean().
 validate_base64uri(Str) ->
@@ -596,7 +609,10 @@ validate_base64uri_test() ->
     ok.
 
 zeropad_test() ->
-    "0000000000000037" = zpad_hex(55),
+    <<"0000000000000037">> = zpad_hex(55),
+    <<"0000000000000000">> = zpad_hex(0),
+    <<"FFFFFFFFFFFFFFFF">> = zpad_hex(18446744073709551615),
+    <<"000000000000000A">> = zpad_hex(10),
     ok.
 
 lists_detect_sort_test() ->

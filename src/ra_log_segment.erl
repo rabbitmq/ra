@@ -21,6 +21,7 @@
          range/1,
          flush/1,
          max_count/1,
+         data_size/1,
          filename/1,
          segref/1,
          info/1,
@@ -692,6 +693,10 @@ fold0(#state{cfg = Cfg, cache = Cache0} = State, Idx, FinalIdx, Fun, AccFun,
 -spec range(state()) -> option({ra_index(), ra_index()}).
 range(#state{range = Range}) ->
     Range.
+
+-spec data_size(state()) -> non_neg_integer().
+data_size(#state{data_offset = DataOffset, data_start = DataStart}) ->
+    DataOffset - DataStart.
 
 -spec max_count(state()) -> non_neg_integer().
 max_count(#state{cfg = #cfg{max_count = Max}}) ->

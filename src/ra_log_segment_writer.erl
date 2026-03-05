@@ -33,6 +33,7 @@
 
 -define(AWAIT_TIMEOUT, 60000).
 -define(SEGMENT_WRITER_RECOVERY_TIMEOUT, 30000).
+-define(STALE_SEGMENT_THRESHOLD, 1024). %% 1KB
 
 -define(C_MEM_TABLES, 1).
 -define(C_SEGMENTS, 2).
@@ -141,7 +142,8 @@ handle_cast({mem_tables, UIdTidRanges, WalFile},
     T1 = erlang:monotonic_time(),
     ok = counters:add(State#state.counter, ?C_MEM_TABLES, map_size(UIdTidRanges)),
     #{names := Names} = ra_system:fetch(System),
-    Degree = erlang:system_info(schedulers),
+    %5 leave a bit of room for other scheduling
+    Degree = max(1, erlang:system_info(schedulers) - 2),
     %% TODO: refactor to make better use of time where each uid has an
     %% uneven amount of work to do.
     RangesList = maps:fold(
@@ -271,8 +273,7 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
     %% Get the sparse sequence of live indexes that must be preserved
     %% beyond the snapshot boundary for compaction.
     LiveIndexes = live_indexes(ServerUId),
-    %% The highest live index - entries above this are part of the normal log
-    LastLive = ra_seq:last(LiveIndexes),
+    SnapIdx = snapshot_idx(ServerUId),
     %% TidSeqs arrive here sorted new -> old.
 
     %% Truncate and limit all seqs to create a non-overlapping list of
@@ -288,8 +289,7 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
                             Seq ->
                                 L = ra_seq:in_range(ra_seq:range(Seq),
                                                     LiveIndexes),
-
-                                [{T, ra_seq:add(ra_seq:floor(LastLive + 1, Seq), L)}]
+                                [{T, ra_seq:add(ra_seq:floor(SnapIdx + 1, Seq), L)}]
                         end;
                     ({T, Seq0}, [{_T, PrevSeq} | _] = Acc) ->
                         Start = ra_seq:first(PrevSeq),
@@ -302,7 +302,7 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
                             Seq ->
                                 L = ra_seq:in_range(ra_seq:range(Seq),
                                                     LiveIndexes),
-                                [{T, ra_seq:add(ra_seq:floor(LastLive + 1, Seq), L)}
+                                [{T, ra_seq:add(ra_seq:floor(SnapIdx + 1, Seq), L)}
                                 | Acc]
                         end
                 end, [], TidSeqs0),
@@ -344,10 +344,11 @@ flush_mem_table_range(ServerUId, {Tid, Seq},
             ok = ra_log_ets:delete_mem_tables(Names, ServerUId),
             [];
         Segment0 ->
-            case append_to_segment(ServerUId, Tid, Seq, Segment0, State) of
+            Segment1 = maybe_open_new_segment(ServerUId, Segment0, SegConf),
+            case append_to_segment(ServerUId, Tid, Seq, Segment1, State) of
                 undefined ->
                     %% Directory disappeared during write - close segment handle
-                    _ = ra_log_segment:close(Segment0),
+                    _ = ra_log_segment:close(Segment1),
                     ?WARN("segment_writer: skipping segments for ~w as "
                           "directory ~ts disappeared whilst writing",
                           [ServerUId, Dir]),
@@ -378,6 +379,9 @@ start_index(ServerUId, StartIdx0) ->
 
 smallest_live_idx(ServerUId) ->
     ra_log_snapshot_state:smallest(ra_log_snapshot_state, ServerUId).
+
+snapshot_idx(ServerUId) ->
+    ra_log_snapshot_state:snapshot(ra_log_snapshot_state, ServerUId).
 
 live_indexes(ServerUId) ->
     ra_log_snapshot_state:live_indexes(ra_log_snapshot_state, ServerUId).
@@ -506,6 +510,25 @@ segment_files(Dir) ->
             lists:sort(Files);
         {error, enoent} ->
             []
+    end.
+
+maybe_open_new_segment(ServerUId, Seg, SegConf) ->
+    case ra_log_segment:range(Seg) of
+        {_First, Last} ->
+            case Last < smallest_live_idx(ServerUId) andalso
+                 ra_log_segment:data_size(Seg) > ?STALE_SEGMENT_THRESHOLD of
+                true ->
+                    case open_successor_segment(Seg, SegConf) of
+                        enoent ->
+                            Seg;
+                        NewSeg ->
+                            NewSeg
+                    end;
+                false ->
+                    Seg
+            end;
+        _ ->
+            Seg
     end.
 
 open_successor_segment(CurSeg, SegConf) ->
