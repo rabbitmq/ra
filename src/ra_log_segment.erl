@@ -18,6 +18,7 @@
          read_sparse_no_checks/4,
          term_query/2,
          close/1,
+         close_dirty/1,
          range/1,
          flush/1,
          max_count/1,
@@ -306,7 +307,7 @@ sync(#state{cfg = #cfg{fd = Fd},
             Err
     end;
 sync(State0) ->
-    case flush(State0) of
+    case ?MODULE:flush(State0) of
         {ok, State} ->
             sync(State);
         Err ->
@@ -314,6 +315,8 @@ sync(State0) ->
     end.
 
 -spec flush(state()) -> {ok, state()} | {error, term()}.
+flush(#state{pending_index = []} = State) ->
+    {ok, State};
 flush(#state{cfg = #cfg{fd = Fd},
              pending_data = PendData,
              pending_index = PendIndex,
@@ -716,7 +719,7 @@ segref(#state{range = Range,
 segref(Filename) ->
     {ok, Seg} = open(Filename, #{mode => read}),
     SegRef = segref(Seg),
-    close(Seg),
+    close_dirty(Seg),
     SegRef.
 
 -type infos() :: #{size => non_neg_integer(),
@@ -794,12 +797,16 @@ is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
     is_same_filename_all(Fn0, Fn).
 
 -spec close(state()) -> ok.
-close(#state{cfg = #cfg{fd = Fd,
-                        mode = append,
-                        file_advise = FileAdvise}} = State) ->
+close(#state{} = State) ->
     % close needs to be defensive and idempotent so we ignore the return
     % values here
     _ = sync(State),
+    close_dirty(State).
+
+-spec close_dirty(state()) -> ok.
+close_dirty(#state{cfg = #cfg{fd = Fd,
+                              mode = append,
+                              file_advise = FileAdvise}} = State) ->
     _ = case is_full(State) of
             true ->
                 file:advise(Fd, 0, 0, FileAdvise);
@@ -808,7 +815,7 @@ close(#state{cfg = #cfg{fd = Fd,
         end,
     _ = file:close(Fd),
     ok;
-close(#state{cfg = #cfg{fd = Fd}}) ->
+close_dirty(#state{cfg = #cfg{fd = Fd}}) ->
     _ = file:close(Fd),
     ok.
 
