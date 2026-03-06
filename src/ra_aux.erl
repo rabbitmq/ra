@@ -15,7 +15,8 @@
          overview/1,
          log_last_index_term/1,
          log_fetch/2,
-         log_stats/1
+         log_stats/1,
+         latest_snapshot_size/1
         ]).
 
 -include("ra.hrl").
@@ -77,3 +78,6 @@ log_fetch(Idx, #{log := Log0} = State)
 log_stats(#{log := Log}) ->
     ra_log:overview(Log).
 
+-spec latest_snapshot_size(ra_aux:internal_state()) -> non_neg_integer() | undefined.
+latest_snapshot_size(#{log := Log}) ->
+    ra_log:latest_snapshot_size(Log).
