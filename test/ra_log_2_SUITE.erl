@@ -164,7 +164,7 @@ snapshot_before_written(Config) ->
     run_effs(Effs),
     {Log3, Effs3} = receive
                         {ra_log_event, {snapshot_written, {10, 1}, _,
-                                        snapshot, _} = Evt} ->
+                                        snapshot, _, _} = Evt} ->
                             ra_log:handle_event(Evt, Log2)
                     after 5000 ->
                               flush(),
@@ -473,7 +473,7 @@ sparse_read_out_of_range_2(Config) ->
     run_effs(Effs),
     {Log3, Effs3} = receive
                         {ra_log_event, {snapshot_written, {10, 2}, _,
-                                        snapshot, _} = Evt} ->
+                                        snapshot, _, _} = Evt} ->
                             ra_log:handle_event(Evt, Log2)
                     after 5000 ->
                               flush(),
@@ -632,7 +632,7 @@ written_event_after_snapshot(Config) ->
     run_effs(Effs),
     {Log3, _} = receive
                     {ra_log_event, {snapshot_written, {2, 1}, _,
-                                    snapshot, _} = Evt} ->
+                                    snapshot, _, _} = Evt} ->
                         ra_log:handle_event(Evt, Log2)
                 after 500 ->
                           exit(snapshot_written_timeout)
@@ -650,7 +650,7 @@ written_event_after_snapshot(Config) ->
                                                  Log6b),
     run_effs(Effs2),
     _ = receive
-            {ra_log_event, {snapshot_written, {4, 1}, _, snapshot, _} = E} ->
+            {ra_log_event, {snapshot_written, {4, 1}, _, snapshot, _, _} = E} ->
                 ra_log:handle_event(E, Log7)
         after 500 ->
                   exit(snapshot_written_timeout)
@@ -1500,7 +1500,7 @@ snapshot_written_after_installation(Config) ->
     run_effs(Effs),
     DelayedSnapWritten = receive
                              {ra_log_event, {snapshot_written, {5, 1}, _,
-                                             snapshot, _} = Evt} ->
+                                             snapshot, _, _} = Evt} ->
                                  Evt
                          after 1000 ->
                                    flush(),
@@ -1549,7 +1549,7 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
     run_effs(Effs),
     DelayedSnapWritten = receive
                              {ra_log_event, {snapshot_written, {5, 1}, _,
-                                             checkpoint, _} = Evt} ->
+                                             checkpoint, _, _} = Evt} ->
                                  Evt
                          after 1000 ->
                                    flush(),
@@ -2725,9 +2725,9 @@ create_snapshot_chunk(Config, #{index := Idx,
     Fun(),
     Sn2 =
         receive
-            {ra_log_event, {snapshot_written, {Idx, Term} = IdxTerm, _, snapshot, _}} ->
+            {ra_log_event, {snapshot_written, {Idx, Term} = IdxTerm, _, snapshot, SnapshotSize, _}} ->
                 ra_snapshot:complete_snapshot(IdxTerm, snapshot,
-                                              LiveIndexes, Sn1)
+                                              LiveIndexes, SnapshotSize, Sn1)
         after 1000 ->
                   flush(),
                   exit(snapshot_timeout)
