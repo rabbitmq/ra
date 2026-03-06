@@ -117,7 +117,7 @@ test_accept(Config, Name, DataSize, FullFile, ChunkSize) ->
                              {ok, Acc} = ra_log_snapshot:accept_chunk(Ch, Acc0),
                              Acc
                      end, A0, lists:reverse(Chunks)),
-    ok = ra_log_snapshot:complete_accept(LastChunk, A1),
+    {ok, _Bytes} = ra_log_snapshot:complete_accept(LastChunk, A1),
     ok.
 
 read(Dir) ->

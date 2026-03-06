@@ -1002,7 +1002,7 @@ handle_event(major_compaction, #?MODULE{cfg = #cfg{log_id = LogId},
             {State, []}
     end;
 handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes,
-              SnapKind, Duration},
+              SnapKind, SnapshotSize, Duration},
              #?MODULE{cfg = #cfg{uid = UId,
                                  log_id = LogId,
                                  names = Names} = Cfg,
@@ -1016,7 +1016,7 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes,
   when SnapIdx >= FstIdx ->
     % ?assert(ra_snapshot:pending(SnapState0) =/= undefined),
     SnapState1 = ra_snapshot:complete_snapshot(Snap, SnapKind, LiveIndexes,
-                                               SnapState0),
+                                               SnapshotSize, SnapState0),
     ?DEBUG("~ts: ra_log: ~s written at index ~b with ~b live indexes in ~bms",
            [LogId, SnapKind, SnapIdx, ra_seq:length(LiveIndexes), Duration]),
     case SnapKind of
@@ -1085,7 +1085,8 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes,
                         CP} || CP <- CPs],
             {State0#?MODULE{snapshot_state = SnapState}, Effects}
     end;
-handle_event({snapshot_written, {Idx, Term} = Snap, _Indexes, SnapKind, _Duration},
+handle_event({snapshot_written, {Idx, Term} = Snap, _Indexes,
+              SnapKind, _SnapshotSize, _Duration},
              #?MODULE{cfg =#cfg{log_id = LogId},
                       snapshot_state = SnapState} = State0) ->
     %% if the snapshot/checkpoint is stale we just want to delete it
