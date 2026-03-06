@@ -35,6 +35,7 @@
          fetch_term/2,
          next_index/1,
          snapshot_state/1,
+         latest_snapshot_size/1,
          set_snapshot_state/2,
          install_snapshot/4,
          recover_snapshot/1,
@@ -1153,6 +1154,10 @@ fetch_term(_Idx, #?MODULE{} = State0) ->
 snapshot_state(State) ->
     State#?MODULE.?FUNCTION_NAME.
 
+-spec latest_snapshot_size(State :: state()) -> non_neg_integer() | undefined.
+latest_snapshot_size(#?MODULE{snapshot_state = SnapshotState}) ->
+    ra_snapshot:latest_snapshot_size(SnapshotState).
+
 -spec set_snapshot_state(ra_snapshot:state(), state()) -> state().
 set_snapshot_state(SnapState, State) ->
     State#?MODULE{snapshot_state = SnapState}.
@@ -1451,6 +1456,7 @@ overview(#?MODULE{range = Range,
               undefined -> undefined;
               {I, _} -> I
           end,
+      latest_snapshot_size => ra_snapshot:latest_snapshot_size(SnapshotState),
       mem_table_range => ra_mt:range(Mt),
       mem_table_info => ra_mt:info(Mt),
       last_wal_write => LastMs,
