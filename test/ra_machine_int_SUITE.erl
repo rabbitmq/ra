@@ -56,7 +56,8 @@ all_tests() ->
      aux_monitor_effect,
      aux_and_machine_monitor_same_process,
      aux_and_machine_monitor_same_node,
-     aux_and_machine_monitor_leader_change
+     aux_and_machine_monitor_leader_change,
+     query_latest_snapshot_size
     ].
 
 groups() ->
@@ -1265,6 +1266,59 @@ aux_and_machine_monitor_leader_change(Config) ->
     end,
     assert_flush(),
     ok.
+
+query_latest_snapshot_size(Config) ->
+    Mod = ?config(modname, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> the_state end),
+    meck:expect(Mod, apply, fun
+                                (_, {latest_snapshot_size, _SnapshotSize} = LSS, State) ->
+                                    {State, ok, [{send_msg, Self, LSS}]};
+                                (#{index := Index}, _Command, State) ->
+                                    SideEffects = [{release_cursor, Index, State}],
+                                    {State, ok, SideEffects}
+                            end),
+    meck:expect(Mod, handle_aux, fun
+                                     (leader, cast, tick, AuxState, IntState) ->
+                                         SnapshotSize = ra_aux:latest_snapshot_size(IntState),
+                                         {no_reply, AuxState, IntState,
+                                          [{try_append,
+                                            {latest_snapshot_size, SnapshotSize},
+                                            noreply}]};
+                                     (_RaState, _, _, AuxState, IntState) ->
+                                         {no_reply, AuxState, IntState}
+                                 end),
+
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    try
+        ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
+
+        ct:pal("Send some commands to trigger a snapshot"),
+        lists:foreach(
+          fun(_) ->
+                  {ok, ok, _} = ra:process_command(ServerId, some_command)
+          end, lists:seq(1, 5000)),
+
+        ct:pal("Use aux handler to query the latest snapshot size"),
+        await(
+          fun() ->
+                  ok = ra:cast_aux_command(ServerId, {cmd, noreply}),
+                  receive
+                      {latest_snapshot_size, SnapshotSize} ->
+                          ct:pal(
+                            "Reported latest snapshot size: ~0p",
+                            [SnapshotSize]),
+                          is_integer(SnapshotSize) andalso SnapshotSize > 0
+                  after 1000 ->
+                            false
+                  end
+          end, 200)
+    after
+        flush(),
+        ra:stop_server(?SYS, ServerId)
+    end.
 
 %% Utility
 
