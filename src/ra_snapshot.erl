@@ -58,7 +58,9 @@
          indexes/1,
 
          write_recovery_checkpoint/4,
-         delete_recovery_checkpoint/1
+         delete_recovery_checkpoint/1,
+
+         snapshot_size/1
         ]).
 
 -type effect() :: {monitor, process, snapshot_writer, pid()} |
@@ -527,6 +529,10 @@ accepting(#?MODULE{accepting = #accept{idxterm = Accepting}}) ->
 directory(#?MODULE{snapshot_directory = Dir}, snapshot) -> Dir;
 directory(#?MODULE{checkpoint_directory = Dir}, checkpoint) -> Dir;
 directory(#?MODULE{recovery_checkpoint_directory = Dir}, recovery_checkpoint) -> Dir.
+
+-spec snapshot_size(state()) -> non_neg_integer() | undefined.
+snapshot_size(#?MODULE{snapshot_size = SnapshotSize}) ->
+    SnapshotSize.
 
 -spec last_index_for(ra_uid()) -> option(ra_index()).
 last_index_for(UId) ->
