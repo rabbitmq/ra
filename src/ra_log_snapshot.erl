@@ -9,6 +9,8 @@
 
 -behaviour(ra_snapshot).
 
+-include_lib("kernel/include/file.hrl").
+
 -export([
          prepare/2,
          write/4,
@@ -21,7 +23,8 @@
          recover/1,
          validate/1,
          read_meta/1,
-         context/0
+         context/0,
+         get_size/1
          ]).
 
 -define(MAGIC, "RASN").
@@ -76,32 +79,36 @@ begin_accept(SnapDir, Meta) ->
     MetaBin = term_to_binary(Meta),
     Data = [<<(size(MetaBin)):32/unsigned>>, MetaBin],
     PartialCrc = erlang:crc32(Data),
-    ok = file:write(Fd, [<<?MAGIC,
-                           ?VERSION:8/unsigned,
-                           0:32/integer>>,
-                         Data]),
-    {ok, {PartialCrc, Fd}}.
+    Chunk = [<<?MAGIC,
+               ?VERSION:8/unsigned,
+               0:32/integer>>,
+             Data],
+    Bytes = iolist_size(Chunk),
+    ok = file:write(Fd, Chunk),
+    {ok, {Bytes, PartialCrc, Fd}}.
 
 accept_chunk(<<?MAGIC, ?VERSION:8/unsigned, Crc:32/integer,
-               Rest/binary>> = Chunk, {_PartialCrc, Fd}) ->
+               Rest/binary>> = Chunk, {_Bytes, _PartialCrc, Fd}) ->
     % ensure we overwrite the existing header when we are receiving the
     % full file
     PartialCrc = erlang:crc32(Rest),
+    Bytes = iolist_size(Chunk),
     {ok, 0} = file:position(Fd, 0),
     ok = file:write(Fd, Chunk),
-    {ok, {PartialCrc, Crc, Fd}};
-accept_chunk(Chunk, {PartialCrc, Fd}) ->
+    {ok, {Bytes, PartialCrc, Crc, Fd}};
+accept_chunk(Chunk, {Bytes, PartialCrc, Fd}) ->
     %% compatibility clause where we did not receive the full file
     %% do not validate Crc due to OTP 26 map key ordering changes
     <<_Crc:32/integer, Rest/binary>> = Chunk,
-    accept_chunk(Rest, {PartialCrc, undefined, Fd});
-accept_chunk(Chunk, {PartialCrc0, Crc, Fd}) ->
+    accept_chunk(Rest, {Bytes, PartialCrc, undefined, Fd});
+accept_chunk(Chunk, {Bytes, PartialCrc0, Crc, Fd}) ->
+    Bytes1 = Bytes + iolist_size(Chunk),
     ok = file:write(Fd, Chunk),
     PartialCrc = erlang:crc32(PartialCrc0, Chunk),
-    {ok, {PartialCrc, Crc, Fd}}.
+    {ok, {Bytes1, PartialCrc, Crc, Fd}}.
 
 complete_accept(Chunk, St0) ->
-    {ok, {CalculatedCrc, Crc, Fd}} = accept_chunk(Chunk, St0),
+    {ok, {Bytes, CalculatedCrc, Crc, Fd}} = accept_chunk(Chunk, St0),
     CrcToWrite = case Crc of
                      undefined ->
                          CalculatedCrc;
@@ -112,7 +119,7 @@ complete_accept(Chunk, St0) ->
     ok = ra_file:sync(Fd),
     ok = file:close(Fd),
     CalculatedCrc = CrcToWrite,
-    ok.
+    {ok, Bytes}.
 
 begin_read(Dir, Context) ->
     File = filename(Dir),
@@ -204,6 +211,17 @@ read_meta(Dir) ->
                     _ = file:close(Fd),
                     Err
             end
+    end.
+
+-spec get_size(file:filename()) ->
+    {ok, non_neg_integer()} | {error, file_err()}.
+get_size(Dir) ->
+    File = filename(Dir),
+    case prim_file:read_file_info(File) of
+        {ok, #file_info{size = Size}} ->
+            {ok, Size};
+        {error, _} = Err ->
+            Err
     end.
 
 -spec context() -> map().
