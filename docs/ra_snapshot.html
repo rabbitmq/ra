@@ -30,11 +30,15 @@
 
 
 <h3 class="typedecl"><a name="type-kind">kind()</a></h3>
-<p><pre>kind() = snapshot | checkpoint</pre></p>
+<p><pre>kind() = snapshot | checkpoint | recovery_checkpoint</pre></p>
 
 
 <h3 class="typedecl"><a name="type-meta">meta()</a></h3>
 <p><pre>meta() = <a href="#type-snapshot_meta" docgen-rel="seetype" docgen-href="#snapshot_meta/0">snapshot_meta()</a></pre></p>
+
+
+<h3 class="typedecl"><a name="type-recovery_checkpoint">recovery_checkpoint()</a></h3>
+<p><pre>recovery_checkpoint() = <a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a></pre></p>
 
 
 <h3 class="typedecl"><a name="type-state">state()</a></h3>
@@ -43,9 +47,13 @@
 
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#init-6">init/6</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-7">init/7</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-8">init/8</a></td><td></td></tr>
 <tr><td valign="top"><a href="#init_ets-0">init_ets/0</a></td><td></td></tr>
 <tr><td valign="top"><a href="#current-1">current/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#latest_checkpoint-1">latest_checkpoint/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#recovery_checkpoint-1">recovery_checkpoint/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#highest_idx-1">highest_idx/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#pending-1">pending/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#accepting-1">accepting/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#directory-2">directory/2</a></td><td></td></tr>
@@ -63,6 +71,7 @@
 <tr><td valign="top"><a href="#begin_read-2">begin_read/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#read_chunk-3">read_chunk/3</a></td><td></td></tr>
 <tr><td valign="top"><a href="#recover-1">recover/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#recover_recovery_checkpoint-1">recover_recovery_checkpoint/1</a></td><td>Recover from the recovery checkpoint if it exists.</td></tr>
 <tr><td valign="top"><a href="#read_meta-2">read_meta/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#current_snapshot_dir-1">current_snapshot_dir/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#take_older_checkpoints-2">take_older_checkpoints/2</a></td><td></td></tr>
@@ -75,6 +84,8 @@
   Data             (binary - term_to_binary of indexes).</td></tr>
 <tr><td valign="top"><a href="#indexes-1">indexes/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#make_snapshot_dir-3">make_snapshot_dir/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#write_recovery_checkpoint-4">write_recovery_checkpoint/4</a></td><td>Write a recovery checkpoint synchronously during shutdown.</td></tr>
+<tr><td valign="top"><a href="#delete_recovery_checkpoint-1">delete_recovery_checkpoint/1</a></td><td>Delete the current recovery checkpoint.</td></tr>
 </table>
 
 <h2><a name="functions">Function Details</a></h2>
@@ -85,6 +96,33 @@
      Module :: module(),
      SnapshotsDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>,
      CheckpointDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>,
+     Counter :: undefined | <a href="/Users/nkarl/code/rabbitmq/erts/doc/counters.html#type-counters_ref" docgen-rel="seetype" docgen-href="erts:counters#counters_ref/0">counters:counters_ref()</a>,
+     MaxCheckpoints :: pos_integer()) -&gt;
+        <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-7">init/7</a></h3>
+<div class="spec">
+<p><pre>init(UId :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a>,
+     Module :: module(),
+     SnapshotsDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>,
+     CheckpointDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>,
+     RecoveryCheckpointDir :: <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>(<a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>),
+     Counter :: undefined | <a href="/Users/nkarl/code/rabbitmq/erts/doc/counters.html#type-counters_ref" docgen-rel="seetype" docgen-href="erts:counters#counters_ref/0">counters:counters_ref()</a>,
+     MaxCheckpoints :: pos_integer()) -&gt;
+        <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-8">init/8</a></h3>
+<div class="spec">
+<p><pre>init(UId :: <a href="#type-ra_uid" docgen-rel="seetype" docgen-href="#ra_uid/0">ra_uid()</a>,
+     Module :: module(),
+     SnapshotsDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>,
+     CheckpointDir :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>,
+     RecoveryCheckpointDir :: <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>(<a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>),
+     SyncServer :: undefined | <a href="ra_log_sync.html#type-pool_ref" docgen-rel="seetype" docgen-href="ra_log_sync#pool_ref/0">ra_log_sync:pool_ref()</a>,
      Counter :: undefined | <a href="/Users/nkarl/code/rabbitmq/erts/doc/counters.html#type-counters_ref" docgen-rel="seetype" docgen-href="erts:counters#counters_ref/0">counters:counters_ref()</a>,
      MaxCheckpoints :: pos_integer()) -&gt;
         <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
@@ -109,6 +147,19 @@
 <p> </p>
 </div>
 
+<h3 class="function"><a name="recovery_checkpoint-1">recovery_checkpoint/1</a></h3>
+<div class="spec">
+<p><pre>recovery_checkpoint(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+                       <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>(<a href="#type-recovery_checkpoint" docgen-rel="seetype" docgen-href="#recovery_checkpoint/0">recovery_checkpoint()</a>)</pre></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="highest_idx-1">highest_idx/1</a></h3>
+<div class="spec">
+<p><pre>highest_idx(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-ra_index" docgen-rel="seetype" docgen-href="#ra_index/0">ra_index()</a></pre></p>
+<p> </p>
+</div>
+
 <h3 class="function"><a name="pending-1">pending/1</a></h3>
 <div class="spec">
 <p><pre>pending(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>({<a href="#type-ra_idxterm" docgen-rel="seetype" docgen-href="#ra_idxterm/0">ra_idxterm()</a>, <a href="#type-kind" docgen-rel="seetype" docgen-href="#kind/0">kind()</a>})</pre></p>
@@ -123,7 +174,8 @@
 
 <h3 class="function"><a name="directory-2">directory/2</a></h3>
 <div class="spec">
-<p><pre>directory(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>, X2 :: <a href="#type-kind" docgen-rel="seetype" docgen-href="#kind/0">kind()</a>) -&gt; <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a></pre></p>
+<p><pre>directory(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>, X2 :: <a href="#type-kind" docgen-rel="seetype" docgen-href="#kind/0">kind()</a>) -&gt;
+             <a href="#type-option" docgen-rel="seetype" docgen-href="#option/0">option</a>(<a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>)</pre></p>
 <p> </p>
 </div>
 
@@ -246,6 +298,19 @@
 <p> </p>
 </div>
 
+<h3 class="function"><a name="recover_recovery_checkpoint-1">recover_recovery_checkpoint/1</a></h3>
+<div class="spec">
+<p><pre>recover_recovery_checkpoint(X1 :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+                               {ok,
+                                Meta :: <a href="#type-meta" docgen-rel="seetype" docgen-href="#meta/0">meta()</a>,
+                                State :: term()} |
+                               {error, no_recovery_checkpoint} |
+                               {error, term()}</pre></p>
+<p> </p>
+</div><p>Recover from the recovery checkpoint if it exists.
+  This is used by ra_server:recover/1 to skip log replay when a recovery
+  checkpoint with a higher index than the snapshot exists.</p>
+
 <h3 class="function"><a name="read_meta-2">read_meta/2</a></h3>
 <div class="spec">
 <p><pre>read_meta(Module :: module(), Location :: <a href="/Users/nkarl/code/rabbitmq/kernel/doc/file.html#type-filename_all" docgen-rel="seetype" docgen-href="kernel:file#filename_all/0">file:filename_all()</a>) -&gt;
@@ -309,6 +374,24 @@
 <p><code>make_snapshot_dir(Dir, Index, Term) -&gt; any()</code></p>
 <p> </p>
 </div>
+
+<h3 class="function"><a name="write_recovery_checkpoint-4">write_recovery_checkpoint/4</a></h3>
+<div class="spec">
+<p><pre>write_recovery_checkpoint(Meta :: <a href="#type-meta" docgen-rel="seetype" docgen-href="#meta/0">meta()</a>,
+                          MacState :: term(),
+                          SnapModule :: module(),
+                          State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+                             {ok, <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>} | {error, term()}</pre></p>
+<p> </p>
+</div><p>Write a recovery checkpoint synchronously during shutdown.
+  Recovery checkpoints store the machine state to skip log replay on restart.
+  They don't include live indexes - those are recovered from the last snapshot/checkpoint.</p>
+
+<h3 class="function"><a name="delete_recovery_checkpoint-1">delete_recovery_checkpoint/1</a></h3>
+<div class="spec">
+<p><pre>delete_recovery_checkpoint(State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a></pre></p>
+<p> </p>
+</div><p>Delete the current recovery checkpoint.</p>
 <hr>
 
 <div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>

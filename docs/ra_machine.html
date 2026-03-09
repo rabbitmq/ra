@@ -208,6 +208,7 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 <tr><td valign="top"><a href="#handle_aux-6">handle_aux/6</a></td><td></td></tr>
 <tr><td valign="top"><a href="#which_aux_fun-1">which_aux_fun/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#query-3">query/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#query-4">query/4</a></td><td></td></tr>
 <tr><td valign="top"><a href="#module-1">module/1</a></td><td></td></tr>
 <tr><td valign="top"><a href="#snapshot_module-1">snapshot_module/1</a></td><td></td></tr>
 </table>
@@ -342,9 +343,18 @@ Suitable for issuing periodic side effects such as updating metrics systems.</p>
 
 <h3 class="function"><a name="query-3">query/3</a></h3>
 <div class="spec">
+<p><pre>query(Mod :: module(), Fun :: <a href="ra.html#type-query_fun" docgen-rel="seetype" docgen-href="ra#query_fun/0">ra:query_fun()</a>, State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+         Result</pre>
+<ul class="definitions"><li><pre>Result = term()</pre></li></ul></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="query-4">query/4</a></h3>
+<div class="spec">
 <p><pre>query(Mod :: module(),
-      Fun :: fun((<a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt; Result),
-      State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>) -&gt;
+      Fun :: <a href="ra.html#type-query_fun" docgen-rel="seetype" docgen-href="ra#query_fun/0">ra:query_fun()</a>,
+      State :: <a href="#type-state" docgen-rel="seetype" docgen-href="#state/0">state()</a>,
+      Ctx :: map()) -&gt;
          Result</pre>
 <ul class="definitions"><li><pre>Result = term()</pre></li></ul></p>
 <p> </p>

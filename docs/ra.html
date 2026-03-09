@@ -50,12 +50,28 @@ evaluated.</p>
   applied on the node that will execute the query.</li>
   </ul></p>
 
+<h3 class="typedecl"><a name="type-query_ctx">query_ctx()</a></h3>
+<p><pre>query_ctx() = 
+    #{index := <a href="ra.html#type-index" docgen-rel="seetype" docgen-href="ra#index/0">ra:index()</a>,
+      term := <a href="#type-ra_term" docgen-rel="seetype" docgen-href="#ra_term/0">ra_term()</a>,
+      machine_version := non_neg_integer()}</pre></p>
+
+
 <h3 class="typedecl"><a name="type-query_fun">query_fun()</a></h3>
-<p><pre>query_fun() = fun((term()) -&gt; term()) | <a href="#type-query_mfa" docgen-rel="seetype" docgen-href="#query_mfa/0">query_mfa()</a></pre></p>
+<p><pre>query_fun() = 
+    fun((term()) -&gt; term()) |
+    fun((<a href="#type-query_ctx" docgen-rel="seetype" docgen-href="#query_ctx/0">query_ctx()</a>, term()) -&gt; term()) |
+    <a href="#type-query_mfa" docgen-rel="seetype" docgen-href="#query_mfa/0">query_mfa()</a></pre></p>
 
 
 <h3 class="typedecl"><a name="type-query_mfa">query_mfa()</a></h3>
-<p><pre>query_mfa() = {M :: module(), F :: atom(), A :: list()}</pre></p>
+<p><pre>query_mfa() = 
+    {M :: module(), F :: atom(), A :: list()} |
+    {M :: module(), F :: atom(), A :: list(), <a href="#type-query_opts" docgen-rel="seetype" docgen-href="#query_opts/0">query_opts()</a>}</pre></p>
+
+
+<h3 class="typedecl"><a name="type-query_opts">query_opts()</a></h3>
+<p><pre>query_opts() = with_context | [<a href="#type-query_opts" docgen-rel="seetype" docgen-href="#query_opts/0">query_opts()</a>]</pre></p>
 
 
 <h3 class="typedecl"><a name="type-ra_cmd_ret">ra_cmd_ret()</a></h3>
@@ -131,6 +147,7 @@ options.</td></tr>
 <tr><td valign="top"><a href="#initial_members-1">initial_members/1</a></td><td>Returns a list of initial (seed) cluster members.</td></tr>
 <tr><td valign="top"><a href="#initial_members-2">initial_members/2</a></td><td></td></tr>
 <tr><td valign="top"><a href="#transfer_leadership-2">transfer_leadership/2</a></td><td>Transfers leadership from the leader to a voter follower.</td></tr>
+<tr><td valign="top"><a href="#transfer_leadership-3">transfer_leadership/3</a></td><td>Transfers leadership from the leader to a voter follower.</td></tr>
 <tr><td valign="top"><a href="#aux_command-2">aux_command/2</a></td><td>Executes (using a call) an auxiliary command that the state machine can handle.</td></tr>
 <tr><td valign="top"><a href="#aux_command-3">aux_command/3</a></td><td>Executes (using a call) an auxiliary command that the state machine can handle.</td></tr>
 <tr><td valign="top"><a href="#cast_aux_command-2">cast_aux_command/2</a></td><td>Executes (using a cast) an auxiliary command that the state machine can handle.</td></tr>
@@ -929,10 +946,29 @@ timeout if there is currently no leader (i.e. an election is in progress).</p>
                        ok | already_leader |
                        {error, term()} |
                        {timeout, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>}</pre></p>
-<p> </p>
+<p><code>ServerId</code>: the Ra server to send the command to<br>
+<code>TargetServerId</code>: the desired server to become the new leader<br>
+</p>
 </div><p>Transfers leadership from the leader to a voter follower.
   Returns <code>already_leader</code> if the transfer target is already the leader.
-  Leadership cannot be transferred to non-voters.</p>
+  Leadership cannot be transferred to non-voters.
+ </p>
+
+<h3 class="function"><a name="transfer_leadership-3">transfer_leadership/3</a></h3>
+<div class="spec">
+<p><pre>transfer_leadership(ServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
+                    TargetServerId :: <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>,
+                    Timeout :: timeout()) -&gt;
+                       ok | already_leader |
+                       {error, term()} |
+                       {timeout, <a href="#type-ra_server_id" docgen-rel="seetype" docgen-href="#ra_server_id/0">ra_server_id()</a>}</pre></p>
+<p><code>ServerId</code>: the Ra server to send the command to<br>
+<code>TargetServerId</code>: the desired server to become the new leader<br>
+</p>
+</div><p>Transfers leadership from the leader to a voter follower.
+  Returns <code>already_leader</code> if the transfer target is already the leader.
+  Leadership cannot be transferred to non-voters.
+ </p>
 
 <h3 class="function"><a name="aux_command-2">aux_command/2</a></h3>
 <div class="spec">
