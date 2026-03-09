@@ -50,6 +50,9 @@ all_tests() ->
      local_query_boom,
      local_query_stale,
      local_query_with_condition_option,
+     local_query_with_context_fun,
+     local_query_with_context_mfa,
+     consistent_query_with_context,
      members,
      members_info,
      consistent_query,
@@ -662,6 +665,51 @@ local_query_with_condition_option(Config) ->
     after
         terminate_cluster(Cluster)
     end.
+
+local_query_with_context_fun(Config) ->
+    [A, _B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
+                                                 {simple, fun erlang:'+'/2, 9}),
+    {ok, 14, Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
+
+    QueryFun1 = fun(S) -> S end,
+    {ok, {{Idx, Term}, 14}, _} = ra:local_query(Leader, QueryFun1),
+
+    QueryFun2 = fun(Ctx, S) -> {Ctx, S} end,
+    {ok, {{Idx2, Term2},
+          {#{index := QIdx, term := QTerm, machine_version := QMacVer},
+           14}}, _} = ra:local_query(Leader, QueryFun2),
+    ?assertEqual(Idx, Idx2),
+    ?assertEqual(Term, Term2),
+    ?assertEqual(Idx, QIdx),
+    ?assertEqual(Term, QTerm),
+    ?assert(is_integer(QMacVer)),
+    terminate_cluster(Cluster).
+
+local_query_with_context_mfa(Config) ->
+    [A, _B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
+                                                 {simple, fun erlang:'+'/2, 9}),
+    {ok, 14, Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
+
+    {ok, {{_, _}, 14}, _} = ra:local_query(Leader, {ra_lib, id, []}),
+
+    QueryMFA = {?MODULE, query_with_ctx, [], [with_context]},
+    {ok, {{Idx, Term},
+          {#{index := QIdx, term := QTerm, machine_version := _},
+           14}}, _} = ra:local_query(Leader, QueryMFA),
+    ?assertEqual(Idx, QIdx),
+    ?assertEqual(Term, QTerm),
+    terminate_cluster(Cluster).
+
+consistent_query_with_context(Config) ->
+    [A, _B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
+                                                 add_machine()),
+    {ok, _, Leader} = ra:process_command(A, 5, ?PROCESS_COMMAND_TIMEOUT),
+
+    QueryMFA = {?MODULE, query_with_ctx, [], [with_context]},
+    {ok, {#{index := QIdx, term := _, machine_version := _}, 5}, _} =
+        ra:consistent_query(Leader, QueryMFA),
+    ?assert(is_integer(QIdx)),
+    terminate_cluster(Cluster).
 
 consistent_query_stale(Config) ->
     [A, B, _C] = Cluster = start_local_cluster(3, ?config(test_name, Config),
@@ -1494,6 +1542,9 @@ voters({ok, #{cluster := Peers}, _} = _Overview) ->
 init(_) -> 0.
 apply(_Meta, Num, State) ->
     {Num + State, Num + State}.
+
+%% query helpers
+query_with_ctx(Ctx, State) -> {Ctx, State}.
 
 %% end machine impl
 

@@ -75,6 +75,7 @@
          overview/2,
          live_indexes/2,
          query/3,
+         query/4,
          module/1,
          init_aux/2,
          handle_aux/6,
@@ -448,17 +449,31 @@ which_aux_fun(Mod) when is_atom(Mod) ->
             AuxFun
     end.
 
--spec query(module(), fun((state()) -> Result), state()) ->
+-spec query(module(), ra:query_fun(), state()) ->
     Result when Result :: term().
-query(Mod, Fun, State) when Mod =/= ra_machine_simple ->
-    apply_fun(Fun, State);
-query(ra_machine_simple, Fun, {simple, _, State}) ->
-    apply_fun(Fun, State).
+query(Mod, Fun, State) ->
+    query(Mod, Fun, State, #{}).
 
-apply_fun(Fun, State) ->
+-spec query(module(), ra:query_fun(), state(), map()) ->
+    Result when Result :: term().
+query(Mod, Fun, State, Ctx) when Mod =/= ra_machine_simple ->
+    apply_fun(Fun, State, Ctx);
+query(ra_machine_simple, Fun, {simple, _, State}, Ctx) ->
+    apply_fun(Fun, State, Ctx).
+
+apply_fun(Fun, State, Ctx) ->
     case Fun of
+        F when is_function(F, 2) ->
+            F(Ctx, State);
         F when is_function(F, 1) ->
-            Fun(State);
+            F(State);
+        {M, F, A, Opts} when is_list(Opts) ->
+            case lists:member(with_context, Opts) of
+                true ->
+                    erlang:apply(M, F, A ++ [Ctx, State]);
+                false ->
+                    erlang:apply(M, F, A ++ [State])
+            end;
         {M, F, A} ->
             erlang:apply(M, F, A ++ [State])
     end.
