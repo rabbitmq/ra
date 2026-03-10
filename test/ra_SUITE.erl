@@ -1047,6 +1047,13 @@ snapshot_installation_with_call_crash(Config) ->
     timer:sleep(2500),
     meck:unload(ra_server),
 
+    %% the repeated crashes may have exhausted the supervisor's restart
+    %% intensity, so restart the server if it is no longer alive
+    case ra:restart_server(?SYS, Down) of
+        ok -> ok;
+        {error, already_started} -> ok
+    end,
+
     ?assert(try_n_times(
               fun () ->
                       {ok, {N1Idx, _}, _} = ra:local_query(N1, fun ra_lib:id/1),
