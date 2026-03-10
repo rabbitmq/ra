@@ -278,13 +278,15 @@ init(#{uid := UId,
     %% mt and if it is the same in the segments, if so we can set first on the
     %% mt to match the end + 1 of the SegmentRange
 
+    ReaderFiles = maps:from_list(
+                    [{Fn, []} || {Fn, _} <- ra_log_segments:segment_refs(Reader)]),
     [begin
          ?DEBUG("~ts: deleting overwritten segment ~w",
                 [LogId, SR]),
          _ = catch prim_file:delete(filename:join(Dir, F)),
          ok
      end
-     || {F, _} = SR <- SegRefs -- ra_log_segments:segment_refs(Reader)],
+     || {F, _} = SR <- SegRefs, not is_map_key(F, ReaderFiles)],
 
     %% assert there is no gap between the snapshot
     %% and the first index in the log
