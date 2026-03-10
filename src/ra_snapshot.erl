@@ -22,9 +22,9 @@
          read_chunk/3,
          delete/2,
 
-         init/6,
          init/7,
          init/8,
+         init/9,
          init_ets/0,
          current/1,
          pending/1,
@@ -111,7 +111,8 @@
          checkpoints = [] :: list(checkpoint()),
          max_checkpoints :: pos_integer(),
          %% recovery checkpoint - written during shutdown, used to speed up recovery
-         recovery_checkpoint :: option(recovery_checkpoint())}).
+         recovery_checkpoint :: option(recovery_checkpoint()),
+         machine :: option(ra_machine:machine())}).
 
 -define(ETSTBL, ra_log_snapshot_state).
 
@@ -199,34 +200,46 @@
 
 -callback context() -> map().
 
--spec init(ra_uid(), module(), file:filename_all(), file:filename_all(),
-           undefined | counters:counters_ref(), pos_integer()) ->
+-spec init(ra_uid(), module(),
+           file:filename_all(), file:filename_all(),
+           option(ra_machine:machine()),
+           undefined | counters:counters_ref(),
+           pos_integer()) ->
     state().
-init(UId, Module, SnapshotsDir, CheckpointDir, Counter, MaxCheckpoints) ->
-    %% Backward compatible init without recovery checkpoint directory.
-    %% Note: This function is deprecated - use init/7 with RecoveryCheckpointDir.
-    %% The 5th argument here is Counter, not RecoveryCheckpointDir.
-    init(UId, Module, SnapshotsDir, CheckpointDir, undefined, Counter, MaxCheckpoints).
+init(UId, Module, SnapshotsDir, CheckpointDir,
+     Machine, Counter, MaxCheckpoints) ->
+    init(UId, Module, SnapshotsDir, CheckpointDir,
+         undefined, Machine, Counter, MaxCheckpoints).
 
--spec init(ra_uid(), module(), file:filename_all(), file:filename_all(),
+-spec init(ra_uid(), module(),
+           file:filename_all(), file:filename_all(),
            option(file:filename_all()),
-           undefined | counters:counters_ref(), pos_integer()) ->
+           option(ra_machine:machine()),
+           undefined | counters:counters_ref(),
+           pos_integer()) ->
     state().
-init(UId, Module, SnapshotsDir, CheckpointDir, RecoveryCheckpointDir,
+init(UId, Module, SnapshotsDir, CheckpointDir,
+     RecoveryCheckpointDir, Machine,
      Counter, MaxCheckpoints) ->
-    init(UId, Module, SnapshotsDir, CheckpointDir, RecoveryCheckpointDir,
-         undefined, Counter, MaxCheckpoints).
+    init(UId, Module, SnapshotsDir, CheckpointDir,
+         RecoveryCheckpointDir, undefined, Machine,
+         Counter, MaxCheckpoints).
 
--spec init(ra_uid(), module(), file:filename_all(), file:filename_all(),
+-spec init(ra_uid(), module(),
+           file:filename_all(), file:filename_all(),
            option(file:filename_all()),
            undefined | ra_log_sync:pool_ref(),
-           undefined | counters:counters_ref(), pos_integer()) ->
+           option(ra_machine:machine()),
+           undefined | counters:counters_ref(),
+           pos_integer()) ->
     state().
-init(UId, Module, SnapshotsDir, CheckpointDir, RecoveryCheckpointDir,
-     SyncServer, Counter, MaxCheckpoints) ->
+init(UId, Module, SnapshotsDir, CheckpointDir,
+     RecoveryCheckpointDir, SyncServer, Machine,
+     Counter, MaxCheckpoints) ->
     State = #?MODULE{uid = UId,
                      counter = Counter,
                      module = Module,
+                     machine = Machine,
                      sync_server = SyncServer,
                      snapshot_directory = SnapshotsDir,
                      checkpoint_directory = CheckpointDir,
@@ -238,6 +251,7 @@ init(UId, Module, SnapshotsDir, CheckpointDir, RecoveryCheckpointDir,
 
 find_snapshots(#?MODULE{uid = UId,
                         module = Module,
+                        machine = Machine,
                         snapshot_directory = SnapshotsDir} = State) ->
     true = ra_lib:is_dir(SnapshotsDir),
     {ok, Snaps0} = prim_file:list_dir(SnapshotsDir),
@@ -254,8 +268,14 @@ find_snapshots(#?MODULE{uid = UId,
             Current = filename:join(SnapshotsDir, Current0),
             {ok, #{index := Idx,
                    term := Term}} = Module:read_meta(Current),
-            %% recover live indexes and record that
-            {ok, Indexes} = indexes(Current),
+            Indexes = case indexes(Current) of
+                          {ok, Idxs} ->
+                              Idxs;
+                          {error, Err} ->
+                              recover_indexes(
+                                UId, Module, Machine,
+                                Current, Err)
+                      end,
             SmallestLiveIdx = case ra_seq:first(Indexes) of
                                   undefined ->
                                       Idx+1;
@@ -268,6 +288,26 @@ find_snapshots(#?MODULE{uid = UId,
             ok = delete_snapshots(SnapshotsDir, lists:delete(Current0, Snaps)),
             %% delete old snapshots if any
             State#?MODULE{current = {Idx, Term}}
+    end.
+
+recover_indexes(UId, Module, Machine, SnapDir, Err) ->
+    ?WARN("ra_snapshot: ~ts: indexes file corrupt "
+          "(~w), recovering from snapshot",
+          [UId, Err]),
+    case Module:recover(SnapDir) of
+        {ok, #{machine_version := MacVer}, MacState} ->
+            MacMod = ra_machine:which_module(
+                       Machine, MacVer),
+            Idxs = ra_machine:live_indexes(
+                     MacMod, MacState),
+            ok = write_indexes(SnapDir, Idxs),
+            Idxs;
+        {error, RecoverErr} ->
+            ?WARN("ra_snapshot: ~ts: failed to "
+                  "recover snapshot for index "
+                  "rebuild: ~w",
+                  [UId, RecoverErr]),
+            []
     end.
 
 delete_snapshots(Dir, Snaps) ->

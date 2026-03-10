@@ -393,7 +393,8 @@ init_state(Config) ->
                      ra_log_snapshot,
                      ?config(snap_dir, Config),
                      ?config(checkpoint_dir, Config),
-                     undefined, ?config(max_checkpoints, Config)).
+                     undefined, undefined,
+                     ?config(max_checkpoints, Config)).
 
 meta(Idx, Term, Cluster) ->
     #{index => Idx,

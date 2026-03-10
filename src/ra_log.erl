@@ -142,6 +142,7 @@
                               resend_window => integer(),
                               max_open_segments => non_neg_integer(),
                               snapshot_module => module(),
+                              machine => ra_machine:machine(),
                               counter => counters:counters_ref(),
                               initial_access_pattern => sequential | random,
                               max_checkpoints => non_neg_integer(),
@@ -187,7 +188,8 @@ pre_init(#{uid := UId,
     CheckpointsDir = filename:join(Dir, ?CHECKPOINTS_DIR),
     RecoveryCheckpointDir = filename:join(Dir, ?RECOVERY_CHECKPOINT_DIR),
     _ = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
-                         CheckpointsDir, RecoveryCheckpointDir, undefined, MaxCheckpoints),
+                         CheckpointsDir, RecoveryCheckpointDir,
+                         undefined, undefined, MaxCheckpoints),
     ok.
 
 -spec init(ra_log_init_args()) -> state().
@@ -221,9 +223,11 @@ init(#{uid := UId,
     % initialise metrics for this server
     LogSyncBaseName = maps:get(log_sync, Names),
     SyncServer = {pool, LogSyncBaseName, ra_log_sync:pool_size()},
+    Machine = maps:get(machine, Conf, undefined),
     SnapshotState = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
                                      CheckpointsDir, RecoveryCheckpointDir,
-                                     SyncServer, Counter, MaxCheckpoints),
+                                     SyncServer, Machine,
+                                     Counter, MaxCheckpoints),
     {SnapIdx, SnapTerm} = case ra_snapshot:current(SnapshotState) of
                               undefined -> {-1, 0};
                               Curr -> Curr

@@ -360,6 +360,7 @@ init(#{id := Id,
     Counter = maps:get(counter, Config, undefined),
 
     Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule,
+                                    machine => Machine,
                                     system_config => SystemConfig,
                                     uid => UId,
                                     counter => Counter,
