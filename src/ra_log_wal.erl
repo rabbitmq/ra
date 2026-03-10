@@ -411,17 +411,19 @@ recover_wal(Dir, #conf{system = System,
     SeedWriters = recover_writers(Dir),
     ?DEBUG("WAL in ~ts: recovered ~b writers from snapshot file",
            [System, map_size(SeedWriters)]),
-    FinalWriters =
-    lists:foldl(fun (F, Writers0) ->
+    {FinalWriters, _FinalTables} =
+    lists:foldl(fun (F, {Writers0, Tables0}) ->
                         ?DEBUG("WAL in ~ts: recovering ~ts, Mode ~s",
                                [System, F, Mode]),
                         WalFile = filename:join(Dir, F),
                         Fd = open_at_first_record(WalFile),
                         {Time, #recovery{ranges = Ranges,
-                                         writers = Writers}} =
+                                         writers = Writers,
+                                         tables = Tables}} =
                             timer:tc(fun () ->
                                              recover_wal_chunks(Conf, Fd,
-                                                                Writers0, Mode)
+                                                                Writers0,
+                                                                Tables0, Mode)
                                      end),
 
                         ok = ra_log_segment_writer:accept_mem_tables(SegWriter,
@@ -430,8 +432,8 @@ recover_wal(Dir, #conf{system = System,
                         close_existing(Fd),
                         ?DEBUG("WAL in ~ts: recovered ~ts time taken ~bms - recovered ~b writers",
                                [System, F, Time div 1000, map_size(Writers)]),
-                        Writers
-                end, SeedWriters, WalFiles),
+                        {Writers, Tables}
+                end, {SeedWriters, #{}}, WalFiles),
 
     ?DEBUG("WAL in ~ts: final writers recovered ~b",
            [System, map_size(FinalWriters)]),
@@ -873,10 +875,11 @@ dump_records(<<_:1/unsigned, 1:1/unsigned, _Id:22/unsigned,
 dump_records(<<>>, Entries) ->
     Entries.
 
-recover_wal_chunks(#conf{} = Conf, Fd, Writers, Mode) ->
+recover_wal_chunks(#conf{} = Conf, Fd, Writers, Tables, Mode) ->
     Chunk = read_wal_chunk(Fd, Conf#conf.recovery_chunk_size),
     recover_records(Conf, Fd, Chunk, #{}, #recovery{mode = Mode,
-                                                    writers = Writers}).
+                                                    writers = Writers,
+                                                    tables = Tables}).
 % All zeros indicates end of a pre-allocated wal file
 recover_records(_, _Fd, <<0:1/unsigned, 0:1/unsigned, 0:22/unsigned,
                           IdDataLen:16/unsigned, _:IdDataLen/binary,
