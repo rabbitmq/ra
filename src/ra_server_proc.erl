@@ -1782,6 +1782,10 @@ handle_effect(RaftState, {start_snapshot_retry_timer, PeerId, Delay}, _,
     %% Use gen_statem generic timeout with named timer
     {State, [{{timeout, {snapshot_retry, PeerId}}, Delay,
               {snapshot_retry, PeerId}} | Actions]};
+handle_effect(_RaftState, {cancel_snapshot_retry_timer, PeerId}, _,
+              State, Actions) ->
+    {State, [{{timeout, {snapshot_retry, PeerId}}, infinity, undefined}
+             | Actions]};
 handle_effect(follower, {record_leader_msg, _LeaderId}, _, State0, Actions) ->
     %% record last time leader seen
     State = State0#state{leader_last_seen = erlang:system_time(millisecond),

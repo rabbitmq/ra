@@ -194,6 +194,7 @@
     {record_leader_msg, ra_server_id()} |
     start_election_timeout |
     {start_snapshot_retry_timer, ra_server_id(), non_neg_integer()} |
+    {cancel_snapshot_retry_timer, ra_server_id()} |
     {bg_work, fun(() -> ok) | mfargs(), fun()}.
 
 -type effects() :: [effect()].
@@ -2318,8 +2319,18 @@ make_rpcs(State) ->
 % makes empty append entries for peers that aren't pipelineable
 make_all_rpcs(State0) ->
     {State1, EffectsHR} = update_heartbeat_rpc_effects(State0),
-    {State2, EffectsAER} = make_rpcs_for(peers_with_normal_status(State1), State1),
-    {State2, EffectsAER ++ EffectsHR}.
+    {CancelEffects, Peers} =
+        maps:fold(
+          fun(PeerId, #{status := {snapshot_backoff, _}} = Peer, {Cs, Ps}) ->
+                  {[{cancel_snapshot_retry_timer, PeerId} | Cs],
+                   Ps#{PeerId => Peer}};
+             (PeerId, #{status := normal} = Peer, {Cs, Ps}) ->
+                  {Cs, Ps#{PeerId => Peer}};
+             (_, _, Acc) ->
+                  Acc
+          end, {[], #{}}, peers(State1)),
+    {State2, EffectsAER} = make_rpcs_for(Peers, State1),
+    {State2, CancelEffects ++ EffectsAER ++ EffectsHR}.
 
 make_rpcs_for(Peers, State) ->
     maps:fold(fun(PeerId, Peer, {S0, Effs}) ->
@@ -2950,12 +2961,6 @@ peer_status(PeerId, #{cluster := Peers}) ->
         _ ->
             undefined
     end.
-
-%% remove any peers that are currently receiving a snapshot
-peers_with_normal_status(State) ->
-    maps:filter(fun (_, #{status := normal}) -> true;
-                    (_, _) -> false
-                end, peers(State)).
 
 % peers that could need an update
 stale_peers(#{commit_index := CommitIndex,
