@@ -87,6 +87,7 @@ all_tests() ->
      sparse_write_resend,
      overwritten_segment_is_cleared,
      overwritten_segment_is_cleared_on_init,
+     dual_flush_does_not_delete_needed_segments,
      concurrent_snapshot_install_and_compaction,
      snapshot_installation_with_live_indexes,
      init_with_dangling_symlink,
@@ -2453,6 +2454,70 @@ init_after_missing_segments_event(Config) ->
 
 
 
+dual_flush_does_not_delete_needed_segments(Config) ->
+    %% Simulates a crash scenario where a WAL file is flushed to segments
+    %% but the WAL file is not deleted before the crash. On recovery the
+    %% WAL is replayed and flushed again, creating segments that overlap
+    %% with the segments from the first flush. ra_log:init must not delete
+    %% segment files that the reader still references after compact_segrefs
+    %% truncates their ranges.
+    UId = ?config(uid, Config),
+    WalDir = ?config(work_dir, Config),
+    WalDataDir = filename:join(WalDir, atom_to_list(node())),
+
+    %% Write 256 entries (fills 2 full segments of 128) and flush to segments.
+    Log0 = ra_log_init(Config),
+    Log1 = write_and_roll(1, 257, 1, Log0),
+    {256, 1} = ra_log:last_written(Log1),
+
+    %% Write another 256 entries (indexes 257-512).
+    Log2 = write_n(257, 513, 1, Log1),
+
+    %% Snapshot the current WAL file(s) before they are flushed and deleted.
+    {ok, WalFiles0} = file:list_dir(WalDataDir),
+    WalFiles = [filename:join(WalDataDir, F)
+                || F <- WalFiles0, filename:extension(F) == ".wal"],
+    ct:pal("WAL files before roll: ~p", [WalFiles]),
+    Copies = [{F, F ++ ".bak"} || F <- WalFiles],
+    [{ok, _} = file:copy(F, Bak) || {F, Bak} <- Copies],
+
+    %% Roll the WAL — triggers flush of entries 257-512 to segments.
+    %% Deliver all events so the log is fully up to date.
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    Log3 = deliver_all_log_events(Log2, 500),
+    {512, 1} = ra_log:last_written(Log3),
+
+    SegsBefore = find_segments(Config),
+    ct:pal("Segments after first flush: ~p", [SegsBefore]),
+
+    ra_log:close(Log3),
+
+    %% Stop ra. This deletes the WAL files (they were already flushed).
+    application:stop(ra),
+
+    %% Restore the WAL backup — simulates a crash where the WAL survived
+    %% because the crash happened after segments were written but before
+    %% the WAL file was deleted.
+    [ok = file:rename(Bak, F) || {F, Bak} <- Copies],
+
+    %% Restart ra. WAL recovery will replay the restored WAL and flush
+    %% the same entries to segments again (dual flush).
+    ok = start_ra(Config),
+
+    %% Re-init the log. compact_segrefs will see overlapping segments.
+    %% The bug was that the -- operator compared full {Filename, Range}
+    %% tuples, so a segment whose range was truncated (but not removed)
+    %% by compact_segrefs would be incorrectly deleted.
+    Log4 = ra_log_init(Config),
+    ct:pal("Overview after dual flush: ~p", [ra_log:overview(Log4)]),
+
+    %% The critical check: fold over the full range must succeed.
+    %% Without the fix this crashes with ra_log_failed_to_open_segment enoent.
+    validate_fold(1, 256, 1, Log4),
+
+    ra_log:close(Log4),
+    ok.
+
 %% INTERNAL
 validate_fold(From, To, Term, Log0) ->
     {Entries0, Log} = ra_log:fold(From, To, fun ra_lib:cons/2, [], Log0),
@@ -2717,8 +2782,10 @@ create_snapshot_chunk(Config, #{index := Idx,
     CPDir = filename:join(?config(work_dir, Config), "checkpoints"),
     ok = ra_lib:make_dir(OthDir),
     ok = ra_lib:make_dir(CPDir),
-    Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>, ra_log_snapshot,
-                           OthDir, CPDir, undefined, ?DEFAULT_MAX_CHECKPOINTS),
+    Sn0 = ra_snapshot:init(<<"someotheruid_adsfasdf">>,
+                           ra_log_snapshot,
+                           OthDir, CPDir, undefined,
+                           undefined, ?DEFAULT_MAX_CHECKPOINTS),
     % LiveIndexes = [],
     {Sn1, [{bg_work, Fun, _ErrFun}]} =
         ra_snapshot:begin_snapshot(Meta, ?MODULE, MacState, snapshot, Sn0),

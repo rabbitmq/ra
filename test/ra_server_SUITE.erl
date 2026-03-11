@@ -48,6 +48,7 @@ all() ->
      pre_vote_election_reverts,
      candidate_receives_pre_vote,
      leader_receives_pre_vote,
+     leader_pre_vote_sends_snapshot_to_backoff_peer,
      candidate_election,
      is_new,
      command,
@@ -2395,6 +2396,31 @@ leader_receives_pre_vote(_Config) ->
     % leader abdicates for higher term
     {follower, #{current_term := 6}, _}
         = ra_server:handle_leader(PreVoteRpc#pre_vote_rpc{term = 6}, State),
+    ok.
+
+leader_pre_vote_sends_snapshot_to_backoff_peer(_Config) ->
+    N2 = ?N2,
+    State0 = (base_state(3, ?FUNCTION_NAME))#{votes => 1},
+    #{cluster := Cluster0} = State0,
+    Peer2 = maps:get(N2, Cluster0),
+    Cluster1 = Cluster0#{N2 => Peer2#{status => {snapshot_backoff, 2}}},
+    State = State0#{cluster => Cluster1},
+
+    Token = make_ref(),
+    PreVoteRpc = #pre_vote_rpc{term = 5, candidate_id = ?N1,
+                               token = Token,
+                               machine_version = 0,
+                               last_log_index = 3, last_log_term = 5},
+    {leader, _, Effects} = ra_server:handle_leader(PreVoteRpc, State),
+
+    %% Should have a cancel timer effect for the backoff peer
+    true = lists:any(fun({cancel_snapshot_retry_timer, P}) when P =:= N2 -> true;
+                        (_) -> false
+                     end, Effects),
+    %% Should also have a send_rpc for the backoff peer
+    true = lists:any(fun({send_rpc, P, _}) when P =:= N2 -> true;
+                        (_) -> false
+                     end, Effects),
     ok.
 
 leader_receives_install_snapshot_rpc(_Config) ->

@@ -142,6 +142,7 @@
                               resend_window => integer(),
                               max_open_segments => non_neg_integer(),
                               snapshot_module => module(),
+                              machine => ra_machine:machine(),
                               counter => counters:counters_ref(),
                               initial_access_pattern => sequential | random,
                               max_checkpoints => non_neg_integer(),
@@ -187,7 +188,8 @@ pre_init(#{uid := UId,
     CheckpointsDir = filename:join(Dir, ?CHECKPOINTS_DIR),
     RecoveryCheckpointDir = filename:join(Dir, ?RECOVERY_CHECKPOINT_DIR),
     _ = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
-                         CheckpointsDir, RecoveryCheckpointDir, undefined, MaxCheckpoints),
+                         CheckpointsDir, RecoveryCheckpointDir,
+                         undefined, undefined, MaxCheckpoints),
     ok.
 
 -spec init(ra_log_init_args()) -> state().
@@ -221,9 +223,11 @@ init(#{uid := UId,
     % initialise metrics for this server
     LogSyncBaseName = maps:get(log_sync, Names),
     SyncServer = {pool, LogSyncBaseName, ra_log_sync:pool_size()},
+    Machine = maps:get(machine, Conf, undefined),
     SnapshotState = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
                                      CheckpointsDir, RecoveryCheckpointDir,
-                                     SyncServer, Counter, MaxCheckpoints),
+                                     SyncServer, Machine,
+                                     Counter, MaxCheckpoints),
     {SnapIdx, SnapTerm} = case ra_snapshot:current(SnapshotState) of
                               undefined -> {-1, 0};
                               Curr -> Curr
@@ -274,13 +278,15 @@ init(#{uid := UId,
     %% mt and if it is the same in the segments, if so we can set first on the
     %% mt to match the end + 1 of the SegmentRange
 
+    ReaderFiles = maps:from_list(
+                    [{Fn, []} || {Fn, _} <- ra_log_segments:segment_refs(Reader)]),
     [begin
          ?DEBUG("~ts: deleting overwritten segment ~w",
                 [LogId, SR]),
          _ = catch prim_file:delete(filename:join(Dir, F)),
          ok
      end
-     || {F, _} = SR <- SegRefs -- ra_log_segments:segment_refs(Reader)],
+     || {F, _} = SR <- SegRefs, not is_map_key(F, ReaderFiles)],
 
     %% assert there is no gap between the snapshot
     %% and the first index in the log
@@ -1465,6 +1471,8 @@ write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
     ok = ra_lib:write_file(TmpConfigPath,
                            list_to_binary(io_lib:format("~p.", [Config]))),
     ok = prim_file:rename(TmpConfigPath, ConfigPath),
+    %% ignore the result as not supported on windows
+    _ = ra_lib:sync_dir(Dir),
     ok.
 
 -spec read_config(state() | file:filename_all()) ->

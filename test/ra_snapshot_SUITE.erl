@@ -54,6 +54,8 @@ all_tests() ->
      indexes_invalid_version,
      indexes_checksum_error,
      indexes_backward_compat,
+     %% corrupt indexes recovery
+     init_recover_corrupt_indexes,
      %% recovery checkpoint tests
      recovery_checkpoint_write_and_recover,
      recovery_checkpoint_deleted_when_snapshot_overtakes,
@@ -663,6 +665,56 @@ indexes_backward_compat(Config) ->
     ?assertEqual(Indexes, ReadIndexes),
     ok.
 
+init_recover_corrupt_indexes(Config) ->
+    UId = ?config(uid, Config),
+    SnapDir = ?config(snap_dir, Config),
+    State0 = init_state(Config),
+    Meta = meta(55, 2, [node()]),
+    MacState = {state, [5, 10, 15]},
+    {State1, [{bg_work, Fun, _}]} =
+        ra_snapshot:begin_snapshot(
+          Meta, ?MACMOD, MacState, snapshot, State0),
+    Fun(),
+    receive
+        {ra_log_event,
+         {snapshot_written, {55, 2} = IdxTerm,
+          Indexes, snapshot, _}} ->
+            _ = ra_snapshot:complete_snapshot(
+                  IdxTerm, snapshot, Indexes, State1)
+    after 1000 ->
+              error(snapshot_event_timeout)
+    end,
+    SnapSubDir = <<(ra_lib:zpad_hex(2))/binary,
+                   "_",
+                   (ra_lib:zpad_hex(55))/binary>>,
+    SnapSubPath = filename:join(SnapDir, SnapSubDir),
+    ExpectedIndexes = [15, 10, 5],
+    ok = ra_snapshot:write_indexes(
+           SnapSubPath, ExpectedIndexes),
+    IndexFile = filename:join(SnapSubPath,
+                              <<"indexes">>),
+    true = filelib:is_file(IndexFile),
+    ok = file:write_file(IndexFile, <<"garbage">>),
+    MockMod = ra_corrupt_idx_test_machine,
+    meck:new(MockMod, [non_strict]),
+    meck:expect(MockMod, version, fun () -> 1 end),
+    meck:expect(MockMod, which_module,
+                fun (_) -> MockMod end),
+    meck:expect(MockMod, live_indexes,
+                fun ({state, Idxs}) -> Idxs end),
+    Machine = {machine, MockMod, #{}},
+    try
+        State = init_state(Config, Machine),
+        {55, 2} = ra_snapshot:current(State),
+        55 = ra_snapshot:last_index_for(UId),
+        {ok, ReadIndexes} = ra_snapshot:indexes(
+                              SnapSubPath),
+        ?assertEqual(ExpectedIndexes, ReadIndexes)
+    after
+        meck:unload(MockMod)
+    end,
+    ok.
+
 %% Test writing and recovering from a recovery checkpoint
 recovery_checkpoint_write_and_recover(Config) ->
     State0 = init_state(Config),
@@ -765,11 +817,15 @@ recovery_checkpoint_corrupt_fallback(Config) ->
     ok.
 
 init_state(Config) ->
+    init_state(Config, undefined).
+
+init_state(Config, Machine) ->
     ra_snapshot:init(?config(uid, Config), ra_log_snapshot,
                      ?config(snap_dir, Config),
                      ?config(checkpoint_dir, Config),
                      ?config(recovery_checkpoint_dir, Config),
-                     undefined, ?config(max_checkpoints, Config)).
+                     Machine, undefined,
+                     ?config(max_checkpoints, Config)).
 
 meta(Idx, Term, Cluster) ->
     #{index => Idx,

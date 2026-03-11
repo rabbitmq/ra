@@ -64,7 +64,8 @@ all_tests() ->
      writers_snapshot_persisted_at_rollover,
      writers_snapshot_survives_empty_wal_recovery,
      forget_writer_removes_entry,
-     recovery_trims_stale_writers
+     recovery_trims_stale_writers,
+     recover_multi_wal_with_concurrent_deletes
     ].
 
 groups() ->
@@ -1701,6 +1702,73 @@ suspend_process(Pid) ->
                       erlang:raise(error, internal_error, Stack)
               end
     end.
+
+recover_multi_wal_with_concurrent_deletes(Config) ->
+    %% Simulates a power-off recovery scenario where the segment writer
+    %% deletes entries from a mem table ETS concurrently with WAL recovery
+    %% of a subsequent WAL file. Before the fix, this caused a gap_detected
+    %% crash because the second WAL file's recovery would re-scan the
+    %% (now depleted) ETS table via mem_table_please instead of using the
+    %% ra_mt state built during the first WAL file's recovery.
+    ok = logger:set_primary_config(level, all),
+    Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    Names = ?config(names, Config),
+    Data = <<42:256/unit:8>>,
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    Tid = ets:new(?FUNCTION_NAME, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    %% write entries 1..100 into WAL file 1
+    [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, Idx, 1, Data)
+     || Idx <- lists:seq(1, 100)],
+    _ = await_written(WriterId, 1, [{1, 100}]),
+    ra_log_wal:force_roll_over(ra_log_wal),
+    receive
+        {'$gen_cast', {mem_tables, #{UId := _}, _}} -> ok
+    after 5000 ->
+              flush(),
+              ct:fail("mem_tables timeout for first wal")
+    end,
+    %% write entries 101..200 into WAL file 2
+    [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, Idx, 1, Data)
+     || Idx <- lists:seq(101, 200)],
+    _ = await_written(WriterId, 1, [{101, 200}]),
+    flush(),
+    ok = proc_lib:stop(ra_log_wal),
+
+    %% Simulate the race: intercept accept_mem_tables after the first WAL
+    %% file is recovered and delete entries from the tail of the mem table
+    %% ETS, as the segment writer would do concurrently when servers have
+    %% no Pid. A partial deletion (leaving some entries but removing the
+    %% last ones) causes LastSeq in the mem table to diverge from PrevIdx
+    %% in the writers map, triggering gap_detected.
+    TestPid = self(),
+    meck:expect(ra_log_segment_writer, accept_mem_tables,
+                fun(_SegWriter, Ranges, WalFile) ->
+                        TestPid ! {'$gen_cast',
+                                   {mem_tables, Ranges, WalFile}},
+                        %% delete the last 10 entries from the mem table
+                        %% to simulate a partial concurrent flush
+                        maps:foreach(
+                          fun (_UId0, TidRanges) ->
+                                  [begin
+                                       Last = ra_seq:last(Seq),
+                                       TailIdxs = lists:seq(Last - 9, Last),
+                                       [ets:delete(T, I) || I <- TailIdxs]
+                                   end || {T, Seq} <- TidRanges]
+                          end, Ranges),
+                        ok
+                end),
+
+    %% restart -- this recovers both WAL files; the meck'd
+    %% accept_mem_tables will delete ETS entries between the two recoveries.
+    %% Before the fix this would crash with {case_clause,{error,gap_detected}}.
+    {ok, Pid2} = ra_log_wal:start_link(Conf),
+    ?assertMatch({ok, 200}, ra_log_wal:last_writer_seq(Pid2, UId)),
+    meck:unload(),
+    proc_lib:stop(Pid2),
+    ok.
 
 set_segment_writer(#{names := Names} = Conf, Writer) ->
     Conf#{names => maps:put(segment_writer, Writer, Names)}.
