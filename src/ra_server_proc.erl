@@ -347,11 +347,21 @@ do_init(#{id := Id,
     process_flag(min_bin_vheap_size, MinBinVheapSize),
     process_flag(min_heap_size, MinHeapSize),
     #{names := Names} = SysConf,
-    %% register with ra_directory _before_ initialsing the ra server state
-    ok = ra_directory:register_name(Names, UId, self(),
-                                    maps:get(parent, Config, undefined), Key,
-                                    ClusterName),
+    %% New servers should register _after_ log initialisation to ensure the
+    %% config file is fully written as it is required for successful recovery
+    IsNew = not ra_directory:is_registered_uid(Names, UId),
+    Parent = maps:get(parent, Config, undefined),
+    if not IsNew ->
+           ok = ra_directory:register_name(Names, UId, self(),
+                                           Parent, Key, ClusterName);
+       true -> ok
+    end,
     #{cluster := Cluster} = ServerState = ra_server:init(Config),
+    if IsNew ->
+           ok = ra_directory:register_name(Names, UId, self(),
+                                           Parent, Key, ClusterName);
+       true -> ok
+    end,
 
     % ensure each relevant erlang node is connected
     PeerNodes = [PeerNode ||
