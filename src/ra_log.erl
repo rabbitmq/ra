@@ -1471,6 +1471,8 @@ write_config(Config0, #?MODULE{cfg = #cfg{directory = Dir}}) ->
     ok = ra_lib:write_file(TmpConfigPath,
                            list_to_binary(io_lib:format("~p.", [Config]))),
     ok = prim_file:rename(TmpConfigPath, ConfigPath),
+    %% ignore the result as not supported on windows
+    _ = ra_lib:sync_dir(Dir),
     ok.
 
 -spec read_config(state() | file:filename_all()) ->
