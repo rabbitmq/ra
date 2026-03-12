@@ -915,10 +915,15 @@ take_group([{#{num_entries := NumEnts,
          LiveSz / AllDataSz < 0.5 of
         %% there are fewer than half live entries in the segment
         true ->
-            %% check that adding this segment to the current group will no
+            %% check that adding this segment to the current group will not
             %% exceed entry or size limits
             case MaxCnt - NumLive < 0 orelse
                  MaxSz - LiveSz < 0 of
+                true when Acc == [] ->
+                    %% segment exceeds limits but nothing accumulated yet,
+                    %% skip it to avoid infinite loop
+                    take_group(Rem, #{max_count => MaxCnt,
+                                      max_size => MaxSz}, Acc);
                 true ->
                     %% adding this segment to the group will exceed limits
                     %% so returning current group
