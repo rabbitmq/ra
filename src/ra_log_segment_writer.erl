@@ -269,11 +269,9 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
                        #state{system = System} = State) ->
     %% Get the smallest index that should be written to segments.
     %% This is the minimum of (snapshot_index + 1) and the first live index.
-    SmallestIdx = smallest_live_idx(ServerUId),
     %% Get the sparse sequence of live indexes that must be preserved
     %% beyond the snapshot boundary for compaction.
-    LiveIndexes = live_indexes(ServerUId),
-    SnapIdx = snapshot_idx(ServerUId),
+    {_, SnapIdx, SmallestIdx, LiveIndexes} = snapshot_state(ServerUId),
     %% TidSeqs arrive here sorted new -> old.
 
     %% Truncate and limit all seqs to create a non-overlapping list of
@@ -380,11 +378,13 @@ start_index(ServerUId, StartIdx0) ->
 smallest_live_idx(ServerUId) ->
     ra_log_snapshot_state:smallest(ra_log_snapshot_state, ServerUId).
 
-snapshot_idx(ServerUId) ->
-    ra_log_snapshot_state:snapshot(ra_log_snapshot_state, ServerUId).
-
-live_indexes(ServerUId) ->
-    ra_log_snapshot_state:live_indexes(ra_log_snapshot_state, ServerUId).
+snapshot_state(ServerUId) ->
+    case ra_log_snapshot_state:read(ra_log_snapshot_state, ServerUId) of
+        undefined ->
+            {ServerUId, -1, 0, []};
+        Res ->
+            Res
+    end.
 
 %% @doc Sends segment update notification to the Ra server.
 %% If the server is not running, cleans up the memtable entries
