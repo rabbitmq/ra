@@ -11,7 +11,8 @@
          delete/2,
          smallest/2,
          live_indexes/2,
-         snapshot/2
+         snapshot/2,
+         read/2
         ]).
 
 -spec insert(ets:table(), ra:uid(), -1 | ra:index(), ra:index(), ra_seq:state()) ->
@@ -42,6 +43,20 @@ live_indexes(Table, UId) when is_binary(UId) ->
     ra:index() | -1.
 snapshot(Table, UId) when is_binary(UId) ->
     ets:lookup_element(Table, UId, 2, -1).
+
+-spec read(ets:table(), ra:uid()) ->
+    undefined |
+    {UId :: ra:uid(),
+     SnapIdx :: -1 | ra:index(),
+     SmallestIdx :: ra:index(),
+     LiveIndexes :: ra_seq:state()}.
+read(Table, UId) when is_binary(UId) ->
+    case ets:lookup(Table, UId) of
+        [] ->
+            undefined;
+        [Record] ->
+            Record
+    end.
 
 %%% ===================
 %%% Internal unit tests
