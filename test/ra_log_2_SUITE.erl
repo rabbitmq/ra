@@ -91,7 +91,8 @@ all_tests() ->
      concurrent_snapshot_install_and_compaction,
      snapshot_installation_with_live_indexes,
      init_with_dangling_symlink,
-     init_after_missing_segments_event
+     init_after_missing_segments_event,
+     segment_close_flush_error_recovery
    ].
 
 groups() ->
@@ -2452,6 +2453,67 @@ init_after_missing_segments_event(Config) ->
 
     ok.
 
+segment_close_flush_error_recovery(Config) ->
+    %% This test verifies that any IO errors during log segment flush
+    %% are propagated back to the log segment writer, including those
+    %% that happen at the time when log segment need to be closed.
+    %% Also correct recovery from such failures is verified, assuming
+    %% they are transient in nature.
+
+    %% 1. Write entries 1-5 and flush them to a segment
+    Log0 = ra_log_init(Config),
+    Log1 = write_n(1, 6, 1, Log0),
+    Log2 = assert_log_events(Log1,
+                             fun (L) -> {5, 1} =:= ra_log:last_written(L) end),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    %% wait for segment delivery — entries 1-5 are now safely on disk
+    Log3 = deliver_log_events_cond(
+             Log2,
+             fun (L) ->
+                     {0, 5} =:= maps:get(segments_range, ra_log:overview(L))
+             end, 100),
+
+    %% 2. Write entries 6-10 and wait for written confirmation
+    Log4 = write_n(6, 11, 1, Log3),
+    Log5 = assert_log_events(Log4,
+                             fun (L) -> {10, 1} =:= ra_log:last_written(L) end),
+
+    %% 3. Meck `ra_log_segment:flush/1` to return IO error.
+    %%    Make sure it fires only once.
+    meck:new(ra_log_segment, [passthrough]),
+    meck:expect(ra_log_segment, flush,
+                fun (_State) ->
+                    spawn(meck, unload, [ra_log_segment]),
+                    {error, enospc}
+                end),
+
+    %% 4. Force WAL roll-over.
+    %%    Segment flush will fail initially and cause WAL to crash, but
+    %%    will succeed on WAL restart.
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    Log6 = deliver_log_events_cond(
+             Log5,
+             fun (L) ->
+                     {0, 10} =:= maps:get(segments_range, ra_log:overview(L))
+             end, 100),
+
+    %% 5. Write two more entries to the log.
+    Log7 = write_n(11, 13, 1, Log6),
+    Log8 = assert_log_events(Log7,
+                             fun (L) -> {12, 1} =:= ra_log:last_written(L) end),
+
+    %% 6. Stop and restart Ra.
+    ra_log:close(Log8),
+    application:stop(ra),
+    start_ra(Config),
+
+    %% 7. Re-init the log and verify all entries are persisted.
+    Log9 = ra_log_init(Config),
+    ct:pal("after recovery: ~p", [ra_log:overview(Log9)]),
+
+    validate_fold(1, 12, 1, Log9),
+
+    ra_log:close(Log9).
 
 
 dual_flush_does_not_delete_needed_segments(Config) ->

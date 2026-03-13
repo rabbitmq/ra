@@ -907,7 +907,7 @@ run_scenario(Config, Segs0, [{entries, Term, IndexesOrEntries} | Rem]) ->
                        || I <- IndexesOrEntries]
               end,
     {Seg, Refs} = append_to_segment(Seg0, Entries, [], SegConf),
-    _ = ra_log_segment:close(Seg),
+    ok = ra_log_segment:close(Seg),
     {Segs, _Overwritten} = ra_log_segments:update_segments(Refs, Segs0),
     %% TODO: what to do about overwritten
     ?FUNCTION_NAME(Config, Segs, Rem);
