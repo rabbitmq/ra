@@ -810,6 +810,7 @@ close(#state{cfg = #cfg{fd = Fd,
             _ = file:close(Fd),
             ok;
         Err ->
+            _ = file:close(Fd),
             Err
     end;
 close(#state{cfg = #cfg{fd = Fd}}) ->
