@@ -793,7 +793,7 @@ info(Filename, Live0)
 is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
     is_same_filename_all(Fn0, Fn).
 
--spec close(state()) -> ok | {error, file:posix()}.
+-spec close(state()) -> ok | {error, term()}.
 close(#state{cfg = #cfg{fd = Fd,
                         mode = append,
                         file_advise = FileAdvise}} = State0) ->
