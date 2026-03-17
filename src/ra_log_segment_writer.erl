@@ -210,9 +210,7 @@ handle_cast({truncate_segments, Who, {Name, _Range} = SegRef},
                 {ok, Seg} ->
                     case ra_log_segment:segref(Seg) of
                         SegRef ->
-                            _ = ra_log_segment:close(Seg),
                             %% it has not changed - we can delete that too
-                            _ = prim_file:delete(Pivot),
                             %% as we are deleting the last segment - create an empty
                             %% successor
                             T2 = erlang:monotonic_time(),
@@ -222,10 +220,12 @@ handle_cast({truncate_segments, Who, {Name, _Range} = SegRef},
                                    [System, ?FUNCTION_NAME, Who, Diff]),
                             case open_successor_segment(Seg, SegConf) of
                                 enoent ->
+                                    _ = prim_file:delete(Pivot),
                                     %% directory must have been deleted after the pivot
                                     %% segment was opened
                                     {noreply, State0};
                                 Succ ->
+                                    _ = prim_file:delete(Pivot),
                                     _ = ra_log_segment:close(Succ),
                                     {noreply, State0}
                             end;
@@ -366,7 +366,7 @@ flush_mem_table_range(ServerUId, {Tid, Seq},
                                       [SRef | ClosedSegRefs]
                               end,
 
-                    _ = ra_log_segment:close(Segment),
+                    ok = ra_log_segment:close(Segment),
                     _ = ra_lib:sync_dir(Dir),
                     SegRefs
             end
