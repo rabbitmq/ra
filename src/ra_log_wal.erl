@@ -330,7 +330,7 @@ init(#{system := System,
             ok = ra_log_segment_writer:await(SegWriter),
             {ok, Result}
     catch _:Err:Stack ->
-              ?ERROR("WAL in ~ts failed to initialise with ~p, stack ~p",
+              ?ERROR("WAL in ~ts failed to initialise with ~0p, stack ~0p",
                      [System, Err, Stack]),
               {stop, Err}
     end.
@@ -413,8 +413,8 @@ recover_wal(Dir, #conf{system = System,
            [System, map_size(SeedWriters)]),
     {FinalWriters, _FinalTables} =
     lists:foldl(fun (F, {Writers0, Tables0}) ->
-                        ?DEBUG("WAL in ~ts: recovering ~ts, Mode ~s",
-                               [System, F, Mode]),
+                        ?INFO("WAL in ~ts: recovering ~ts, Mode ~s",
+                              [System, F, Mode]),
                         WalFile = filename:join(Dir, F),
                         Fd = open_at_first_record(WalFile),
                         {Time, #recovery{ranges = Ranges,
@@ -430,13 +430,13 @@ recover_wal(Dir, #conf{system = System,
                                                                      Ranges,
                                                                      WalFile),
                         close_existing(Fd),
-                        ?DEBUG("WAL in ~ts: recovered ~ts time taken ~bms - recovered ~b writers",
-                               [System, F, Time div 1000, map_size(Writers)]),
+                        ?INFO("WAL in ~ts: recovered ~ts time taken ~bms - recovered ~b writers",
+                              [System, F, Time div 1000, map_size(Writers)]),
                         {Writers, Tables}
                 end, {SeedWriters, #{}}, WalFiles),
 
-    ?DEBUG("WAL in ~ts: final writers recovered ~b",
-           [System, map_size(FinalWriters)]),
+    ?INFO("WAL in ~ts: final writers recovered ~b",
+          [System, map_size(FinalWriters)]),
 
     %% trim writers for UIDs that are no longer registered
     RegisteredUIds = sets:from_list(
@@ -449,8 +449,8 @@ recover_wal(Dir, #conf{system = System,
                        end, FinalWriters),
     NumTrimmed = map_size(FinalWriters) - map_size(TrimmedWriters),
     NumTrimmed > 0 andalso
-        ?DEBUG("WAL in ~ts: trimmed ~b stale writers",
-               [System, NumTrimmed]),
+        ?INFO("WAL in ~ts: trimmed ~b stale writers",
+              [System, NumTrimmed]),
 
     FileNum = extract_file_num(lists:reverse(WalFiles)),
     State = roll_over(#state{conf = Conf,
