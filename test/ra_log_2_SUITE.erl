@@ -2461,7 +2461,7 @@ dual_flush_does_not_delete_needed_segments(Config) ->
     %% with the segments from the first flush. ra_log:init must not delete
     %% segment files that the reader still references after compact_segrefs
     %% truncates their ranges.
-    UId = ?config(uid, Config),
+    _UId = ?config(uid, Config),
     WalDir = ?config(work_dir, Config),
     WalDataDir = filename:join(WalDir, atom_to_list(node())),
 

@@ -1713,7 +1713,7 @@ recover_multi_wal_with_concurrent_deletes(Config) ->
     ok = logger:set_primary_config(level, all),
     Conf = ?config(wal_conf, Config),
     {UId, _} = WriterId = ?config(writer_id, Config),
-    Names = ?config(names, Config),
+    _Names = ?config(names, Config),
     Data = <<42:256/unit:8>>,
     meck:new(ra_log_segment_writer, [passthrough]),
     meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
