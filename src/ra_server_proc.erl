@@ -1323,7 +1323,7 @@ handle_enter(RaftState, OldRaftState,
 
 handle_leader(Msg, #state{server_state = ServerState0} = State0) ->
     try ra_server:handle_leader(Msg, ServerState0) of
-        {NextState, ServerState, Effects}  ->
+        {NextState, ServerState, Effects} ->
             State1 = State0#state{server_state =
                                   ra_server:persist_last_applied(ServerState)},
             %% The last applied index made progress. Check if there are
@@ -1331,11 +1331,20 @@ handle_leader(Msg, #state{server_state = ServerState0} = State0) ->
             {State, Actions} = perform_pending_queries(leader, State1),
             maybe_record_cluster_change(State0, State),
             {NextState, State, Effects ++ Actions}
-    catch Class:Reason:Stacktrace ->
-              ?ERR("~ts: handle_leader err ~p ~0P~n~p",
-                   [log_id(State0), Class, Reason, 10,
-                    safe_stacktrace(Stacktrace)]),
-              exit(Reason)
+    catch
+        throw:{NextState, ServerState, Effects} when is_atom(NextState) andalso
+                                                     is_map(ServerState) andalso
+                                                     is_list(Effects) ->
+            State1 = State0#state{server_state =
+                                  ra_server:persist_last_applied(ServerState)},
+            {State, Actions} = perform_pending_queries(leader, State1),
+            maybe_record_cluster_change(State0, State),
+            {NextState, State, Effects ++ Actions};
+        Class:Reason:Stacktrace ->
+            ?ERR("~ts: handle_leader err ~p ~0P~n~p",
+                 [log_id(State0), Class, Reason, 10,
+                  safe_stacktrace(Stacktrace)]),
+            exit(Reason)
     end.
 
 handle_raft_state(RaftState, Msg,
