@@ -14,28 +14,30 @@ jobs:
         otp_version: [26, 27, 28]
         os: [ubuntu-latest, windows-latest]
     steps:
-    - name: CHECKOUT
+    - name: Checkout
       uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-    - name: CONFIGURE ERLANG
+    - name: Configure Erlang
       # Pin setup-beam to a version that works with Windows (not released at
       # the time of commit).
       uses: erlef/setup-beam@566deebc640988a494af16ecdf6f820fe0d3fea4
       with:
         otp-version: ${{ matrix.otp_version }}
         rebar3-version: '3.25.1'
-    - name: XREF
+    - name: Update Hex registry
+      run: rebar3 update
+    - name: Xref
       if: ${{ matrix.os == 'ubuntu-latest'}}
       run: rebar3 xref
-    - name: DIALYZE
+    - name: Dialyze
       if: ${{ matrix.otp_version == 28 && matrix.os == 'ubuntu-latest'}}
       run: rebar3 dialyzer
-    - name: BUILD
+    - name: Build
       run: rebar3 compile
-    - name: EUNIT
+    - name: EUnit
       run: rebar3 eunit
-    - name: COMMON TEST
+    - name: Common test
       run: rebar3 ct
-    - name: CAPTURE TEST LOGS ON FAILURE
+    - name: Capture test logs on failure
       uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       if: failure()
       with:
