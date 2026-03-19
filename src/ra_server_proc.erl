@@ -1322,18 +1322,29 @@ handle_enter(RaftState, OldRaftState,
                    State#state{server_state = ServerState}).
 
 handle_leader(Msg, #state{server_state = ServerState0} = State0) ->
-    case catch ra_server:handle_leader(Msg, ServerState0) of
-        {NextState, ServerState, Effects}  ->
+    try ra_server:handle_leader(Msg, ServerState0) of
+        {NextState, ServerState, Effects} ->
             State1 = State0#state{server_state =
                                   ra_server:persist_last_applied(ServerState)},
             %% The last applied index made progress. Check if there are
             %% pending queries that wait for this index.
             {State, Actions} = perform_pending_queries(leader, State1),
             maybe_record_cluster_change(State0, State),
+            {NextState, State, Effects ++ Actions}
+    catch
+        throw:{NextState, ServerState, Effects} when is_atom(NextState) andalso
+                                                     is_map(ServerState) andalso
+                                                     is_list(Effects) ->
+            State1 = State0#state{server_state =
+                                  ra_server:persist_last_applied(ServerState)},
+            {State, Actions} = perform_pending_queries(leader, State1),
+            maybe_record_cluster_change(State0, State),
             {NextState, State, Effects ++ Actions};
-        OtherErr ->
-            ?ERR("handle_leader err ~p", [OtherErr]),
-            exit(OtherErr)
+        Class:Reason:Stacktrace ->
+            ?ERR("~ts: handle_leader err ~p ~0P~n~p",
+                 [log_id(State0), Class, Reason, 10,
+                  safe_stacktrace(Stacktrace)]),
+            exit(Reason)
     end.
 
 handle_raft_state(RaftState, Msg,
@@ -2463,3 +2474,12 @@ handle_log_effect(log_ext, Idxs, Fun,
   when is_list(Idxs) ->
     ReadState = ra_server:log_partial_read(Idxs, SS0),
     {Fun(ReadState), State}.
+
+%% Strip function arguments from stacktrace frames to avoid formatting
+%% potentially huge terms (e.g. the full Ra machine state).
+safe_stacktrace(Stacktrace) ->
+    lists:map(fun({M, F, Args, Info}) when is_list(Args) ->
+                      {M, F, length(Args), Info};
+                 (Frame) ->
+                      Frame
+              end, Stacktrace).
