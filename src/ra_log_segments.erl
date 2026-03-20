@@ -155,9 +155,15 @@ update_segments(NewSegmentRefs, #?STATE{open_segments = Open0,
 
     SegmentRefs0 = ra_lol:to_list(SegRefs0),
     SegmentRefsComp = compact_segrefs(NewSegmentRefs, SegmentRefs0),
-    %% capture segrefs removed by compact_segrefs/2 and delete them
-    %% a major compaction will also remove these
-    OverwrittenSegments = NewSegmentRefs -- SegmentRefsComp,
+    %% Build a set of filenames that survived compaction so that we only
+    %% delete segment files that were fully removed.  Using `--` here is
+    %% incorrect because compact_segrefs/2 may *limit* (truncate) a
+    %% segment's range rather than remove it entirely; the limited tuple
+    %% no longer matches the original, causing `--` to flag it as
+    %% overwritten and delete the file while a reference to it remains.
+    SurvivingFns = maps:from_keys([Fn || {Fn, _} <- SegmentRefsComp], true),
+    OverwrittenSegments = [S || {Fn, _} = S <- NewSegmentRefs,
+                                not is_map_key(Fn, SurvivingFns)],
     SegRefs = ra_lol:from_list(fun seg_ref_gt/2, SegmentRefsComp),
     Range = case SegmentRefsComp of
                 [{_, {_, L}} | _] ->
@@ -1079,6 +1085,59 @@ compact_segref_1_test() ->
                  ], Res),
     ok.
 
+
+update_segments_limited_not_overwritten_test() ->
+    %% Validates that a segment whose range is limited (truncated) by
+    %% compact_segrefs is NOT reported as overwritten.  Before the fix,
+    %% the `--` operator used exact tuple matching so a limited segment
+    %% {Fn, {Start, NewEnd}} would not match the original
+    %% {Fn, {Start, OrigEnd}}, causing the file to be deleted while
+    %% a reference to it remained in the segment_refs.
+    Existing = [{"20", {20, 29}},
+                {"10", {10, 19}}],
+    State0 = #?STATE{cfg = #cfg{uid = <<"test">>,
+                                directory = "/tmp",
+                                counter = undefined,
+                                compaction_conf = #{}},
+                     range = {10, 29},
+                     segment_refs = ra_lol:from_list(fun seg_ref_gt/2,
+                                                     Existing),
+                     open_segments = ra_flru:new(1, fun (_) -> ok end)},
+
+    %% Simulate a batch of new segments containing both normal (small)
+    %% and compacted (wide) segments that overlap.
+    %%   "50": normal, covers 50-59
+    %%   "40": compacted, covers 30-55 (overlaps "50" and existing "20")
+    %%   "30": normal, covers 30-39
+    %% After compact_segrefs:
+    %%   "50" {50,59} — kept as-is
+    %%   "40" {30,49} — limited from {30,55} to {30,49} by "50"'s start
+    %%   "20" {20,29} — limited from {20,29} to {20,29} (unchanged)
+    %%   "10" {10,19} — unchanged
+    %% "30" is fully inside "40"'s range so it gets removed.
+    NewSegmentRefs = [{"50", {50, 59}},
+                      {"40", {30, 55}},
+                      {"30", {30, 39}}],
+
+    {State1, Overwritten} = update_segments(NewSegmentRefs, State0),
+
+    %% "30" was fully overwritten by "40" — its file can be deleted
+    ?assertEqual([{"30", {30, 39}}], Overwritten),
+
+    %% "40" must NOT be in Overwritten: it was limited, not removed.
+    %% Its file is still needed for indexes 30-49.
+    ?assertNot(lists:keymember("40", 1, Overwritten)),
+
+    %% "50" must NOT be in Overwritten: it was kept as-is.
+    ?assertNot(lists:keymember("50", 1, Overwritten)),
+
+    %% Verify the resulting segment refs are correct and contiguous
+    ResultRefs = segment_refs(State1),
+    ?assertEqual([{"50", {50, 59}},
+                  {"40", {30, 49}},
+                  {"20", {20, 29}},
+                  {"10", {10, 19}}], ResultRefs),
+    ok.
 
 segrefs_to_read_test() ->
 
