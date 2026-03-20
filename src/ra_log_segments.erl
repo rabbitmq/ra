@@ -520,7 +520,7 @@ segment_read_plan(#cfg{log_id = LogId} = Cfg,
         undefined ->
             %% not found, not good
             ?WARN("~ts: read plan request did not found all requested indexes"
-                  " missing ~w segrefs left ~p",
+                  " missing ~w segrefs left ~w",
                   [LogId, Indexes, SegRefs]),
             lists:reverse(Acc)
     end.
