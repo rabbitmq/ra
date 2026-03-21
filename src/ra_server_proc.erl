@@ -845,7 +845,7 @@ follower(_, {command, Priority, {_CmdType, Data, noreply}},
                   "Command is dropped.", [log_id(State)]),
             {keep_state, State, []};
         LeaderId ->
-            ?DEBUG("~ts: follower leader cast - redirecting to ~w ",
+            ?DEBUG("~ts: follower leader cast - redirecting to ~tw ",
                    [log_id(State), LeaderId]),
             ok = ra:pipeline_command(LeaderId, Data, no_correlation, Priority),
             {keep_state, State, []}
@@ -1255,7 +1255,7 @@ terminate(Reason, StateName,
 %% before a state has been built
 terminate(Reason, StateName, #{id := Id} = Config) ->
     LogId = maps:get(friendly_name, Config,
-                     lists:flatten(io_lib:format("~w", [Id]))),
+                     lists:flatten(io_lib:format("~tw", [Id]))),
     ?DEBUG("~ts: terminating with ~w in state ~w",
            [LogId, Reason, StateName]),
     ok;
@@ -1533,7 +1533,7 @@ handle_effect(_RaftState, {send_rpc, To, Rpc}, _,
                                  incr_counter(Conf, ?C_RA_SRV_MSGS_SENT, 1),
                                  Self ! {unsuspend_peer, To}
                          end),
-            % ?DEBUG("~ts: temporarily suspending peer ~w due to full distribution buffer ~W",
+            % ?DEBUG("~ts: temporarily suspending peer ~tw due to full distribution buffer ~W",
             %        [log_id(State0), To, Rpc, 5]),
             {update_peer(To, #{status => suspended}, State0), Actions};
         nosuspend ->
@@ -1695,7 +1695,7 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
                                                     Monitors)},
              Actions};
         false ->
-            ?DEBUG("~ts: not sending snapshot to ~w as not connected to node ~s",
+            ?DEBUG("~ts: not sending snapshot to ~tw as not connected to node ~s",
                    [LogId, To, ToNode]),
             SS = ra_server:update_peer(To, #{status => disconnected}, SS0),
             {State#state{server_state = SS}, Actions}
@@ -1937,7 +1937,7 @@ follower_leader_change(Old, #state{pending_commands = Pending,
             OldLeaderNode = ra_lib:ra_server_id_node(OldLeader),
             _ = aten:unregister(OldLeaderNode),
             % leader has either changed or just been set
-            ?INFO("~ts: detected a new leader ~w in term ~b",
+            ?INFO("~ts: detected a new leader ~tw in term ~b",
                   [log_id(New), NewLeader, current_term(New)]),
             [ok = gen_statem:reply(From, {redirect, NewLeader})
              || {From, _Data} <- Pending],
@@ -2049,7 +2049,7 @@ reject_command(Pid, Corr, #state{leader_monitor = _Mon} = State) ->
             ok;
         _ ->
             ?INFO("~ts: follower received leader command from ~w. "
-                  "Rejecting to ~w ", [log_id(State), Pid, LeaderId]),
+                  "Rejecting to ~tw ", [log_id(State), Pid, LeaderId]),
             send_ra_event(Pid, {not_leader, LeaderId, Corr},
                           id(State), rejected, State)
     end.
@@ -2081,7 +2081,7 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
     Context = ra_snapshot:context(SnapState, ToNode),
     case ra_snapshot:begin_read(SnapState, Context) of
         {error, Reason} ->
-            ?DEBUG("~ts: failed to begin reading snapshot for ~w: ~p",
+            ?DEBUG("~ts: failed to begin reading snapshot for ~tw: ~p",
                    [LogId, To, Reason]),
             exit({snapshot_begin_read_failed, Reason});
         {ok, #{index := SnapIdx,
@@ -2093,12 +2093,12 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
             %% only send the snapshot if the target server can accept it
             case SnapMacVer > TheirMacVer of
                 true ->
-                    ?DEBUG("~ts: not sending snapshot to ~w as their machine version ~b "
+                    ?DEBUG("~ts: not sending snapshot to ~tw as their machine version ~b "
                            "is lower than snapshot machine version ~b",
                            [LogId, To, TheirMacVer, SnapMacVer]),
                     ok;
                 false ->
-                    ?DEBUG("~ts: sending snapshot at index ~b to ~w",
+                    ?DEBUG("~ts: sending snapshot at index ~b to ~tw",
                            [LogId, SnapIdx, To]),
                     RPC = #install_snapshot_rpc{term = Term,
                                                 leader_id = Id,
@@ -2113,12 +2113,12 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                 #install_snapshot_result{} ->
                                     ok;
                                 Unexp ->
-                                    ?INFO("~ts: ~w returned an unexpected install snapshot "
+                                    ?INFO("~ts: ~tw returned an unexpected install snapshot "
                                           "result ~w",
                                           [LogId, To, Unexp]),
                                     exit(unexpected_install_snapshot_result)
                             catch exit:{noproc, _}:_ ->
-                                      ?INFO("~ts: ~w not ready to receive snapshot, "
+                                      ?INFO("~ts: ~tw not ready to receive snapshot, "
                                             "reason: noproc", [LogId, To]),
                                       %% no process, not ready yet, exit to reduce sasl logging
                                       exit(snapshot_receiver_not_ready_yet);
@@ -2131,7 +2131,7 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                           [To, [last_applied]]),
                             %% remove all indexes lower than the target's last applied
                             Indexes = ra_seq:floor(LastApplied + 1, Indexes0),
-                            ?DEBUG("~ts: sending ~b live indexes in the range ~w to ~w ",
+                            ?DEBUG("~ts: sending ~b live indexes in the range ~w to ~tw ",
                                    [LogId, ra_seq:length(Indexes), ra_seq:range(Indexes), To]),
                             MaybeFlru = send_pre_snapshot_entries(Id, To, RPC, Indexes,
                                                                   InstallTimeout, undefined),
@@ -2144,7 +2144,7 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                     Result = send_snapshot_chunks(RPC, To, ReadState, 1,
                                                   ChunkSize, InstallTimeout,
                                                   SnapState),
-                    ?DEBUG("~ts: sending snapshot to ~w completed",
+                    ?DEBUG("~ts: sending snapshot to ~tw completed",
                            [LogId, To]),
                     ok = gen_statem:cast(Id, {To, Result})
             end
