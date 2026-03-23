@@ -413,7 +413,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
                 case start_server(System, C) of
                     ok  -> true;
                     Err ->
-                        ?ERR("ra: failed to start a server ~w, error: ~p",
+                        ?ERR("ra: failed to start a server ~tw, error: ~p",
                               [C, Err]),
                         false
                 end
@@ -421,7 +421,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
         {ok, Started, NotStarted} ->
             case Started of
                 [] ->
-                    ?ERR("ra: failed to form a new cluster ~w. "
+                    ?ERR("ra: failed to form a new cluster ~tw. "
                         "No servers were successfully started.",
                         [ClusterName]),
                     {error, cluster_not_formed};
@@ -437,15 +437,15 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
                     case members(TriggeredId,
                                 length(ServerConfigs) * Timeout) of
                         {ok, _, Leader} ->
-                            ?INFO("ra: started cluster ~ts with ~b servers. "
-                                "~b servers failed to start: ~w. Leader: ~w",
+                            ?INFO("ra: started cluster ~tw with ~b servers. "
+                                "~b servers failed to start: ~tw. Leader: ~tw",
                                 [ClusterName, length(ServerConfigs),
                                 length(NotStarted), NotStartedIds,
                                 Leader]),
                             % we have a functioning cluster
                             {ok, StartedIds, NotStartedIds};
                         Err ->
-                            ?WARN("ra: failed to form new cluster ~w. "
+                            ?WARN("ra: failed to form new cluster ~tw. "
                                 "Error: ~w", [ClusterName, Err]),
                             _ = [force_delete_server(System, N) || N <- StartedIds],
                             % we do not have a functioning cluster
@@ -454,7 +454,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
             end;
         {error, {partition_parallel_timeout, Started, _}} ->
             StartedIds = sort_by_local([I || #{id := I} <- Started], []),
-            ?WARN("ra: a member of cluster ~w failed to start within the expected time interval (~w)", [ClusterName, Timeout]),
+            ?WARN("ra: a member of cluster ~tw failed to start within the expected time interval (~w)", [ClusterName, Timeout]),
             _ = [force_delete_server(System, N) || N <- StartedIds],
             {error, cluster_not_formed}
     end.
@@ -659,12 +659,12 @@ leave_and_terminate(System, ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
         {timeout, Who} ->
-            ?ERR("Failed to leave the cluster: request to ~w timed out", [Who]),
+            ?ERR("Failed to leave the cluster: request to ~tw timed out", [Who]),
             timeout;
         {error, noproc} = Err ->
             Err;
         {ok, _, _} ->
-            ?INFO("We (Ra node ~w) has successfully left the cluster. Terminating.", [ServerId]),
+            ?INFO("We (Ra node ~tw) has successfully left the cluster. Terminating.", [ServerId]),
             stop_server(System, ServerId)
     end.
 
@@ -698,12 +698,12 @@ leave_and_delete_server(System, ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
         {timeout, Who} ->
-            ?ERR("Failed to leave the cluster: request to ~w timed out", [Who]),
+            ?ERR("Failed to leave the cluster: request to ~tw timed out", [Who]),
             timeout;
         {error, _} = Err ->
             Err;
         {ok, _, _} ->
-            ?INFO("Ra node ~w has successfully left the cluster.", [ServerId]),
+            ?INFO("Ra node ~tw has successfully left the cluster.", [ServerId]),
             force_delete_server(System, ServerId)
     end.
 
