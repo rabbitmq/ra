@@ -16,7 +16,8 @@
          log_last_index_term/1,
          log_fetch/2,
          log_stats/1,
-         wal_fill_ratio/1
+         wal_fill_ratio/1,
+         snapshot_size/1
         ]).
 
 -include("ra.hrl").
@@ -83,3 +84,6 @@ wal_fill_ratio(#{cfg := #cfg{system_config =
                              #{names := #{wal := WalName}}}}) ->
     ra_log_wal:fill_ratio(WalName).
 
+-spec snapshot_size(ra_aux:internal_state()) -> non_neg_integer() | undefined.
+snapshot_size(#{log := Log}) ->
+    ra_log:snapshot_size(Log).

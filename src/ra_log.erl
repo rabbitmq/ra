@@ -35,6 +35,7 @@
          fetch_term/2,
          next_index/1,
          snapshot_state/1,
+         snapshot_size/1,
          set_snapshot_state/2,
          install_snapshot/4,
          recover_snapshot/1,
@@ -75,6 +76,7 @@
                       {snapshot_written, ra_idxterm(),
                        LiveIndexes :: ra_seq:state(),
                        ra_snapshot:kind(),
+                       SnapshotSize :: non_neg_integer() | undefined,
                        Duration :: non_neg_integer()} |
                       {compaction_result, term()} |
                       major_compaction |
@@ -1002,7 +1004,7 @@ handle_event(major_compaction, #?MODULE{cfg = #cfg{log_id = LogId},
             {State, []}
     end;
 handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes,
-              SnapKind, Duration},
+              SnapKind, SnapshotSize, Duration},
              #?MODULE{cfg = #cfg{uid = UId,
                                  log_id = LogId,
                                  names = Names} = Cfg,
@@ -1016,7 +1018,7 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes,
   when SnapIdx >= FstIdx ->
     % ?assert(ra_snapshot:pending(SnapState0) =/= undefined),
     SnapState1 = ra_snapshot:complete_snapshot(Snap, SnapKind, LiveIndexes,
-                                               SnapState0),
+                                               SnapshotSize, SnapState0),
     ?DEBUG("~ts: ra_log: ~s written at index ~b with ~b live indexes in ~bms",
            [LogId, SnapKind, SnapIdx, ra_seq:length(LiveIndexes), Duration]),
     case SnapKind of
@@ -1085,7 +1087,8 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes,
                         CP} || CP <- CPs],
             {State0#?MODULE{snapshot_state = SnapState}, Effects}
     end;
-handle_event({snapshot_written, {Idx, Term} = Snap, _Indexes, SnapKind, _Duration},
+handle_event({snapshot_written, {Idx, Term} = Snap, _Indexes,
+              SnapKind, _SnapshotSize, _Duration},
              #?MODULE{cfg =#cfg{log_id = LogId},
                       snapshot_state = SnapState} = State0) ->
     %% if the snapshot/checkpoint is stale we just want to delete it
@@ -1151,6 +1154,10 @@ fetch_term(_Idx, #?MODULE{} = State0) ->
 -spec snapshot_state(State :: state()) -> ra_snapshot:state().
 snapshot_state(State) ->
     State#?MODULE.?FUNCTION_NAME.
+
+-spec snapshot_size(State :: state()) -> non_neg_integer() | undefined.
+snapshot_size(#?MODULE{snapshot_state = SnapshotState}) ->
+    ra_snapshot:snapshot_size(SnapshotState).
 
 -spec set_snapshot_state(ra_snapshot:state(), state()) -> state().
 set_snapshot_state(SnapState, State) ->
@@ -1450,6 +1457,7 @@ overview(#?MODULE{range = Range,
               undefined -> undefined;
               {I, _} -> I
           end,
+      snapshot_size => ra_snapshot:snapshot_size(SnapshotState),
       mem_table_range => ra_mt:range(Mt),
       mem_table_info => ra_mt:info(Mt),
       last_wal_write => LastMs,

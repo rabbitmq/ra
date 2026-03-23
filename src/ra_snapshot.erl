@@ -34,7 +34,7 @@
 
          begin_snapshot/5,
          promote_checkpoint/2,
-         complete_snapshot/4,
+         complete_snapshot/5,
 
          begin_accept/2,
          accept_chunk/3,
@@ -58,7 +58,9 @@
          indexes/1,
 
          write_recovery_checkpoint/4,
-         delete_recovery_checkpoint/1
+         delete_recovery_checkpoint/1,
+
+         snapshot_size/1
         ]).
 
 -type effect() :: {monitor, process, snapshot_writer, pid()} |
@@ -112,7 +114,8 @@
          max_checkpoints :: pos_integer(),
          %% recovery checkpoint - written during shutdown, used to speed up recovery
          recovery_checkpoint :: option(recovery_checkpoint()),
-         machine :: option(ra_machine:machine())}).
+         machine :: option(ra_machine:machine()),
+         snapshot_size = undefined :: non_neg_integer() | undefined}).
 
 -define(ETSTBL, ra_log_snapshot_state).
 
@@ -124,7 +127,8 @@
 
 -export_type([state/0]).
 
--optional_callbacks([context/0]).
+-optional_callbacks([context/0,
+                     get_size/1]).
 
 %% Side effect function
 %% Turn the current state into immutable reference.
@@ -178,7 +182,9 @@
 %% accept the last chunk of data
 -callback complete_accept(Chunk :: term(),
                           AcceptState :: term()) ->
-    ok | {error, term()}.
+    ok |
+    {ok, Bytes :: non_neg_integer()} |
+    {error, term()}.
 
 %% Side-effect function
 %% Recover machine state from file
@@ -199,6 +205,10 @@
             term()}.
 
 -callback context() -> map().
+
+-callback get_size(Location :: file:filename_all()) ->
+    {ok, SnapshotSize :: non_neg_integer() | undefined} |
+    {error, file_err() | term()}.
 
 -spec init(ra_uid(), module(),
            file:filename_all(), file:filename_all(),
@@ -268,6 +278,17 @@ find_snapshots(#?MODULE{uid = UId,
             Current = filename:join(SnapshotsDir, Current0),
             {ok, #{index := Idx,
                    term := Term}} = Module:read_meta(Current),
+            SnapshotSize = try
+                               case Module:get_size(Current) of
+                                   {ok, Size} when is_integer(Size) ->
+                                       Size;
+                                   {error, _} ->
+                                       undefined
+                               end
+                           catch
+                               error:undef ->
+                                   undefined
+                           end,
             Indexes = case indexes(Current) of
                           {ok, Idxs} ->
                               Idxs;
@@ -287,7 +308,8 @@ find_snapshots(#?MODULE{uid = UId,
 
             ok = delete_snapshots(SnapshotsDir, lists:delete(Current0, Snaps)),
             %% delete old snapshots if any
-            State#?MODULE{current = {Idx, Term}}
+            State#?MODULE{current = {Idx, Term},
+                          snapshot_size = SnapshotSize}
     end.
 
 recover_indexes(UId, Module, Machine, SnapDir, Err) ->
@@ -508,6 +530,10 @@ directory(#?MODULE{snapshot_directory = Dir}, snapshot) -> Dir;
 directory(#?MODULE{checkpoint_directory = Dir}, checkpoint) -> Dir;
 directory(#?MODULE{recovery_checkpoint_directory = Dir}, recovery_checkpoint) -> Dir.
 
+-spec snapshot_size(state()) -> non_neg_integer() | undefined.
+snapshot_size(#?MODULE{snapshot_size = SnapshotSize}) ->
+    SnapshotSize.
+
 -spec last_index_for(ra_uid()) -> option(ra_index()).
 last_index_for(UId) ->
     case ra_log_snapshot_state:snapshot(?ETSTBL, UId) of
@@ -556,13 +582,14 @@ begin_snapshot(#{index := Idx,
                         %% Write without fsync. For snapshots, the sync is
                         %% batched through the per-system ra_log_sync process
                         %% to avoid N parallel fsyncs saturating the disk.
-                        case Mod:write(SnapDir, Meta, Ref, false) of
-                            ok -> ok;
-                            {ok, BytesWritten} ->
-                                counters_add(Counter, CounterIdx,
-                                             BytesWritten),
-                                ok
-                        end,
+                        SnapshotSize = case Mod:write(SnapDir, Meta, Ref, false) of
+                                           ok ->
+                                               undefined;
+                                           {ok, BytesWritten} ->
+                                               counters_add(Counter, CounterIdx,
+                                                            BytesWritten),
+                                               BytesWritten
+                                       end,
 
                         %% if the Ref returned by ra_snapshot:prepare/2 is
                         %% the same as the mac state then indexes can be
@@ -591,7 +618,7 @@ begin_snapshot(#{index := Idx,
                                                             native, millisecond),
                         Self ! {ra_log_event,
                                 {snapshot_written, IdxTerm,
-                                 LiveIndexes, SnapKind, Duration}},
+                                 LiveIndexes, SnapKind, SnapshotSize, Duration}},
                         ok
                 end,
 
@@ -607,7 +634,11 @@ promote_checkpoint(PromotionIdx,
                             sync_server = SyncServer,
                             snapshot_directory = SnapDir,
                             checkpoint_directory = CheckpointDir,
-                            checkpoints = Checkpoints0} = State0) ->
+                            checkpoints = Checkpoints0,
+                            %% TODO: We currently re-use the previous snapshot
+                            %% size. Should we recompute the size based on the
+                            %% promoted checkpoint?
+                            snapshot_size = SnapshotSize} = State0) ->
     %% Find the checkpoint with the highest index smaller than or equal to the
     %% given `Idx' and rename the checkpoint directory to the snapshot
     %% directory.
@@ -634,7 +665,7 @@ promote_checkpoint(PromotionIdx,
                                                               native, millisecond),
                           Self ! {ra_log_event,
                                   {snapshot_written, {Idx, Term},
-                                   Indexes, snapshot, Duration}}
+                                   Indexes, snapshot, SnapshotSize, Duration}}
                   end,
 
             State = State0#?MODULE{pending = {{Idx, Term}, snapshot},
@@ -663,14 +694,14 @@ find_promotable_checkpoint(Idx, [CP | Rest], Acc) ->
 find_promotable_checkpoint(_Idx, [], _Acc) ->
     undefined.
 
--spec complete_snapshot(ra_idxterm(), kind(), ra_seq:state(), state()) ->
+-spec complete_snapshot(ra_idxterm(), kind(), ra_seq:state(), non_neg_integer(), state()) ->
     state().
-complete_snapshot(_IdxTerm, snapshot, _LiveIndexes,
+complete_snapshot(_IdxTerm, snapshot, _LiveIndexes, _SnapshotSize,
                   #?MODULE{pending = undefined} = State) ->
     %% if pending=undefined it means and snapshot installation with a higher
     %% index was accepted concurrently
     State;
-complete_snapshot({Idx, _} = IdxTerm, snapshot, LiveIndexes,
+complete_snapshot({Idx, _} = IdxTerm, snapshot, LiveIndexes, SnapshotSize,
                   #?MODULE{uid = UId,
                            recovery_checkpoint = RecoveryCheckpoint} = State0) ->
     SmallestIdx = case ra_seq:first(LiveIndexes) of
@@ -690,8 +721,9 @@ complete_snapshot({Idx, _} = IdxTerm, snapshot, LiveIndexes,
                     State0
             end,
     State#?MODULE{pending = undefined,
-                  current = IdxTerm};
-complete_snapshot(IdxTerm, checkpoint, _LiveIndexes,
+                  current = IdxTerm,
+                  snapshot_size = SnapshotSize};
+complete_snapshot(IdxTerm, checkpoint, _LiveIndexes, _SnapshotSize,
                   #?MODULE{checkpoints = Checkpoints0} = State) ->
     State#?MODULE{pending = undefined,
                   checkpoints = [IdxTerm | Checkpoints0]}.
@@ -723,7 +755,12 @@ complete_accept(Chunk, Num, Machine,
                                              idxterm = {Idx, Term} = IdxTerm,
                                              state = AccState}} = State0) ->
     %% last chunk
-    ok = Mod:complete_accept(Chunk, AccState),
+    SnapshotSize = case Mod:complete_accept(Chunk, AccState) of
+                       ok ->
+                           undefined;
+                       {ok, Bytes} ->
+                           Bytes
+                   end,
     %% run validate here?
     %% delete the current snapshot if any
     Dels = case Pending of
@@ -738,7 +775,8 @@ complete_accept(Chunk, Num, Machine,
     State = State0#?MODULE{accepting = undefined,
                            %% reset any pending snapshot writes
                            pending = undefined,
-                           current = IdxTerm},
+                           current = IdxTerm,
+                           snapshot_size = SnapshotSize},
     %% recover should always succeed here since we just accepted a snapshot
     {SnapMacVer, MacState} =
         case recover(State) of
