@@ -724,8 +724,16 @@ complete_snapshot({Idx, _} = IdxTerm, snapshot, LiveIndexes, SnapshotSize,
                   current = IdxTerm,
                   snapshot_size = SnapshotSize};
 complete_snapshot(IdxTerm, checkpoint, _LiveIndexes, _SnapshotSize,
-                  #?MODULE{checkpoints = Checkpoints0} = State) ->
-    State#?MODULE{pending = undefined,
+                  #?MODULE{pending = Pending,
+                           checkpoints = Checkpoints0} = State) ->
+    %% Only clear pending if it still points at this checkpoint.
+    %% A concurrent promote_checkpoint may have overwritten pending
+    %% with a snapshot entry that must not be discarded.
+    NewPending = case Pending of
+                     {IdxTerm, checkpoint} -> undefined;
+                     _ -> Pending
+                 end,
+    State#?MODULE{pending = NewPending,
                   checkpoints = [IdxTerm | Checkpoints0]}.
 
 -spec begin_accept(meta(), state()) ->
