@@ -107,6 +107,7 @@
 -type idxterm() :: ra_idxterm().
 -type server_id() :: ra_server_id().
 -type cluster_name() :: ra_cluster_name().
+-type membership() :: ra_membership().
 -type range() :: ra_range:range().
 -type uid() :: ra_uid().
 
@@ -126,6 +127,7 @@
               idxterm/0,
               server_id/0,
               cluster_name/0,
+              membership/0,
               range/0,
               query_ctx/0,
               query_opts/0,
