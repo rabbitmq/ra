@@ -111,8 +111,8 @@ bug70_pre_append_log_follower_badkey_crash(_Config) ->
     %% Verify the cluster change was applied
     ?assertMatch(#{cluster_index_term := {4, 5}}, FollowerState2),
     ?assertMatch(#{cluster := #{N4 := _}}, FollowerState2),
-    %% Verify previous_cluster is NOT set (this is the bug precondition)
-    ?assertNot(maps:is_key(previous_cluster, FollowerState2)),
+    %% After fix: previous_cluster IS set by the follower cluster change path
+    ?assert(maps:is_key(previous_cluster, FollowerState2)),
 
     %% --- Step 2: N3 becomes leader at term 6, overwrites index 4 ---
     %% N3 never received the cluster change. It writes a regular command
@@ -133,19 +133,12 @@ bug70_pre_append_log_follower_badkey_crash(_Config) ->
     Result = (catch ra_server:handle_follower(AER2, FollowerState2)),
 
     case Result of
-        {'EXIT', {{badkey, previous_cluster}, _Stacktrace}} ->
-            ct:pal("BUG REPRODUCED: pre_append_log_follower crashed with "
-                   "{badkey, previous_cluster} as expected.~n"
-                   "This confirms rabbitmq/ra bug #70."),
-            ok;
-        {badkey, previous_cluster} ->
-            ct:pal("BUG REPRODUCED: pre_append_log_follower crashed with "
-                   "{badkey, previous_cluster} as expected.~n"
-                   "This confirms rabbitmq/ra bug #70."),
-            ok;
         {follower, _State, _Effects} ->
-            ct:fail("BUG NOT REPRODUCED: handle_follower succeeded. "
-                    "The bug may have been fixed.");
+            ct:pal("FIX VERIFIED: handle_follower succeeded without crashing.~n"
+                   "The overwrite path found previous_cluster in the state."),
+            ok;
+        {'EXIT', {{badkey, previous_cluster}, _Stacktrace}} ->
+            ct:fail("FIX NOT WORKING: still crashes with {badkey, previous_cluster}");
         Other ->
             ct:fail("Unexpected result: ~p", [Other])
     end.
