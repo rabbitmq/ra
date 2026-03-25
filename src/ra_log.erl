@@ -567,7 +567,7 @@ write([{Idx, _, _} | _], #?MODULE{cfg = #cfg{uid = UId},
 
 -spec write_sparse(log_entry(), option(ra:index()), state()) ->
     {ok, state()} | {error, wal_down | gap_detected}.
-write_sparse({Idx, Term, _} = Entry, PrevIdx0,
+write_sparse({Idx, Term, Cmd} = Entry, PrevIdx0,
              #?MODULE{cfg = #cfg{uid = UId,
                                  wal = Wal} = Cfg,
                       range = Range,
@@ -581,7 +581,7 @@ write_sparse({Idx, Term, _} = Entry, PrevIdx0,
     Tid = ra_mt:tid(Mt),
     PrevIdx = previous_wal_index(State0),
     case ra_log_wal:write(Wal, {UId, self()}, Tid, PrevIdx, Idx,
-                          Term, Entry) of
+                          Term, Cmd) of
         {ok, Pid} ->
             ok = incr_counter(Cfg, ?C_RA_LOG_WRITE_OPS, 1),
             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_INDEX, Idx),
