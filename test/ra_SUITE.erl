@@ -75,6 +75,7 @@ all_tests() ->
      post_partition_liveness,
      transfer_leadership,
      transfer_leadership_two_node,
+     await_condition_redirect_cast_command,
      new_nonvoter_knows_its_status,
      voter_gets_promoted_consistent_leader,
      voter_gets_promoted_new_leader,
@@ -1308,6 +1309,35 @@ transfer_leadership_two_node(Config) ->
     ?assertEqual(NewLeader, NextInLine),
     ?assertEqual(already_leader, ra:transfer_leadership(NewLeader, NewLeader)),
     ?assertEqual({error, unknown_member}, ra:transfer_leadership(NewLeader, {unknown, node()})),
+    terminate_cluster(Members).
+
+await_condition_redirect_cast_command(Config) ->
+    %% Verify that cast commands with a correlation sent to a server in
+    %% await_condition (during leadership transfer) are rejected with
+    %% {not_leader, ...} instead of being silently dropped.
+    Name = ?config(test_name, Config),
+    Members = [{n1, node()}, {n2, node()}, {n3, node()}],
+    {ok, _, _} = ra:start_cluster(default, Name, add_machine(), Members),
+    {ok, _, Leader} = ra:process_command({n1, node()}, 5),
+    [Target | _Rest] = Members -- [Leader],
+    ct:pal("Leader: ~p, Target: ~p", [Leader, Target]),
+    %% Suspend the target so the election cannot complete and the old leader
+    %% stays in await_condition.
+    {TargetName, _} = Target,
+    ok = sys:suspend(TargetName),
+    ok = ra:transfer_leadership(Leader, Target),
+    %% The old leader is now in await_condition.  Pipeline a command with
+    %% a correlation — the server should reject it immediately.
+    Correlation = make_ref(),
+    ok = ra:pipeline_command(Leader, 99, Correlation),
+    receive
+        {ra_event, _, {rejected, {not_leader, _, Correlation}}} ->
+            ok
+    after 5000 ->
+              sys:resume(TargetName),
+              exit(await_condition_did_not_reject_cast)
+    end,
+    ok = sys:resume(TargetName),
     terminate_cluster(Members).
 
 new_nonvoter_knows_its_status(Config) ->
