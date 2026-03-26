@@ -59,7 +59,8 @@ all_tests() ->
      %% recovery checkpoint tests
      recovery_checkpoint_write_and_recover,
      recovery_checkpoint_deleted_when_snapshot_overtakes,
-     recovery_checkpoint_corrupt_fallback
+     recovery_checkpoint_corrupt_fallback,
+     checkpoint_complete_does_not_clobber_pending_snapshot
     ].
 
 groups() ->
@@ -814,6 +815,77 @@ recovery_checkpoint_corrupt_fallback(Config) ->
     %% Recover should use the snapshot (now returns 3-tuple without Kind)
     {ok, RecoveredMeta, snap_state} = ra_snapshot:recover(Recover),
     ?assertEqual(SnapMeta, RecoveredMeta),
+    ok.
+
+%% Regression test for https://github.com/rabbitmq/ra/pull/602
+%% When a checkpoint write completes after promote_checkpoint has
+%% overwritten `pending` with a snapshot entry, the checkpoint
+%% completion must not clear `pending` — otherwise the subsequent
+%% snapshot completion is silently discarded.
+checkpoint_complete_does_not_clobber_pending_snapshot(Config) ->
+    UId = ?config(uid, Config),
+    State0 = init_state(Config),
+
+    %% 1. Write and complete a checkpoint at index 55 so it is promotable.
+    CPMeta = meta(55, 2, [node()]),
+    {State1, [{bg_work, CPFun1, _}]} =
+        ra_snapshot:begin_snapshot(CPMeta, ?MACMOD, ?FUNCTION_NAME,
+                                   checkpoint, State0),
+    CPFun1(),
+    State2 =
+        receive
+            {ra_log_event,
+             {snapshot_written, {55, 2} = CPIdxTerm1,
+              CPIndexes1, checkpoint, CPSize1, _}} ->
+                ra_snapshot:complete_snapshot(CPIdxTerm1, checkpoint,
+                                             CPIndexes1, CPSize1, State1)
+        after 1000 -> error(snapshot_event_timeout)
+        end,
+    undefined = ra_snapshot:pending(State2),
+    {55, 2} = ra_snapshot:latest_checkpoint(State2),
+
+    %% 2. Begin a second checkpoint at index 100 (still in flight).
+    CP2Meta = meta(100, 2, [node()]),
+    {State3, [{bg_work, CPFun2, _}]} =
+        ra_snapshot:begin_snapshot(CP2Meta, ?MACMOD, ?FUNCTION_NAME,
+                                   checkpoint, State2),
+    {{100, 2}, checkpoint} = ra_snapshot:pending(State3),
+    CPFun2(),
+
+    %% 3. Before completing checkpoint 100, promote checkpoint 55 to a
+    %%    snapshot.  This overwrites pending with {{55,2}, snapshot}.
+    {true, State4, [{bg_work, PromoteFun, _}]} =
+        ra_snapshot:promote_checkpoint(100, State3),
+    {{55, 2}, snapshot} = ra_snapshot:pending(State4),
+    PromoteFun(),
+
+    %% 4. Now complete the checkpoint-100 write.  The fix ensures that
+    %%    pending (which now points at the promoted snapshot) is NOT cleared.
+    State5 =
+        receive
+            {ra_log_event,
+             {snapshot_written, {100, 2} = CPIdxTerm2,
+              CPIndexes2, checkpoint, CPSize2, _}} ->
+                ra_snapshot:complete_snapshot(CPIdxTerm2, checkpoint,
+                                             CPIndexes2, CPSize2, State4)
+        after 1000 -> error(snapshot_event_timeout)
+        end,
+    {{55, 2}, snapshot} = ra_snapshot:pending(State5),
+
+    %% 5. Complete the promoted snapshot.  This must succeed: current is
+    %%    updated and pending is cleared.
+    State6 =
+        receive
+            {ra_log_event,
+             {snapshot_written, {55, 2} = SnapIdxTerm,
+              SnapIndexes, snapshot, SnapSize, _}} ->
+                ra_snapshot:complete_snapshot(SnapIdxTerm, snapshot,
+                                             SnapIndexes, SnapSize, State5)
+        after 1000 -> error(snapshot_event_timeout)
+        end,
+    undefined = ra_snapshot:pending(State6),
+    {55, 2} = ra_snapshot:current(State6),
+    55 = ra_snapshot:last_index_for(UId),
     ok.
 
 init_state(Config) ->
