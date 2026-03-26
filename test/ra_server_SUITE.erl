@@ -105,6 +105,7 @@ all() ->
      follower_heartbeat_reply,
      candidate_heartbeat,
      candidate_heartbeat_reply,
+     candidate_install_snapshot_rpc,
      pre_vote_heartbeat,
      pre_vote_heartbeat_reply,
 
@@ -3183,6 +3184,33 @@ candidate_heartbeat_reply(_Config) ->
     {follower, #{current_term := NewTerm,
                  voted_for := undefined}, []}
         = ra_server:handle_candidate({{no_peer, node()}, HeartbeatReply#heartbeat_reply{term = NewTerm}}, State).
+
+candidate_install_snapshot_rpc(_Config) ->
+    N1 = ?N1,
+    State = base_state(3, ?FUNCTION_NAME),
+    #{current_term := Term} = State,
+    Meta = #{index => 99, term => 99,
+             cluster => #{}, machine_version => 0},
+    ISRpc = #install_snapshot_rpc{term = Term, leader_id = N1,
+                                  chunk_state = {1, last},
+                                  meta = Meta, data = []},
+
+    %% Same term: step down to follower and re-dispatch
+    {follower, #{votes := 0}, [{next_event, ISRpc}]}
+        = ra_server:handle_candidate(ISRpc, State),
+
+    %% Higher term: step down to follower and re-dispatch
+    HigherTermISRpc = ISRpc#install_snapshot_rpc{term = Term + 1},
+    {follower, #{votes := 0}, [{next_event, HigherTermISRpc}]}
+        = ra_server:handle_candidate(HigherTermISRpc, State),
+
+    %% Lower term: reject with install_snapshot_result
+    LowerTermISRpc = ISRpc#install_snapshot_rpc{term = Term - 1},
+    {candidate, State,
+     [{reply, #install_snapshot_result{term = Term,
+                                       last_term = 99,
+                                       last_index = 99}}]}
+        = ra_server:handle_candidate(LowerTermISRpc, State).
 
 pre_vote_heartbeat(_Config) ->
     State = (base_state(3, ?FUNCTION_NAME))#{votes => 1},
