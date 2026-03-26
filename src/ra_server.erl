@@ -3515,6 +3515,7 @@ pre_append_log_follower({Idx, Term, Cmd} = Entry,
             ?DEBUG("~ts: ~ts: follower applying ra cluster change to ~tw",
                    [log_id(State), ?FUNCTION_NAME, maps:keys(Cluster)]),
             State#{cluster => Cluster,
+                   membership => get_membership(Cluster, State),
                    cluster_index_term => {Idx, Term}};
         _ ->
             % revert back to previous cluster
@@ -3522,6 +3523,7 @@ pre_append_log_follower({Idx, Term, Cmd} = Entry,
             ?DEBUG("~ts: ~ts: follower reverting cluster change to ~tw",
                    [log_id(State), ?FUNCTION_NAME, maps:keys(PrevCluster)]),
             State1 = State#{cluster => PrevCluster,
+                            membership => get_membership(PrevCluster, State),
                             cluster_index_term => {PrevIdx, PrevTerm}},
             pre_append_log_follower(Entry, State1)
     end;

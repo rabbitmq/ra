@@ -67,6 +67,7 @@ all() ->
      leader_applies_new_cluster,
      leader_applies_new_cluster_nonvoter,
      leader_appends_cluster_change_then_steps_before_applying_it,
+     follower_cluster_change_overwrite_updates_membership,
      leader_receives_install_snapshot_rpc,
      follower_installs_snapshot,
      follower_installs_snapshot_with_pre,
@@ -2120,6 +2121,66 @@ leader_appends_cluster_change_then_steps_before_applying_it(_Config) ->
     % assert n1 has switched back to the old cluster config
     #{N1 := _, N2 := _, N3 := _} = Cluster,
     3 = maps:size(Cluster),
+    ok.
+
+follower_cluster_change_overwrite_updates_membership(_Config) ->
+    %% Verify that pre_append_log_follower updates `membership` when
+    %% overwriting a cluster change entry, both when the overwriting entry
+    %% is itself a cluster change and when it triggers a revert.
+    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
+    OldCluster = #{N1 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N2 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N3 => new_peer_with(#{next_index => 4, match_index => 3})},
+
+    State0 = (base_state(3, ?FUNCTION_NAME))#{cluster => OldCluster},
+
+    %% N1 is leader and adds N4 as a join (cluster change at index 4 term 5).
+    %% This goes through append_cluster_change, which sets previous_cluster.
+    Command = {command, {'$ra_join', meta(), N4, await_consensus}},
+    {leader, #{cluster_index_term := {4, 5},
+               cluster := #{N1 := _, N2 := _, N3 := _, N4 := _}} = State1,
+     _} = ra_server:handle_leader(Command, State0),
+
+    %% Sanity: membership should still be `voter` (N1 is in both clusters).
+    ?assertEqual(voter, maps:get(membership, State1, voter)),
+
+    %% Case 1: A new leader (N2, term 6) overwrites index 4 with a different
+    %% cluster change where N1 has voter_status = promotable.
+    N1Promotable = #{membership => promotable, uid => <<"n1">>},
+    NewCluster = #{N1 => new_peer_with(#{next_index => 4, match_index => 3,
+                                         voter_status => N1Promotable}),
+                   N2 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N3 => new_peer_with(#{next_index => 4, match_index => 3})},
+    OverwriteCC = {4, 6, {'$ra_cluster_change', meta(),
+                          NewCluster, await_consensus}},
+    AE1 = #append_entries_rpc{term = 6, leader_id = N2,
+                              prev_log_index = 3, prev_log_term = 5,
+                              leader_commit = 3,
+                              entries = [OverwriteCC]},
+    {follower, State2, _} = ra_server:handle_follower(AE1, State1),
+    %% The cluster should be NewCluster (3 members, N1 is promotable).
+    ?assertEqual({4, 6}, maps:get(cluster_index_term, State2)),
+    3 = maps:size(maps:get(cluster, State2)),
+    %% Key assertion: membership should be updated to promotable for N1.
+    ?assertEqual(promotable, maps:get(membership, State2)),
+
+    %% Case 2: Test the revert path. Starting from State1 (leader stepped
+    %% down, cluster change at index 4 term 5 added N4, previous_cluster
+    %% is set to OldCluster). A new leader sends a noop at index 4 term 7,
+    %% which triggers the revert to previous_cluster.
+    NoopEntry = {4, 7, {noop, meta(), 1}},
+    AE2 = #append_entries_rpc{term = 7, leader_id = N2,
+                              prev_log_index = 3, prev_log_term = 5,
+                              leader_commit = 3,
+                              entries = [NoopEntry]},
+    {follower, State3, _} = ra_server:handle_follower(AE2, State1),
+    %% The cluster should revert to OldCluster (N1, N2, N3).
+    RevertedCluster = maps:get(cluster, State3),
+    #{N1 := _, N2 := _, N3 := _} = RevertedCluster,
+    3 = maps:size(RevertedCluster),
+    %% Key assertion: membership should be updated (voter, since N1 has
+    %% no voter_status in OldCluster and falls back to current default).
+    ?assertEqual(voter, maps:get(membership, State3)),
     ok.
 
 is_new(_Config) ->
