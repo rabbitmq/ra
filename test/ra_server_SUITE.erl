@@ -64,6 +64,7 @@ all() ->
      leader_server_leave,
      leader_is_removed,
      follower_cluster_change,
+     follower_cluster_change_overwrite,
      leader_applies_new_cluster,
      leader_applies_new_cluster_nonvoter,
      leader_appends_cluster_change_then_steps_before_applying_it,
@@ -2015,6 +2016,55 @@ follower_cluster_change(_Config) ->
             ra_server:handle_follower(written_evt(5, {4, 4}), Int)
         end,
 
+    ok.
+
+%% Test that a new leader overwriting an uncommitted cluster change entry
+%% does not crash the follower with {badkey, previous_cluster}.
+follower_cluster_change_overwrite(_Config) ->
+    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
+    OldCluster = #{N1 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N2 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N3 => new_peer_with(#{next_index => 4, match_index => 3})},
+    Base = base_state(3, ?FUNCTION_NAME),
+    Cfg = maps:get(cfg, Base),
+    State0 = Base#{cfg => Cfg#cfg{id = N2,
+                                   uid = <<"n2">>,
+                                   log_id = "n2"},
+                   cluster => OldCluster},
+
+    %% N1 (leader, term 5) sends AER with cluster change at index 4.
+    NewCluster = #{N1 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N2 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N3 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N4 => new_peer_with(#{next_index => 1})},
+    ClusterChangeEntry = {4, 5, {'$ra_cluster_change', meta(),
+                                  NewCluster, await_consensus}},
+    AER1 = #append_entries_rpc{term = 5, leader_id = N1,
+                               prev_log_index = 3,
+                               prev_log_term = 5,
+                               leader_commit = 3,
+                               entries = [ClusterChangeEntry]},
+    {follower, State1, _} = ra_server:handle_follower(AER1, State0),
+    {follower, State2, _} = ra_server:handle_follower(written_evt(5, {4, 4}), State1),
+
+    %% Verify follower applied cluster change and stored previous_cluster.
+    ?assertMatch(#{cluster_index_term := {4, 5}}, State2),
+    ?assert(maps:is_key(previous_cluster, State2)),
+
+    %% N3 becomes leader at term 6, overwrites index 4 with a regular entry.
+    RegularEntry = {4, 6, usr(<<"overwrite">>)},
+    AER2 = #append_entries_rpc{term = 6, leader_id = N3,
+                               prev_log_index = 3,
+                               prev_log_term = 5,
+                               leader_commit = 3,
+                               entries = [RegularEntry]},
+
+    %% Before the fix this would crash with {badkey, previous_cluster}.
+    {follower, State3, _} = ra_server:handle_follower(AER2, State2),
+
+    %% Cluster change should be reverted.
+    ?assertMatch(#{cluster_index_term := {0, 0}}, State3),
+    ?assertNot(maps:is_key(N4, maps:get(cluster, State3))),
     ok.
 
 written_evt(Term, Range) when is_tuple(Range) ->
