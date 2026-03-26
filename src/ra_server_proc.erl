@@ -631,12 +631,9 @@ leader(_, tick_timeout,
     State = send_applied_notifications(#{}, State2),
     {keep_state, State,
      set_tick_timer(State, Actions)};
-leader({timeout, Name}, machine_timeout, State0) ->
-    % the machine timer timed out, add a timeout message
-    Cmd = make_command('$usr', cast, {timeout, Name}, noreply),
-    {leader, State1, Effects} = handle_leader({command, Cmd}, State0),
-    {State, Actions} = ?HANDLE_EFFECTS(Effects, cast, State1),
-    {keep_state, State, Actions};
+leader({timeout, Name}, machine_timeout, State) ->
+    Evt = {command, normal, {'$usr', {timeout, Name}, noreply}},
+    {keep_state, State, [{next_event, cast, Evt}]};
 leader({timeout, {snapshot_retry, PeerId}}, {snapshot_retry, PeerId},
        #state{server_state = SS0} = State0) ->
     %% Reset peer status from backoff to normal and trigger RPC evaluation
