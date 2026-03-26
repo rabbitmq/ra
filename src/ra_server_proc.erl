@@ -1132,6 +1132,26 @@ await_condition({call, From}, ping, State) ->
 await_condition({call, From}, trigger_election, State) ->
     {keep_state, State, [{reply, From, ok},
                          {next_event, cast, election_timeout}]};
+await_condition(_, {command, _Priority, {_CmdType, _Data, noreply}},
+                State) ->
+    %% During await_condition (e.g. leadership transfer) we are not
+    %% accepting commands.  Noreply commands are dropped since there
+    %% is nobody to reply to.  The leader_id still points to ourselves
+    %% so we cannot meaningfully forward.
+    ?DEBUG("~ts: await_condition dropping noreply command",
+           [log_id(State)]),
+    {keep_state, State, []};
+await_condition(cast, {command, _Priority,
+                       {_CmdType, _Data, {notify, Corr, Pid}}},
+                State) ->
+    %% Reject with not_leader so the client can retry.  We send
+    %% leader_id=undefined because we are mid-transfer and the
+    %% new leader has not been established yet.
+    ?DEBUG("~ts: await_condition rejecting notify command",
+           [log_id(State)]),
+    send_ra_event(Pid, {not_leader, undefined, Corr},
+                  id(State), rejected, State),
+    {keep_state, State, []};
 await_condition(info, {'DOWN', MRef, process, _Pid, _Info},
                 State = #state{leader_monitor = MRef}) ->
     ?INFO("~ts: await_condition - Leader monitor down. Entering follower state.",
