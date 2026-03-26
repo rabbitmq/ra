@@ -1118,6 +1118,25 @@ handle_candidate(#request_vote_result{}, State) ->
 handle_candidate(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {candidate, State, []};
+handle_candidate(#install_snapshot_rpc{term = Term} = ISR,
+                 #{current_term := CurTerm,
+                   cfg := #cfg{log_id = LogId}} = State0)
+  when Term >= CurTerm ->
+    ?INFO("~ts: candidate received install_snapshot_rpc for term ~b,"
+          " stepping down from term ~b", [LogId, Term, CurTerm]),
+    {follower, State0#{votes => 0}, [{next_event, ISR}]};
+handle_candidate(#install_snapshot_rpc{term = Term,
+                                       meta = #{index := LastIndex,
+                                                 term := LastTerm}},
+                 #{cfg := #cfg{log_id = LogId},
+                   current_term := CurTerm} = State)
+  when Term < CurTerm ->
+    ?DEBUG("~ts: candidate install_snapshot old term ~b in ~b",
+          [LogId, LastIndex, LastTerm]),
+    Reply = #install_snapshot_result{term = CurTerm,
+                                     last_term = LastTerm,
+                                     last_index = LastIndex},
+    {candidate, State, [{reply, Reply}]};
 handle_candidate({ra_log_event, Evt}, State = #{log := Log0}) ->
     % simply forward all other events to ra_log
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
