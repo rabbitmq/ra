@@ -23,6 +23,7 @@ all_tests() ->
      append_then_fetch,
      write_then_fetch,
      write_sparse_then_fetch,
+     write_sparse_then_recover,
      append_then_fetch_no_wait,
      write_then_overwrite,
      append_integrity_error,
@@ -116,6 +117,35 @@ write_sparse_then_fetch(Config) ->
     {Idx5, Term} = ra_log:last_written(Log),
     {Idx5, _} = ra_log:last_index_term(Log),
     {{Idx5, Term, "entry+5"}, Log} = ra_log:fetch(Idx5, Log),
+    ok.
+
+write_sparse_then_recover(Config) ->
+    Log0 = ?config(ra_log, Config),
+    InitFun = ?config(init_fun, Config),
+    Term = 1,
+    Idx = ra_log:next_index(Log0),
+    Idx5 = Idx + 5,
+    Entry1 = {Idx, Term, "entry"},
+    %% sparse
+    Entry2 = {Idx5, Term, "entry+5"},
+
+    {LastIdx0, _} = ra_log:last_index_term(Log0),
+    {ok, Log1} = ra_log:write_sparse(Entry1, LastIdx0, Log0),
+    {ok, Log2} = ra_log:write_sparse(Entry2, Idx, Log1),
+    Log3 = await_written_idx(Idx5, Term, Log2),
+
+    %% close log
+    ok = ra_log:close(Log3),
+
+    %% restart ra to force WAL recovery from disk
+    application:stop(ra),
+    {ok, _} = ra:start_in(?config(priv_dir, Config)),
+
+    %% recover
+    Log4 = InitFun(write_sparse_then_recover),
+
+    {{Idx, Term, "entry"}, Log5} = ra_log:fetch(Idx, Log4),
+    {{Idx5, Term, "entry+5"}, _Log6} = ra_log:fetch(Idx5, Log5),
     ok.
 
 append_then_fetch_no_wait(Config) ->
