@@ -3526,8 +3526,8 @@ pre_append_log_follower({Idx, Term, Cmd} = Entry,
             pre_append_log_follower(Entry, State1)
     end;
 pre_append_log_follower({Idx, Term, {'$ra_cluster_change', _, Cluster, _}},
-                        State = #{cluster := PrevCluster,
-                                  cluster_index_term := {PrevCITIdx, PrevCITTerm}}) ->
+                        #{cluster := PrevCluster,
+                          cluster_index_term := {PrevCITIdx, PrevCITTerm}} = State) ->
     ?DEBUG("~ts: ~ts: follower applying ra cluster change to ~tw",
            [log_id(State), ?FUNCTION_NAME, maps:keys(Cluster)]),
     State#{cluster => Cluster,
