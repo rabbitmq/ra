@@ -1108,7 +1108,7 @@ handle_candidate(#request_vote_rpc{}, State = #{current_term := Term}) ->
     Reply = #request_vote_result{term = Term, vote_granted = false},
     {candidate, State, [{reply, Reply}]};
 handle_candidate(#pre_vote_rpc{} = PreVote, State) ->
-    %% unlike request_vote_rpc, a candidate cannot simply reject 
+    %% unlike request_vote_rpc, a candidate cannot simply reject
     %% a pre_vote_rpc that does not have a higher term
     %% (see https://github.com/rabbitmq/ra/issues/439 for the detail)
     process_pre_vote(candidate, PreVote, State);
@@ -2908,6 +2908,8 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                                effective_machine_version = EffMacVer},
                    current_term := CurTerm} = State0)
   when Term >= CurTerm  ->
+    %% Pre-vote must not set voted_for (per Raft thesis Section 9.6),
+    %% but should still update current_term to retain the highest known term.
     State = update_term(Term, State0),
     LastIdxTerm = last_idx_term(State),
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
@@ -2924,7 +2926,7 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                    " for term ~b previous term ~b",
                    [log_id(State0), Cand, TheirMacVer, OurMacVer, EffMacVer,
                     {LLIdx, LLTerm}, Term, CurTerm]),
-            {FsmState, State#{voted_for => Cand},
+            {FsmState, State,
              [{reply, pre_vote_result(Term, Token, true)}]};
         true ->
             ?DEBUG("~ts: declining pre-vote for ~tw their machine version ~b"
