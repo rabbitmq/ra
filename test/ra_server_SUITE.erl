@@ -83,6 +83,7 @@ all() ->
      receive_snapshot_request_vote_higher_term,
      receive_snapshot_request_vote_lower_term,
      receive_snapshot_pre_vote,
+     receive_snapshot_catchall_drops_unknown,
      snapshotted_follower_received_append_entries,
      leader_received_append_entries_reply_with_stale_last_index,
      leader_receives_install_snapshot_result,
@@ -3016,6 +3017,16 @@ receive_snapshot_pre_vote(_Config) ->
                       end, Effects)),
     ok.
 
+receive_snapshot_catchall_drops_unknown(_Config) ->
+    %% Verify that the catch-all clause in handle_receive_snapshot
+    %% drops unknown messages without returning a permanent error
+    State = base_state(3, ?FUNCTION_NAME),
+    {receive_snapshot, State, []} =
+        ra_server:handle_receive_snapshot(some_unknown_message, State),
+    {receive_snapshot, State, []} =
+        ra_server:handle_receive_snapshot({weird, tuple, msg}, State),
+    ok.
+
 snapshotted_follower_received_append_entries(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
     #{N3 := {_, FState00 = #{cluster := Config}, _}} =
@@ -3717,13 +3728,13 @@ receive_snapshot_heartbeat_dropped(_Config) ->
     Heartbeat = #heartbeat_rpc{term = Term,
                                query_index = QueryIndex,
                                leader_id = Id},
-    {receive_snapshot, State, [{reply, {error, {unsupported_call, _}}}]} =
+    {receive_snapshot, State, []} =
         ra_server:handle_receive_snapshot(Heartbeat, State),
     %% Term does not matter
-    {receive_snapshot, State, [{reply, {error, {unsupported_call, _}}}]} =
+    {receive_snapshot, State, []} =
         ra_server:handle_receive_snapshot(Heartbeat#heartbeat_rpc{term = Term + 1},
                                           State),
-    {receive_snapshot, State, [{reply, {error, {unsupported_call, _}}}]} =
+    {receive_snapshot, State, []} =
         ra_server:handle_receive_snapshot(Heartbeat#heartbeat_rpc{term = Term - 1},
                                           State).
 
@@ -3734,13 +3745,13 @@ receive_snapshot_heartbeat_reply_dropped(_config) ->
 
     HeartbeatReply = #heartbeat_reply{term = Term,
                                       query_index = QueryIndex},
-    {receive_snapshot, State, [{reply, {error, {unsupported_call, _}}}]} =
+    {receive_snapshot, State, []} =
         ra_server:handle_receive_snapshot(HeartbeatReply, State),
     %% Term does not matter
-    {receive_snapshot, State, [{reply, {error, {unsupported_call, _}}}]} =
+    {receive_snapshot, State, []} =
         ra_server:handle_receive_snapshot(HeartbeatReply#heartbeat_reply{term = Term + 1},
                                           State),
-    {receive_snapshot, State, [{reply, {error, {unsupported_call, _}}}]} =
+    {receive_snapshot, State, []} =
         ra_server:handle_receive_snapshot(HeartbeatReply#heartbeat_reply{term = Term - 1},
                                           State).
 

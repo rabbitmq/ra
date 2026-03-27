@@ -1011,6 +1011,27 @@ receive_snapshot(info, {'DOWN', MRef, process, _Pid, _Info},
           [log_id(State)]),
     receive_snapshot(info, receive_snapshot_timeout,
                      State#state{leader_monitor = undefined});
+receive_snapshot(_, {command, Priority, {_CmdType, Data, noreply}},
+                 State) ->
+    %% forward to leader
+    case leader_id(State) of
+        undefined ->
+            ?WARN("~ts: receive_snapshot leader cast - leader not known. "
+                  "Command is dropped.", [log_id(State)]),
+            {keep_state, State, []};
+        LeaderId ->
+            ?DEBUG("~ts: receive_snapshot leader cast - redirecting to ~tw ",
+                   [log_id(State), LeaderId]),
+            ok = ra:pipeline_command(LeaderId, Data, no_correlation, Priority),
+            {keep_state, State, []}
+    end;
+receive_snapshot(cast, {command, _Priority,
+                        {_CmdType, _Data, {notify, Corr, Pid}}},
+                 State) ->
+    _ = reject_command(Pid, Corr, State),
+    {keep_state, State, []};
+receive_snapshot({call, From}, ping, State) ->
+    {keep_state, State, [{reply, From, {pong, receive_snapshot}}]};
 receive_snapshot(EventType, Msg, State00) ->
     %% HACK: if the EventType is a {call, From} we stash the from in the
     %% ServerState, this is so ra_server can defer the snapshot reply in
