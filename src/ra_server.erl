@@ -1856,9 +1856,7 @@ handle_receive_snapshot(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(receive_snapshot, PreVote, State);
 handle_receive_snapshot(Msg, State) ->
     log_unhandled_msg(receive_snapshot, Msg, State),
-    %% drop all other events??
-    %% TODO: work out what else to handle
-    {receive_snapshot, State, [{reply, {error, {unsupported_call, Msg}}}]}.
+    {receive_snapshot, State, []}.
 
 abort_receive(#{snapshot_phase := _Phase,
                 last_applied := LastApplied,
