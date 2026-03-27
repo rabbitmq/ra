@@ -2889,15 +2889,15 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                                effective_machine_version = EffMacVer},
                    current_term := CurTerm} = State0)
   when Term >= CurTerm  ->
-    %% Pre-vote must not change the receiver's term or voted_for.
-    %% Per Raft thesis Section 9.6, pre-votes are side-effect-free
-    %% so that a partitioned node can probe without disrupting the cluster.
-    LastIdxTerm = last_idx_term(State0),
+    %% Pre-vote must not set voted_for (per Raft thesis Section 9.6),
+    %% but should still update current_term to retain the highest known term.
+    State = update_term(Term, State0),
+    LastIdxTerm = last_idx_term(State),
     case is_candidate_log_up_to_date(LLIdx, LLTerm, LastIdxTerm) of
         true when Version > ?RA_PROTO_VERSION->
             ?DEBUG("~ts: declining pre-vote for ~tw for protocol version ~b",
                    [log_id(State0), Cand, Version]),
-            {FsmState, State0, [{reply, pre_vote_result(Term, Token, false)}]};
+            {FsmState, State, [{reply, pre_vote_result(Term, Token, false)}]};
         true when TheirMacVer == EffMacVer orelse
                   (TheirMacVer >= EffMacVer andalso
                    TheirMacVer =< OurMacVer) ->
@@ -2907,13 +2907,13 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                    " for term ~b previous term ~b",
                    [log_id(State0), Cand, TheirMacVer, OurMacVer, EffMacVer,
                     {LLIdx, LLTerm}, Term, CurTerm]),
-            {FsmState, State0,
+            {FsmState, State,
              [{reply, pre_vote_result(Term, Token, true)}]};
         true ->
             ?DEBUG("~ts: declining pre-vote for ~tw their machine version ~b"
                    " ours is ~b effective ~b",
                    [log_id(State0), Cand, TheirMacVer, OurMacVer, EffMacVer]),
-            {FsmState, State0, [{reply, pre_vote_result(Term, Token, false)},
+            {FsmState, State, [{reply, pre_vote_result(Term, Token, false)},
                                start_election_timeout]};
         false ->
             ?DEBUG("~ts: declining pre-vote for ~tw for term ~b,"
@@ -2922,9 +2922,9 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
                    [log_id(State0), Cand, Term, {LLIdx, LLTerm}, LastIdxTerm]),
             case FsmState of
                 follower ->
-                    {FsmState, State0, [start_election_timeout]};
+                    {FsmState, State, [start_election_timeout]};
                 _ ->
-                    {FsmState, State0,
+                    {FsmState, State,
                      [{reply, pre_vote_result(Term, Token, false)}]}
             end
     end;

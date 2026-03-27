@@ -38,7 +38,6 @@ all() ->
      append_entries_reply_no_success_from_unknown_peer,
      follower_request_vote,
      follower_pre_vote,
-     pre_vote_does_not_bump_term,
      pre_vote_does_not_set_voted_for,
      pre_vote_receives_pre_vote,
      await_condition_receives_pre_vote,
@@ -1566,8 +1565,8 @@ follower_pre_vote(_Config) ->
     % when candidate last log entry has a lower term
     % the current server is a better candidate and thus
     % requests that an election timeout is started
-    % pre-vote must not bump the receiver's term
-    {follower, #{current_term := 5},
+    % pre-vote should update the receiver's term to the highest known
+    {follower, #{current_term := 6},
      [start_election_timeout]} =
     ra_server:handle_follower(Msg#pre_vote_rpc{last_log_term = 4,
                                                term = 6},
@@ -1583,31 +1582,6 @@ follower_pre_vote(_Config) ->
     % non-voters ignore pre_vote_rpc
     NVState = State#{membership => promotable},
     {follower, NVState, []} = ra_server:handle_follower(Msg, NVState),
-
-    ok.
-
-pre_vote_does_not_bump_term(_Config) ->
-    %% Per Raft thesis Section 9.6, a pre-vote must not change the
-    %% receiver's current term. A pre-vote with a higher term should
-    %% still leave the receiver's term unchanged.
-    State = base_state(3, ?FUNCTION_NAME),
-    Token = make_ref(),
-    HigherTerm = 10,
-    Msg = #pre_vote_rpc{candidate_id = ?N2, term = HigherTerm,
-                        last_log_index = 3, last_log_term = 5,
-                        machine_version = 0, token = Token},
-
-    %% grant pre-vote but term must stay at 5 (the original term)
-    {follower, #{current_term := 5},
-     [{reply, #pre_vote_result{term = HigherTerm, token = Token,
-                               vote_granted = true}}]} =
-        ra_server:handle_follower(Msg, State),
-
-    %% also verify the pre_vote state handles it without term bump
-    {pre_vote, #{current_term := 5},
-     [{reply, #pre_vote_result{term = HigherTerm, token = Token,
-                               vote_granted = true}}]} =
-        ra_server:handle_pre_vote(Msg, State),
 
     ok.
 
