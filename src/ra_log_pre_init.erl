@@ -90,10 +90,27 @@ pre_init(System, UId) ->
                         true ->
                             case ra_log:read_config(Dir) of
                                 {ok, #{log_init_args := Log}} ->
-                                    ok = ra_log:pre_init(Log#{system_config => SysCfg}),
+                                    ok = ra_log:pre_init(
+                                           Log#{system_config => SysCfg}),
+                                    ok;
+                                {error, Err}
+                                  when Err == parsing orelse
+                                       Err == enoent ->
+                                    %% There errors indicate corrupt or missing
+                                    %% config file which cannot be recovered from
+                                    %% in this case we unregister the name which
+                                    %% will necessitate the member starting as
+                                    %% a new member
+                                    ?ERROR("pre_init failed to read config file "
+                                           "for UId '~ts', Err ~p, recovery cannot "
+                                           "complete with a corrupt config file "
+                                           "unregistering name to start as new member",
+                                           [UId, Err]),
+                                    _ = catch ra_directory:unregister_name(System, UId),
                                     ok;
                                 {error, Err} ->
-                                    ?ERROR("pre_init failed to read config file for UId '~ts', Err ~p",
+                                    ?ERROR("pre_init failed to read config file "
+                                           "for UId '~ts', Err ~p ",
                                            [UId, Err]),
                                     ok
                             end;
