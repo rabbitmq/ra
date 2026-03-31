@@ -1489,7 +1489,14 @@ read_config(#?MODULE{cfg = #cfg{directory = Dir}}) ->
     read_config(Dir);
 read_config(Dir) ->
     ConfigPath = filename:join(Dir, <<"config">>),
-    ra_lib:consult(ConfigPath).
+    case ra_lib:consult(ConfigPath) of
+        {ok, _} = Res ->
+            Res;
+        {error, {_, erl_parse, _}} ->
+            {error, parsing};
+        Err ->
+            Err
+    end.
 
 -spec delete_everything(state()) -> ok.
 delete_everything(#?MODULE{cfg = #cfg{uid = UId,

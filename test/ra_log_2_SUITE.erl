@@ -48,6 +48,7 @@ all_tests() ->
      recovery_with_missing_directory,
      recovery_with_missing_checkpoints_directory,
      recovery_with_missing_config_file,
+     recovery_with_corrupt_config_file,
      wal_crash_recover,
      wal_crash_with_lost_message_and_log_init,
      missed_written_then_write,
@@ -1107,8 +1108,8 @@ recovery_with_missing_checkpoints_directory(Config) ->
     ok.
 
 recovery_with_missing_config_file(Config) ->
-    %% checking that the ra system can be restarted even when the config
-    %% file is missing
+    %% Checking that when the config file is missing on restart, pre_init
+    %% unregisters the name so the server can rejoin as a new member.
     logger:set_primary_config(level, debug),
     UId = ?config(uid, Config),
     Log0 = ra_log_init(Config),
@@ -1119,8 +1120,35 @@ recovery_with_missing_config_file(Config) ->
     file:delete(ConfigFile),
     ?assertNot(filelib:is_file(ConfigFile)),
 
+    ?assert(ra_directory:is_registered_uid(default, UId)),
     application:stop(ra),
     start_ra(Config),
+    ?assertNot(ra_directory:is_registered_uid(default, UId)),
+
+    Log5 = ra_log_init(Config),
+    ra_log:close(Log5),
+    ok = ra_lib:recursive_delete(ServerDataDir),
+    ?assertNot(filelib:is_dir(ServerDataDir)),
+
+    ok.
+
+recovery_with_corrupt_config_file(Config) ->
+    %% Checking that when the config file is corrupt (unparseable) on restart,
+    %% pre_init unregisters the name so the server can rejoin as a new member.
+    logger:set_primary_config(level, debug),
+    UId = ?config(uid, Config),
+    Log0 = ra_log_init(Config),
+    ra_log:close(Log0),
+
+    ServerDataDir = ra_env:server_data_dir(default, UId),
+    ConfigFile = filename:join(ServerDataDir, "config"),
+    %% overwrite with an incomplete/corrupt Erlang term (no closing brace or dot)
+    ok = ra_lib:write_file(ConfigFile, <<"{incomplete_term_no_dot">>),
+
+    ?assert(ra_directory:is_registered_uid(default, UId)),
+    application:stop(ra),
+    start_ra(Config),
+    ?assertNot(ra_directory:is_registered_uid(default, UId)),
 
     Log5 = ra_log_init(Config),
     ra_log:close(Log5),

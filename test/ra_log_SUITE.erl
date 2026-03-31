@@ -50,8 +50,18 @@ init_per_group(tests, Config) ->
                       UId = atom_to_binary(TestCase, utf8),
                       ra_directory:register_name(?SYS, UId, self(), undefined,
                                                  TestCase, TestCase),
-                      ra_log:init(#{uid => UId,
-                                    system_config => SysCfg})
+                      LogConf = #{uid => UId,
+                                  system_config => SysCfg},
+                      Config0= #{id => {bah, hum},
+                                 uid => UId,
+                                 cluster_name => hum,
+                                 log_init_args => LogConf,
+                                 initial_members => [{bah, hum}],
+                                 machine => {module, ?MODULE, #{}}},
+                      Log = ra_log:init(LogConf),
+                      %% need to do that for re-inits
+                      ra_log:write_config(Config0, Log),
+                      Log
               end,
     [{init_fun, InitFun} | Config].
 
