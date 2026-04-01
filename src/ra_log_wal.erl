@@ -139,7 +139,7 @@
                       pre_allocate => boolean(),
                       sync_method => sync | datasync,
                       recovery_chunk_size  => non_neg_integer(),
-                      hibernate_after => non_neg_integer(),
+                      hibernate_after => infinity | non_neg_integer(),
                       max_batch_size => non_neg_integer(),
                       garbage_collect => boolean(),
                       min_heap_size => non_neg_integer(),
@@ -268,14 +268,19 @@ start_link(#{dir := _,
   when is_atom(Name) ->
     WalMaxBatchSize = maps:get(max_batch_size, Config,
                                ?WAL_DEFAULT_MAX_BATCH_SIZE),
-    Options0 = case maps:get(hibernate_after, Config, undefined) of
-                   undefined ->
-                       [{max_batch_size, WalMaxBatchSize}];
-                   Hib ->
-                       [{hibernate_after, Hib},
-                        {max_batch_size, WalMaxBatchSize}]
-               end,
-    Options = [{reversed_batch, true} | Options0],
+    Opts0 = case Config of
+                #{hibernate_after := Hib}
+                  when is_integer(Hib) ->
+                    [{hibernate_after, Hib}];
+                _ ->
+                    []
+            end,
+
+    Options = [{reversed_batch, true},
+               {flush_mailbox_on_terminate, {true, 10}},
+               {max_batch_size, WalMaxBatchSize}
+               | Opts0],
+
     gen_batch_server:start_link({local, Name}, ?MODULE, Config, Options).
 
 %%% Callbacks
