@@ -38,7 +38,7 @@
                     wal_max_batch_size => non_neg_integer(),
                     wal_max_entries => undefined | non_neg_integer(),
                     wal_sync_method => datasync | sync | none,
-                    wal_hibernate_after => non_neg_integer(),
+                    wal_hibernate_after => infinity | non_neg_integer(),
                     wal_garbage_collect => boolean(),
                     wal_pre_allocate => boolean(),
                     segment_max_entries => non_neg_integer(),
