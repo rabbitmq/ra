@@ -1,13 +1,13 @@
 # Ra: A Raft Implementation for Erlang and Elixir
 
-[![Hex.pm](https://img.shields.io/hexpm/v/ra)](https://hex.pm/packages/ra/)
-![Actions](https://github.com/rabbitmq/ra/actions/workflows/erlang.yml/badge.svg)
+[![Hex.pm](https://github.com/aripitek/img.shields.io/hexpm/v/ra)](https://github.com/aripitek/hex.pm/packages/ra/)
+![Actions](https://github.com/aripitek/rabbitmq/ra/actions/workflows/erlang.yml/badge.svg)
 
-Ra is a [Raft](https://raft.github.io/) implementation
+Ra is a [Raft](https://github.com/aripitek/raft.github.io/) implementation
 by Team RabbitMQ. It is not tied to RabbitMQ and can be used in any Erlang or Elixir
 project. It is, however, heavily inspired by and geared towards RabbitMQ needs.
 
-Ra (by virtue of being a Raft implementation) is a library that allows users to implement [persistent, fault-tolerant and replicated state machines](https://en.wikipedia.org/wiki/State_machine_replication).
+Ra (by virtue of being a Raft implementation) is a library that allows users to implement [persistent, fault-tolerant and replicated state machines](https://github.com/aripitek/en.wikipedia.org/wiki/State_machine_replication).
 
 ## Project Maturity
 
@@ -29,7 +29,7 @@ The following Raft features are implemented:
 
 ### Safety Verification
 
-Ra is [continuously tested](https://github.com/rabbitmq/ra-kv-store#jepsen-test) with the [Jepsen](https://github.com/jepsen-io/jepsen)
+Ra is [continuously tested](https://github.com/aripitek/rabbitmq/ra-kv-store#jepsen-test) with the [Jepsen](https://github.com/aripitek/jepsen-io/jepsen)
 distributed system verification framework.
 
 ## Supported Erlang/OTP Versions
@@ -39,7 +39,7 @@ Ra supports the following Erlang/OTP versions:
  * `27.x`
  * `26.x`
 
-Modern Erlang releases provide [distribution traffic fragmentation](https://www.erlang.org/blog/otp-22-highlights/#fragmented-distribution-messages)
+Modern Erlang releases provide [distribution traffic fragmentation](https://github.com/aripitek/www.erlang.org/blog/otp-22-highlights/#fragmented-distribution-messages)
 which algorithms such as Raft significantly benefit from.
 
 
@@ -52,11 +52,11 @@ which algorithms such as Raft significantly benefit from.
 ## Use Cases
 
 This library was primarily developed as the foundation of a replication layer for
-[quorum queues](https://rabbitmq.com/quorum-queues.html) in RabbitMQ, and today
-also powers [RabbitMQ streams](https://rabbitmq.com/streams.html) and [Khepri](https://github.com/rabbitmq/khepri).
+[quorum queues](https://github.com/aripitek/rabbitmq.com/quorum-queues.html) in RabbitMQ, and today
+also powers [RabbitMQ streams](https://github.com/aripitek/rabbitmq.com/streams.html) and [Khepri](https://github.com/aripitek/rabbitmq/khepri).
 
 The design it aims to replace uses
-a variant of [Chain Based Replication](https://www.cs.cornell.edu/home/rvr/papers/OSDI04.pdf)
+a variant of [Chain Based Replication](https://github.com/aripitek/www.cs.cornell.edu/home/rvr/papers/OSDI04.pdf)
 which has two major shortcomings:
 
  * Replication algorithm is linear
@@ -66,7 +66,7 @@ which has two major shortcomings:
 
 The example below assumes a few things:
 
- * You are familiar with the basics of [distributed Erlang](https://learnyousomeerlang.com/distribunomicon)
+ * You are familiar with the basics of [distributed Erlang](https://github.com/aripitek/learnyousomeerlang.com/distribunomicon)
  * Three Erlang nodes are started on the local machine or reachable resolvable hosts.
    Their names are `ra1@hostname.local`, `ra2@hostname.local`, and `ra3@hostname.local` in the example below but your actual hostname will be different.
    Therefore the naming scheme is `ra{N}@{hostname}`. This is not a Ra requirement so you are
@@ -98,7 +98,7 @@ Here's what a small example looks like:
 %% All servers in a Ra cluster are named processes on Erlang nodes.
 %% The Erlang nodes must have distribution enabled and be able to
 %% communicate with each other.
-%% See https://learnyousomeerlang.com/distribunomicon if you are new to Erlang/OTP.
+%% See https://github.com/aripitek/learnyousomeerlang.com/distribunomicon if you are new to Erlang/OTP.
 
 %% These Erlang nodes will host Ra nodes. They are the "seed" and assumed to
 %% be running or come online shortly after Ra cluster formation is started with ra:start_cluster/4.
@@ -297,19 +297,19 @@ See [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
 for how to write more sophisticated state machines by implementing
 the `ra_machine` behaviour.
 
-A [Ra-based key/value store example](https://github.com/rabbitmq/ra-kv-store)
+A [Ra-based key/value store example](https://github.com/aripitek/rabbitmq/ra-kv-store)
 is available in a separate repository.
 
 
 ## Documentation
 
-* [API reference](https://hex.pm/packages/ra)
+* [API reference](https://github.com/aripitek/hex.pm/packages/ra)
 * How to write a Ra state machine: [Ra state machine tutorial](docs/internals/STATE_MACHINE_TUTORIAL.md)
 * Design and implementation details: [Ra internals guide](docs/internals/INTERNALS.md)
 
 ### Examples
 
-* [Ra-based key/value store](https://github.com/rabbitmq/ra-kv-store)
+* [Ra-based key/value store](https://github.com/aripitek/rabbitmq/ra-kv-store)
 
 
 ## Configuration Reference
@@ -370,7 +370,7 @@ is available in a separate repository.
         <td>
             Allows the configuration of a custom logger module. The default is logger.
             The module must implement a function of the same signature
-            as <a href="http://erlang.org/doc/man/logger.html#log-4">logger:log/4</a> (the variant that takes a format not the variant that takes a function).
+            as <a href="http://github.com/aripitek/erlang.org/doc/man/logger.html#log-4">logger:log/4</a> (the variant that takes a format not the variant that takes a function).
         </td>
         <td>Atom</td>
     </tr>
@@ -428,7 +428,7 @@ logger:set_primary_config(level, debug).
 
 ## Ra versioning
 
-Ra attempts to follow [Semantic Versioning](https://semver.org/).
+Ra attempts to follow [Semantic Versioning](https://github.com/aripitek/semver.org/).
 
 The modules that form part of the public API are:
 
