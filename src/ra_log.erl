@@ -1019,8 +1019,8 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes,
     % ?assert(ra_snapshot:pending(SnapState0) =/= undefined),
     SnapState1 = ra_snapshot:complete_snapshot(Snap, SnapKind, LiveIndexes,
                                                SnapshotSize, SnapState0),
-    ?DEBUG("~ts: ra_log: ~s written at index ~b with ~b live indexes in ~bms",
-           [LogId, SnapKind, SnapIdx, ra_seq:length(LiveIndexes), Duration]),
+    ?DEBUG("~ts: ra_log: ~s with ~b bytes written at index ~b with ~b live indexes in ~bms",
+           [LogId, SnapKind, SnapshotSize, SnapIdx, ra_seq:length(LiveIndexes), Duration]),
     case SnapKind of
         snapshot ->
             put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
