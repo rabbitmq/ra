@@ -863,7 +863,10 @@ copy_with_cache_loop(SrcFd, SrcIndex, DstState, [Idx | Rem] = Indexes, Cache0)
                                          Data, Crc),
             copy_with_cache_loop(SrcFd, SrcIndex, DstState1, Rem, Cache0)
     end;
-copy_with_cache_loop(_SrcFd, _SrcIndex, _DstState, [Idx | _], _Cache) ->
+copy_with_cache_loop(_SrcFd, _SrcIndex, _DstState, [Idx | _] = _Idxs, _Cache) ->
+    ?DEBUG("copy_missing_key error: SrcIndex ~p~n"
+           "Idxs rem ~p~n"
+           "Cache ~p", [_SrcIndex, _Idxs, _Cache]),
     exit({copy_missing_key, Idx}).
 
 %% Append an entry with a pre-computed CRC, avoiding CRC recomputation.
