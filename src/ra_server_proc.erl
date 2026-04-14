@@ -1708,10 +1708,11 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
                                    0
                            end,
             Id = ra_server:id(SS0),
+            UId = ra_server:uid(SS0),
             Pid = spawn(fun () ->
                                 send_snapshots(Id, Term, To,
                                                ChunkSize, InstallSnapTimeout,
-                                               SnapState, Machine, LogId)
+                                               SnapState, Machine, LogId, UId)
                         end),
             ok = incr_counter(Conf, ?C_RA_SRV_SNAPSHOTS_SENT, 1),
             %% update the peer state so that no pipelined entries are sent
@@ -2106,7 +2107,7 @@ read_entries0(From, Idxs, #state{server_state = #{log := Log}} = State) ->
     {keep_state, State, [{reply, From, {ok, ReadState}}]}.
 
 send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
-               InstallTimeout, SnapState, Machine, LogId) ->
+               InstallTimeout, SnapState, Machine, LogId, UId) ->
     Context = ra_snapshot:context(SnapState, ToNode),
     case ra_snapshot:begin_read(SnapState, Context) of
         {error, Reason} ->
@@ -2133,9 +2134,13 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                                 leader_id = Id,
                                                 chunk_state = {0, init},
                                                 meta = Meta},
-                    SnapDir = ra_snapshot:current_snapshot_dir(SnapState),
-                    case ra_snapshot:indexes(SnapDir) of
-                        {ok, [_|_] = Indexes0} ->
+                    %% Query ra_log_snapshot_state table for live indexes
+                    case ra_log_snapshot_state:read(ra_log_snapshot_state, UId) of
+                        undefined ->
+                            ?DEBUG("~ts: no snapshot state found in ra_log_snapshot_state for ~tw",
+                                   [LogId, To]),
+                            ok;
+                        {UId, SnapIdx, _SmallestIdx, LiveIndexes} ->
                             %% first send the init phase
                             try gen_statem:call(To, RPC,
                                                 {dirty_timeout, InstallTimeout}) of
@@ -2159,15 +2164,18 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                 erpc:call(ToNode, ra_counters, counters,
                                           [To, [last_applied]]),
                             %% remove all indexes lower than the target's last applied
-                            Indexes = ra_seq:floor(LastApplied + 1, Indexes0),
+                            Indexes = ra_seq:floor(LastApplied + 1, LiveIndexes),
                             ?DEBUG("~ts: sending ~b live indexes in the range ~w to ~tw ",
                                    [LogId, ra_seq:length(Indexes), ra_seq:range(Indexes), To]),
                             MaybeFlru = send_pre_snapshot_entries(Id, To, RPC, Indexes,
                                                                   InstallTimeout, undefined),
                             _ = maybe_evict_flru(MaybeFlru),
                             ok;
-                        _ ->
-                            ok
+                        {UId, TableSnapIdx, _SmallestIdx, _LiveIndexes} ->
+                            ?INFO("~ts: aborting snapshot send to ~tw: "
+                                  "table snapshot index ~b does not match requested index ~b",
+                                  [LogId, To, TableSnapIdx, SnapIdx]),
+                            exit({snapshot_index_mismatch, TableSnapIdx, SnapIdx})
                     end,
 
                     Result = send_snapshot_chunks(RPC, To, ReadState, 1,

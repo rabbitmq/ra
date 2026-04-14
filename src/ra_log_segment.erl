@@ -863,7 +863,11 @@ copy_with_cache_loop(SrcFd, SrcIndex, DstState, [Idx | Rem] = Indexes, Cache0)
                                          Data, Crc),
             copy_with_cache_loop(SrcFd, SrcIndex, DstState1, Rem, Cache0)
     end;
-copy_with_cache_loop(_SrcFd, _SrcIndex, _DstState, [Idx | _], _Cache) ->
+copy_with_cache_loop(_SrcFd, SrcIndex,
+                     #state{cfg = #cfg{filename = DstFilename}} = _DstState,
+                     [Idx | _] = Idxs, _Cache) ->
+    ?DEBUG("copy_missing_key: DstFile: ~ts, SrcIndex: ~w, Idxs; ~w",
+           [DstFilename, maps:keys(SrcIndex), Idxs]),
     exit({copy_missing_key, Idx}).
 
 %% Append an entry with a pre-computed CRC, avoiding CRC recomputation.
