@@ -354,7 +354,13 @@ delete({delete, Tid}) ->
 delete({multi, Specs}) ->
     lists:foldl(
       fun (Spec, Acc) ->
-              Acc + delete(Spec)
+              try delete(Spec) of
+                  Sz ->
+                      Acc + Sz
+              catch _:badarg ->
+                        %% table probably didn't exist
+                        Acc
+              end
       end, 0, Specs).
 
 
