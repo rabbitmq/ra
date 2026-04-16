@@ -26,6 +26,7 @@ all_tests() ->
      record_flushed_missed,
      record_flushed_missed_prev,
      record_flushed_missed_multi_prev,
+     record_flushed_empty_prev_in_chain,
      record_flushed_after_set_first,
      record_flushed_prev,
      set_first,
@@ -191,6 +192,46 @@ record_flushed_missed_multi_prev(_Config) ->
     ?assertMatch({multi, [{delete, Tid2},
                           {delete, Tid}]}, Spec3),
     ?assertEqual({106, 110}, ra_mt:range(Mt6)),
+    ok.
+
+record_flushed_empty_prev_in_chain(_Config) ->
+    %% Test that when an intermediate prev table is empty, flushing a deeper
+    %% table still generates a delete spec for the empty table.
+    %% Chain: Tid3 (current, entries 106-110) → Tid2 (empty) → Tid (entries 1-49)
+    Tid = ets:new(t1, [set, public]),
+    Mt0 = ra_mt:init(Tid),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 49)),
+
+    %% Create Tid2 as successor with no entries (empty prev)
+    Tid2 = ets:new(t2, [set, public]),
+    Mt2 = ra_mt:init_successor(Tid2, read_write, Mt1),
+
+    %% Create Tid3 as successor with entries 106-110
+    Tid3 = ets:new(t3, [set, public]),
+    Mt3 = ra_mt:init_successor(Tid3, read_write, Mt2),
+    Mt4 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 2, <<"apple">>}, Acc))
+            end, Mt3, lists:seq(106, 110)),
+
+    %% Flush Tid (the deepest prev) completely
+    {Spec, Mt5} = ra_mt:record_flushed(Tid, [{1, 49}], Mt4),
+    %% Both Tid and Tid2 should be deleted
+    ?assertMatch(#{previous := undefined}, ra_mt:info(Mt5)),
+    ?assertEqual({106, 110}, ra_mt:range(Mt5)),
+    %% The spec must include delete for both Tid and Tid2
+    case Spec of
+        {multi, Specs} ->
+            ?assert(lists:member({delete, Tid}, Specs)),
+            ?assert(lists:member({delete, Tid2}, Specs));
+        {delete, _} ->
+            %% Should not be a single delete — both need deleting
+            ct:fail({expected_multi_delete, Spec})
+    end,
+    _ = ra_mt:delete(Spec),
     ok.
 
 record_flushed_after_set_first(_Config) ->

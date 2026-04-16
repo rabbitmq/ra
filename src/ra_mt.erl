@@ -462,19 +462,38 @@ record_flushed(Tid, FlushedSeq, #?MODULE{prev = Prev0} = State) ->
     {Spec0, Prev} = record_flushed(Tid, FlushedSeq, Prev0),
     case range(Prev) of
         undefined ->
+            %% The prev sub-chain is now entirely empty.
+            %% Always emit a delete for the immediate prev table
+            %% in addition to any specs from deeper recursion.
+            PrevTid = tid(Prev0),
             Spec = case Spec0 of
                        {multi, Specs} ->
-                           %% only emit delete full table specs
-                           {multi,
-                            [{delete, Tid} |
-                             [S || {delete, _} = S <- Specs]]};
-                       {_, Tid, _} ->
+                           InnerDeletes =
+                               [{delete, Tid} |
+                                [S || {delete, _} = S <- Specs]],
+                           case lists:member({delete, PrevTid},
+                                             InnerDeletes) of
+                               true ->
+                                   {multi, InnerDeletes};
+                               false ->
+                                   {multi,
+                                    [{delete, PrevTid} | InnerDeletes]}
+                           end;
+                       {_, Tid, _} when PrevTid =:= Tid ->
                            {delete, Tid};
+                       {_, Tid, _} ->
+                           {multi,
+                            [{delete, PrevTid}, {delete, Tid}]};
+                       {delete, PrevTid} ->
+                           {delete, PrevTid};
+                       {delete, _} = S ->
+                           {multi, [{delete, PrevTid}, S]};
+                       undefined ->
+                           {delete, PrevTid};
                        _ ->
-                           Spec0
+                           {multi, [{delete, PrevTid}, Spec0]}
                    end,
 
-            %% the prev table is now empty and can be deleted,
             {Spec, State#?MODULE{prev = undefined}};
         _ ->
             {Spec0, State#?MODULE{prev = Prev}}

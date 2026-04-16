@@ -388,7 +388,7 @@ snapshot_state(ServerUId) ->
 
 %% @doc Sends segment update notification to the Ra server.
 %% If the server is not running, cleans up the memtable entries
-%% using ra_mt:delete/1 which supports sparse ra_seq deletion.
+%% and deletes empty tables to prevent mem table leaks.
 send_segments(System, ServerUId, TidRanges, SegRefs) ->
     case ra_directory:pid_of(System, ServerUId) of
         undefined ->
@@ -396,11 +396,28 @@ send_segments(System, ServerUId, TidRanges, SegRefs) ->
                    "ra_log_event to: "
                    "~ts. Reason: ~s",
                    [ServerUId, "No Pid"]),
-            %% Delete from the memtable on the non-running server's behalf.
-            %% ra_mt:delete/1 supports {indexes, Tid, Seq} format for
-            %% sparse sequence deletion.
-            _ = [_ = catch ra_mt:delete({indexes, Tid, Seq})
-                 || {Tid, Seq} <- TidRanges],
+            %% Delete flushed entries from the mem tables on the
+            %% non-running server's behalf, then delete any tables
+            %% that became empty. A single table can span multiple
+            %% WAL files so we must check emptiness per table.
+            case ra_system:fetch(System) of
+                #{names := Names} ->
+                    _ = [begin
+                             _ = catch ra_mt:delete({indexes, Tid, Seq}),
+                             case catch ets:info(Tid, size) of
+                                 0 ->
+                                     ok = ra_log_ets:execute_delete(
+                                            Names, ServerUId,
+                                            {delete, Tid});
+                                 _ ->
+                                     ok
+                             end
+                         end || {Tid, Seq} <- TidRanges];
+                _ ->
+                    %% System shutting down, best-effort entry cleanup.
+                    _ = [_ = catch ra_mt:delete({indexes, Tid, Seq})
+                         || {Tid, Seq} <- TidRanges]
+            end,
             ok;
         Pid ->
             Pid ! {ra_log_event, {segments, TidRanges, SegRefs}},

@@ -386,11 +386,16 @@ accept_mem_tables_for_down_server(Config) ->
     Entries = [{I, T, binary_to_term(B)}
                || {I, T, B} <- read_sparse(FakeSeg, [1, 2, 3])],
 
-    %% if the server is down at the time the segment writer send the segments
-    %% the segment writer should clear up the ETS mem tables
-    timer:sleep(500),
-    FakeMt = ra_mt:init(Tid),
-    ?assertMatch(#{size := 0}, ra_mt:info(FakeMt)),
+    %% if the server is down at the time the segment writer sends the segments
+    %% the segment writer should delete the now-empty ETS mem table
+    ra_log_segment_writer:await(?SEGWR),
+    timer:sleep(200),
+    ?assertEqual(undefined, ets:info(Tid, size)),
+
+    %% verify the table was also removed from tracking
+    #{open_mem_tbls := MemTables} = get_names(default),
+    ?assertEqual([], [T || {U, T} <- ets:tab2list(MemTables),
+                           U =:= DownUId, T =:= Tid]),
 
     % assert wal file has been deleted.
     % the delete happens after the segment notification so we need to retry
