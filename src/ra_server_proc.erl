@@ -2107,7 +2107,7 @@ read_entries0(From, Idxs, #state{server_state = #{log := Log}} = State) ->
     {keep_state, State, [{reply, From, {ok, ReadState}}]}.
 
 send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
-               InstallTimeout, SnapState, Machine, LogId, UId) ->
+               InstallTimeout, SnapState, Machine, LogId, UID = UId) ->
     Context = ra_snapshot:context(SnapState, ToNode),
     case ra_snapshot:begin_read(SnapState, Context) of
         {error, Reason} ->
@@ -2123,7 +2123,8 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
             %% only send the snapshot if the target server can accept it
             case SnapMacVer > TheirMacVer of
                 true ->
-                    ?DEBUG("~ts: not sending snapshot to ~tw as their machine version ~b "
+                    ?DEBUG("~ts: not sending snapshot to ~tw as "
+                           "their machine version ~b "
                            "is lower than snapshot machine version ~b",
                            [LogId, To, TheirMacVer, SnapMacVer]),
                     ok;
@@ -2137,27 +2138,29 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                     %% Query ra_log_snapshot_state table for live indexes
                     case ra_log_snapshot_state:read(ra_log_snapshot_state, UId) of
                         undefined ->
-                            ?DEBUG("~ts: no snapshot state found in ra_log_snapshot_state for ~tw",
+                            ?DEBUG("~ts: no snapshot state found in "
+                                   "ra_log_snapshot_state for ~tw",
                                    [LogId, To]),
                             ok;
-                        {UId, SnapIdx, _SmallestIdx, LiveIndexes} ->
+                        {UID, SnapIdx, _SmallestIdx, LiveIndexes} ->
                             %% first send the init phase
                             try gen_statem:call(To, RPC,
                                                 {dirty_timeout, InstallTimeout}) of
                                 #install_snapshot_result{} ->
                                     ok;
                                 Unexp ->
-                                    ?INFO("~ts: ~tw returned an unexpected install snapshot "
-                                          "result ~w",
+                                    ?INFO("~ts: ~tw returned an unexpected"
+                                          " install snapshot result ~w",
                                           [LogId, To, Unexp]),
                                     exit(unexpected_install_snapshot_result)
                             catch exit:{noproc, _}:_ ->
                                       ?INFO("~ts: ~tw not ready to receive snapshot, "
                                             "reason: noproc", [LogId, To]),
-                                      %% no process, not ready yet, exit to reduce sasl logging
+                                      %% no process, not ready yet, exit to
+                                      %% reduce sasl logging
                                       exit(snapshot_receiver_not_ready_yet);
                                   C:E:S ->
-                                      erlang:raise(C, E, S)
+                                      erlang:raise(C, E, safe_stacktrace(S))
                             end,
                             %% there are live indexes to send before the snapshot
                             #{last_applied := LastApplied} =
@@ -2165,15 +2168,28 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                           [To, [last_applied]]),
                             %% remove all indexes lower than the target's last applied
                             Indexes = ra_seq:floor(LastApplied + 1, LiveIndexes),
-                            ?DEBUG("~ts: sending ~b live indexes in the range ~w to ~tw ",
-                                   [LogId, ra_seq:length(Indexes), ra_seq:range(Indexes), To]),
-                            MaybeFlru = send_pre_snapshot_entries(Id, To, RPC, Indexes,
-                                                                  InstallTimeout, undefined),
-                            _ = maybe_evict_flru(MaybeFlru),
+                            ?DEBUG("~ts: sending ~b live indexes in the "
+                                   "range ~w to ~tw ",
+                                   [LogId, ra_seq:length(Indexes),
+                                    ra_seq:range(Indexes), To]),
+                            try send_pre_snapshot_entries(Id, To, RPC, Indexes,
+                                                          InstallTimeout,
+                                                          undefined) of
+                                MaybeFlru ->
+                                    _ = maybe_evict_flru(MaybeFlru),
+                                    ok
+                            catch Class:Err:Stack ->
+                                      ?INFO("~ts: send_pre_snapshot_entries "
+                                            "encountered an error: ~w",
+                                            [LogId, Err]),
+                                      erlang:raise(Class, Err,
+                                                   safe_stacktrace(Stack))
+                            end,
                             ok;
-                        {UId, TableSnapIdx, _SmallestIdx, _LiveIndexes} ->
+                        {UID, TableSnapIdx, _SmallestIdx, _LiveIndexes} ->
                             ?INFO("~ts: aborting snapshot send to ~tw: "
-                                  "table snapshot index ~b does not match requested index ~b",
+                                  "table snapshot index ~b does not match "
+                                  "requested index ~b",
                                   [LogId, To, TableSnapIdx, SnapIdx]),
                             exit({snapshot_index_mismatch, TableSnapIdx, SnapIdx})
                     end,

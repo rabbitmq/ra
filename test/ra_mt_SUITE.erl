@@ -39,6 +39,7 @@ all_tests() ->
      stage_abort,
      range_overlap,
      stage_commit_2,
+     multi_spec_delete_with_missing_tid,
      perf,
      perf_sparse_insert,
      sparse,
@@ -650,6 +651,62 @@ sparse_after_non_sparse(_Config) ->
     ?assertMatch(#{size := 0,
                    range := undefined}, ra_mt:info(Mt6)),
     ?assertEqual(0, ets:info(Tid2, size)),
+    ok.
+
+multi_spec_delete_with_missing_tid(_Config) ->
+    %% Test that multi-spec delete gracefully handles the case where
+    %% one of the Tids in the spec has already been deleted (missing).
+    %% This can happen if a prior memtable cleanup was accelerated or
+    %% another operation deleted the table before the multi-spec is processed.
+    Tid1 = ets:new(t1, [set, public]),
+    Mt0 = ra_mt:init(Tid1),
+    Mt1 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 1, <<"banana">>}, Acc))
+            end, Mt0, lists:seq(1, 100)),
+
+    Tid2 = ets:new(t2, [set, public]),
+    Mt2 = ra_mt:init_successor(Tid2, read_write, Mt1),
+    Mt3 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 2, <<"apple">>}, Acc))
+            end, Mt2, lists:seq(50, 150)),
+
+    Tid3 = ets:new(t3, [set, public]),
+    Mt4 = ra_mt:init_successor(Tid3, read_write, Mt3),
+    Mt5 = lists:foldl(
+            fun (I, Acc) ->
+                    element(2, ra_mt:insert({I, 3, <<"cherry">>}, Acc))
+            end, Mt4, lists:seq(100, 200)),
+
+    %% Generate a multi-spec that would normally include cleanup of Tid1 and Tid2
+    {MultiSpec, Mt6} = ra_mt:record_flushed(Tid3, [{100, 150}], Mt5),
+    ?assertMatch({multi, _}, MultiSpec),
+
+    Specs = element(2, MultiSpec),
+    ?assert(lists:member({delete, Tid2}, Specs)),
+    ?assert(lists:member({delete, Tid1}, Specs)),
+    {_, SpecsAfterTid2} = lists:splitwith(fun (Item) ->
+                                                  Item =/= {delete, Tid2}
+                                          end, Specs),
+    ?assert(lists:member({delete, Tid1}, SpecsAfterTid2)),
+
+    %% Delete Tid2 before executing the multi-spec delete.
+    %% This simulates the "missing tid" condition on an earlier spec.
+    true = ets:delete(Tid2),
+
+    %% The multi-spec delete should gracefully skip the missing Tid2
+    %% and still apply later specs. Should not crash or throw badarg.
+    DeletedCount = ra_mt:delete(MultiSpec),
+    ?assert(is_integer(DeletedCount)),
+    ?assert(DeletedCount >= 0),
+
+    %% Verify later specs were still applied after the missing Tid2.
+    ?assertEqual(undefined, ets:info(Tid1)),
+
+    %% Verify the current memtable still contains its range
+    Range = ra_mt:range(Mt6),
+    ?assertNotEqual(undefined, Range),
     ok.
 
 %%% Util
