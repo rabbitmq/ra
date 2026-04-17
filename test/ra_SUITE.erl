@@ -769,7 +769,7 @@ members_info(Config) ->
                membership => promotable},
     C =  {CName, Host},
     ok = ra:start_server(default, Name, CSpec, add_machine(), InitNodes),
-    {ok, _, _} = ra:add_member(Leader, CSpec),
+    {ok, _, _} = add_member_retry(Leader, CSpec),
     {ok, 9, Leader} = ra:consistent_query(C, ?IDMFA),
     timer:sleep(100),
     ?assertMatch({ok,
@@ -923,7 +923,7 @@ add_member(Config) ->
     {ok, _, Leader} = ra:process_command(A, 9),
     C = {ra_server:name(Name, "3"), node()},
     ok = ra:start_server(default, Name, C, add_machine(), Cluster),
-    {ok, _, _Leader} = ra:add_member(Leader, C),
+    {ok, _, _Leader} = add_member_retry(Leader, C),
     {ok, 9, Leader} = ra:consistent_query(C, ?IDMFA),
     terminate_cluster([C | Cluster]).
 
@@ -947,7 +947,7 @@ server_catches_up(Config) ->
                                          ?PROCESS_COMMAND_TIMEOUT),
 
     ok = ra:start_server(default, Name, N3, Mac, InitialNodes),
-    {ok, _, _Leader} = ra:add_member(Leader, N3),
+    {ok, _, _Leader} = add_member_retry(Leader, N3),
     timer:sleep(1000),
     % at this point the servers should be caught up
     {ok, {_, Res}, _} = ra:local_query(N1, fun ra_lib:id/1),
@@ -1289,7 +1289,7 @@ transfer_leadership(Config) ->
         #{id => NonVoterMemberId = {n4, node()},
           uid => ra:new_uid(ra_lib:to_binary(Name)),
           membership => non_voter},
-    {ok, _, _} = ra:add_member(NewLeader, NonVoterMember),
+    {ok, _, _} = add_member_retry(NewLeader, NonVoterMember),
     ok = ra:start_server(default, Name, NonVoterMember, add_machine(), Members),
     ct:pal("Transferring leadership from ~p to ~p", [NewLeader, NonVoterMemberId]),
     ?assertEqual({error, non_voter}, ra:transfer_leadership(NewLeader, NonVoterMemberId)),
@@ -1521,19 +1521,28 @@ stop_server(Name) ->
     ok = ra:stop_server(?SYS, Name),
     ok.
 
+add_member_retry(Ref, New) ->
+    case ra:add_member(Ref, New) of
+        {ok, IdxTerm, Leader} ->
+            {ok, IdxTerm, Leader};
+        {error, cluster_change_not_permitted} ->
+            timer:sleep(50),
+            add_member_retry(Ref, New)
+    end.
+
 add_member(Ref, New) ->
-    {ok, _IdxTerm, _Leader} = ra:add_member(Ref, New),
+    {ok, _IdxTerm, _Leader} = add_member_retry(Ref, New),
     ok.
 
 start_and_join({ClusterName, _} = ServerRef, {_, _} = New) ->
-    {ok, _, _} = ra:add_member(ServerRef, New),
+    {ok, _, _} = add_member_retry(ServerRef, New),
     ok = ra:start_server(default, ClusterName, New, add_machine(), [ServerRef]),
     ok.
 
 start_and_join_nonvoter({ClusterName, _} = ServerRef, {_, _} = New) ->
     UId = ra:new_uid(ra_lib:to_binary(ClusterName)),
     Server = #{id => New, membership => promotable, uid => UId},
-    {ok, _, _} = ra:add_member(ServerRef, Server),
+    {ok, _, _} = add_member_retry(ServerRef, Server),
     ok = ra:start_server(default, ClusterName, Server, add_machine(), [ServerRef]),
     ok.
 
