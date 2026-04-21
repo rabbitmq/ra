@@ -83,9 +83,9 @@ evict(Key, #?MODULE{items = Items0,
 
 -spec evict_all(state()) -> state().
 evict_all(#?MODULE{items = Items,
-                   handler = Handler}) ->
+                   handler = Handler} = State) ->
     [Handler(T) || T <- Items],
-    #?MODULE{items = []}.
+    State#?MODULE{items = []}.
 
 -spec size(state()) -> non_neg_integer().
 size(#?MODULE{items = Items}) ->
@@ -95,11 +95,16 @@ size(#?MODULE{items = Items}) ->
 -include_lib("eunit/include/eunit.hrl").
 
 evit_test() ->
-    C0 = new(3, fun(I) -> ?debugFmt("~w evicted", [I]) end),
+    Fun = fun(I) -> ?debugFmt("~w evicted", [I]) end,
+    C0 = new(3, Fun),
     C1 = insert(k1, v1, C0),
     C2 = insert(k2, v2, C1),
     {{k1, v1}, C3} = evict(k1, C2),
     error = evict(k3, C3),
+    C4 = evict_all(C3),
+    ?assertMatch(#?MODULE{max_size = 3,
+                          handler = Fun,
+                          items = []}, C4),
     ok.
 
 
