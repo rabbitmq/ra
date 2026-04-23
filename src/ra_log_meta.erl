@@ -106,23 +106,23 @@ handle_batch(Commands, #?MODULE{shu = S0,
                         end
                 end
         end,
-    {Inserts, Replies, ShouldSync} =
+    {Inserts, Replies} =
         lists:foldl(
           fun ({cast, {store, Id, Key, Value}},
-               {Inserts0, Replies, DoSync}) ->
-                  {DoInsert(Id, Key, Value, Inserts0), Replies, DoSync};
+               {Inserts0, Replies}) ->
+                  {DoInsert(Id, Key, Value, Inserts0), Replies};
               ({call, From, {store, Id, Key, Value}},
-               {Inserts0, Replies, _DoSync}) ->
+               {Inserts0, Replies}) ->
                   {DoInsert(Id, Key, Value, Inserts0),
-                   [{reply, From, ok} | Replies], true};
+                   [{reply, From, ok} | Replies]};
               ({cast, {delete, Id}},
-               {Inserts0, Replies, DoSync}) ->
-                  {handle_delete(TblName, Id, Inserts0), Replies, DoSync};
+               {Inserts0, Replies}) ->
+                  {handle_delete(TblName, Id, Inserts0), Replies};
               ({call, From, {delete, Id}},
-               {Inserts0, Replies, _DoSync}) ->
+               {Inserts0, Replies}) ->
                   {handle_delete(TblName, Id, Inserts0),
-                   [{reply, From, ok} | Replies], true}
-          end, {#{}, [], false}, Commands),
+                   [{reply, From, ok} | Replies]}
+          end, {#{}, []}, Commands),
 
     Objects = maps:values(Inserts),
     true = ets:insert(TblName, Objects),
@@ -130,19 +130,11 @@ handle_batch(Commands, #?MODULE{shu = S0,
     %% Translate to shu write_batch format
     WriteOps = [to_shu_write_op(Obj) || Obj <- Objects],
 
-    %% Write to shu
+    %% Write to shu - shu handles syncing based on schema frequency config
     case shu:write_batch(S0, WriteOps) of
         {ok, S1} ->
-            S2 = case ShouldSync of
-                     true ->
-                         {ok, S1_} = shu:sync(S1),
-                         S1_;
-                     false ->
-                         S1
-                 end,
-
             %% Check if we should proactively compact
-            State1 = check_and_start_compaction(State#?MODULE{shu = S2}),
+            State1 = check_and_start_compaction(State#?MODULE{shu = S1}),
             {ok, Replies, State1};
         {wal_full, S1} ->
             %% WAL is full, kick off compaction and retry
@@ -150,14 +142,7 @@ handle_batch(Commands, #?MODULE{shu = S0,
             %% After sync compact, retry the write
             case shu:write_batch(State1#?MODULE.shu, WriteOps) of
                 {ok, S2} ->
-                    S3 = case ShouldSync of
-                             true ->
-                                 {ok, S2_} = shu:sync(S2),
-                                 S2_;
-                             false ->
-                                 S2
-                         end,
-                    State2 = State1#?MODULE{shu = S3},
+                    State2 = State1#?MODULE{shu = S2},
                     State3 = check_and_start_compaction(State2),
                     {ok, Replies, State3};
                 {wal_full, _S2} ->
@@ -335,9 +320,12 @@ populate_ets_from_shu(TblName, ShuState) ->
             Node = maps:get(voted_for_node, Fields, undefined),
             ServerNameBin = maps:get(voted_for_name, Fields, undefined),
             ServerName = case ServerNameBin of
-                             undefined -> undefined;
-                             B when is_binary(B) -> binary_to_atom(B, utf8);
-                             _ -> ServerNameBin
+                             undefined ->
+                                 undefined;
+                             B when is_binary(B) ->
+                                 binary_to_atom(B, utf8);
+                             _ ->
+                                 ServerNameBin
                          end,
             VF = encode_voted_for(Node, ServerName),
             LA = maps:get(last_applied, Fields, undefined),
