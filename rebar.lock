@@ -4,7 +4,7 @@
  {<<"seshat">>,{pkg,<<"seshat">>,<<"1.0.1">>},0},
  {<<"shu">>,
   {git,"https://github.com/rabbitmq/shu.git",
-       {ref,"beb2d6f23f5fe9caebeea002824b61fade088be0"}},
+       {ref,"a63c37e0e3907e14894b26cb59b48eaacdc025b6"}},
   0}]}.
 [
 {pkg_hash,[

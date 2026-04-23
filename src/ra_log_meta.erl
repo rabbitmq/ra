@@ -181,9 +181,9 @@ terminate(_, #?MODULE{shu = S0, compact_mref = MRef} = State) ->
     %% If a compaction is in flight, wait for it to finish
     S1 = case MRef of
              undefined -> S0;
-             _ -> await_compaction(State, 30_000)
+             _ ->
+                 await_compaction(State, 30_000)
          end,
-    {ok, _S2} = shu:sync(S1),
     ok = shu:close(S1),
     ok.
 
