@@ -274,7 +274,15 @@ to_shu_write_op({UId, CurrentTerm, VotedFor, LastApplied}) ->
                    end,
     FieldValues2 = case VotedFor of
                        undefined -> FieldValues1;
-                       _ -> FieldValues1 ++ [{voted_for, term_to_binary(VotedFor)}]
+                       _ -> 
+                           {Node, ServerName} = decode_voted_for(VotedFor),
+                           ServerNameBin = case ServerName of
+                                               undefined -> undefined;
+                                               S when is_atom(S) -> atom_to_binary(S, utf8);
+                                               S -> S
+                                           end,
+                           FieldValues1 ++ [{voted_for_node, Node}, 
+                                            {voted_for_name, ServerNameBin}]
                    end,
     FieldValues3 = case LastApplied of
                        undefined -> FieldValues2;
@@ -282,13 +290,24 @@ to_shu_write_op({UId, CurrentTerm, VotedFor, LastApplied}) ->
                    end,
     {UId, FieldValues3}.
 
+%% Decode voted_for from ETS representation to (Node, ServerName) tuple
+%% If VotedFor is an atom (old format), convert to {undefined, Atom}
+%% If VotedFor is a {Node, ServerName} tuple, return as-is
+%% If VotedFor is undefined, return {undefined, undefined}
+decode_voted_for(undefined) -> {undefined, undefined};
+decode_voted_for(Atom) when is_atom(Atom) -> {undefined, Atom};
+decode_voted_for({Node, ServerName}) -> {Node, ServerName}.
+
 %% Schema definition for shu
 schema() ->
     #{fields => [#{name => current_term,
                     type => {integer, 64},
                     frequency => low},
-                  #{name => voted_for,
-                    type => {binary, 100},
+                  #{name => voted_for_node,
+                    type => {atom, 255},
+                    frequency => low},
+                  #{name => voted_for_name,
+                    type => {binary, 255},
                     frequency => low},
                   #{name => last_applied,
                     type => {integer, 64},
@@ -302,11 +321,14 @@ populate_ets_from_shu(TblName, ShuState) ->
         fun(Key, _Acc) ->
             {ok, Fields} = shu:read_all(ShuState, Key),
             CT = maps:get(current_term, Fields, undefined),
-            VF_Bin = maps:get(voted_for, Fields, undefined),
-            VF = case VF_Bin of
-                     undefined -> undefined;
-                     _ -> binary_to_term(VF_Bin)
-                 end,
+            Node = maps:get(voted_for_node, Fields, undefined),
+            ServerNameBin = maps:get(voted_for_name, Fields, undefined),
+            ServerName = case ServerNameBin of
+                             undefined -> undefined;
+                             B when is_binary(B) -> binary_to_atom(B, utf8);
+                             _ -> ServerNameBin
+                         end,
+            VF = encode_voted_for(Node, ServerName),
             LA = maps:get(last_applied, Fields, undefined),
             ?DEBUG("ra_log_meta: recovered from shu - Key=~p, CT=~p, VF=~p, LA=~p", [Key, CT, VF, LA]),
             ets:insert(TblName, {Key, CT, VF, LA}),
@@ -315,6 +337,14 @@ populate_ets_from_shu(TblName, ShuState) ->
         ok,
         ShuState),
     ok.
+
+%% Encode voted_for back into ETS representation
+%% If both fields are undefined, return undefined
+%% If only ServerName is set, return it as an atom (legacy format)
+%% If both are set, return {Node, ServerName} tuple
+encode_voted_for(undefined, undefined) -> undefined;
+encode_voted_for(undefined, ServerName) -> ServerName;
+encode_voted_for(Node, ServerName) -> {Node, ServerName}.
 
 %% Migrate from DETS to shu
 migrate_from_dets(MetaDets, ShuState0, _TblName) ->
@@ -326,12 +356,15 @@ migrate_from_dets(MetaDets, ShuState0, _TblName) ->
         %% Collect all DETS rows and convert to shu write operations
         Ops = dets:foldl(
             fun({UId, CurrentTerm, VotedFor, LastApplied}, Acc) ->
-                VF_Bin = case VotedFor of
-                             undefined -> undefined;
-                             _ -> term_to_binary(VotedFor)
-                         end,
+                {Node, ServerName} = decode_voted_for(VotedFor),
+                ServerNameBin = case ServerName of
+                                    undefined -> undefined;
+                                    S when is_atom(S) -> atom_to_binary(S, utf8);
+                                    S -> S
+                                end,
                 WriteOp = {UId, [{current_term, CurrentTerm},
-                                 {voted_for, VF_Bin},
+                                 {voted_for_node, Node},
+                                 {voted_for_name, ServerNameBin},
                                  {last_applied, LastApplied}]},
                 [WriteOp | Acc]
             end,
