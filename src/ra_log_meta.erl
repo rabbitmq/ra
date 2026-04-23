@@ -30,7 +30,7 @@
 -type value() :: non_neg_integer() | atom() | {atom(), atom()}.
 
 -define(TIMEOUT, 30000).
--define(SYNC_INTERVAL, 5000).
+% -define(SYNC_INTERVAL, 5000).
 
 -record(?MODULE, {shu            :: shu:state(),
                   table_name     :: atom(),
@@ -56,31 +56,35 @@ init(#{name := System,
     ok = ra_lib:make_dir(Dir),
     MetaShu = filename:join(Dir, "meta.shu"),
     MetaDets = filename:join(Dir, "meta.dets"),
-    
+
     Schema = schema(),
     {ok, ShuState0} = shu:open(MetaShu, Schema),
-    
+
     %% Create ETS table as today
     _ = ets:new(TblName, [named_table, public, {read_concurrency, true}]),
-    
+
     %% Migration from DETS if present
     {RecoveredCount, ShuState1} = case filelib:is_file(MetaDets) of
-                                      true -> migrate_from_dets(MetaDets, ShuState0, TblName);
-                                      false -> {0, ShuState0}
+                                      true ->
+                                          migrate_from_dets(MetaDets, ShuState0,
+                                                            TblName);
+                                      false ->
+                                          {0, ShuState0}
                                   end,
-    
+
     %% Populate ETS from shu
     ok = populate_ets_from_shu(TblName, ShuState1),
     ETSCount = ets:info(TblName, size),
-    
-    ?INFO("ra: meta data store initialised for system ~ts. ~b record(s) recovered from ~s, ~b total records",
-          [System, RecoveredCount, 
-           case RecoveredCount of 
-               0 -> "shu"; 
-               _ -> "dets" 
+
+    ?INFO("ra: meta data store initialised for system ~ts. ~b record(s) "
+          "recovered from ~s, ~b total records",
+          [System, RecoveredCount,
+           case RecoveredCount of
+               0 -> "shu";
+               _ -> "dets"
            end,
            ETSCount]),
-    
+
     {ok, #?MODULE{shu = ShuState1,
                   table_name = TblName,
                   data_dir = Dir}}.
@@ -119,13 +123,13 @@ handle_batch(Commands, #?MODULE{shu = S0,
                   {handle_delete(TblName, Id, Inserts0),
                    [{reply, From, ok} | Replies], true}
           end, {#{}, [], false}, Commands),
-    
+
     Objects = maps:values(Inserts),
     true = ets:insert(TblName, Objects),
-    
+
     %% Translate to shu write_batch format
     WriteOps = [to_shu_write_op(Obj) || Obj <- Objects],
-    
+
     %% Write to shu
     case shu:write_batch(S0, WriteOps) of
         {ok, S1} ->
@@ -136,7 +140,7 @@ handle_batch(Commands, #?MODULE{shu = S0,
                      false ->
                          S1
                  end,
-            
+
             %% Check if we should proactively compact
             State1 = check_and_start_compaction(State#?MODULE{shu = S2}),
             {ok, Replies, State1};
@@ -273,20 +277,24 @@ to_shu_write_op({UId, CurrentTerm, VotedFor, LastApplied}) ->
                        _ -> FieldValues ++ [{current_term, CurrentTerm}]
                    end,
     FieldValues2 = case VotedFor of
-                       undefined -> FieldValues1;
-                       _ -> 
+                       undefined ->
+                           FieldValues1;
+                       _ ->
                            {Node, ServerName} = decode_voted_for(VotedFor),
                            ServerNameBin = case ServerName of
                                                undefined -> undefined;
-                                               S when is_atom(S) -> atom_to_binary(S, utf8);
+                                               S when is_atom(S) ->
+                                                   atom_to_binary(S, utf8);
                                                S -> S
                                            end,
-                           FieldValues1 ++ [{voted_for_node, Node}, 
+                           FieldValues1 ++ [{voted_for_node, Node},
                                             {voted_for_name, ServerNameBin}]
                    end,
     FieldValues3 = case LastApplied of
-                       undefined -> FieldValues2;
-                       _ -> FieldValues2 ++ [{last_applied, LastApplied}]
+                       undefined ->
+                           FieldValues2;
+                       _ ->
+                           FieldValues2 ++ [{last_applied, LastApplied}]
                    end,
     {UId, FieldValues3}.
 
@@ -294,9 +302,12 @@ to_shu_write_op({UId, CurrentTerm, VotedFor, LastApplied}) ->
 %% If VotedFor is an atom (old format), convert to {undefined, Atom}
 %% If VotedFor is a {Node, ServerName} tuple, return as-is
 %% If VotedFor is undefined, return {undefined, undefined}
-decode_voted_for(undefined) -> {undefined, undefined};
-decode_voted_for(Atom) when is_atom(Atom) -> {undefined, Atom};
-decode_voted_for({Node, ServerName}) -> {Node, ServerName}.
+decode_voted_for(undefined) ->
+    {undefined, undefined};
+decode_voted_for(Atom) when is_atom(Atom) ->
+    {undefined, Atom};
+decode_voted_for({Node, ServerName}) ->
+    {Node, ServerName}.
 
 %% Schema definition for shu
 schema() ->
@@ -312,7 +323,7 @@ schema() ->
                   #{name => last_applied,
                     type => {integer, 64},
                     frequency => high}],
-       key => {binary, 255},
+       key => {binary, 64},
        expected_count => 50000}.
 
 %% Populate ETS table from shu on startup
@@ -352,7 +363,7 @@ migrate_from_dets(MetaDets, ShuState0, _TblName) ->
     try
         Count = dets:info(DetsTable, size),
         ?INFO("ra_log_meta: migrating ~b records from DETS", [Count]),
-        
+
         %% Collect all DETS rows and convert to shu write operations
         Ops = dets:foldl(
             fun({UId, CurrentTerm, VotedFor, LastApplied}, Acc) ->
@@ -370,15 +381,15 @@ migrate_from_dets(MetaDets, ShuState0, _TblName) ->
             end,
             [],
             DetsTable),
-        
+
         ?DEBUG("ra_log_meta: migration write ops = ~p", [lists:reverse(Ops)]),
-        
+
         %% Write all to shu in a single batch and sync
         {ok, ShuState1} = shu:write_batch(ShuState0, lists:reverse(Ops)),
         {ok, ShuState2} = shu:sync(ShuState1),
-        
+
         ?INFO("ra_log_meta: migration completed, wrote to shu and synced", []),
-        
+
         {Count, ShuState2}
     after
         _ = dets:close(DetsTable),
