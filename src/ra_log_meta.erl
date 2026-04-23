@@ -381,9 +381,9 @@ migrate_from_dets(MetaDets, ShuState0, _TblName) ->
         
         {Count, ShuState2}
     after
-        dets:close(DetsTable),
+        _ = dets:close(DetsTable),
         %% Rename DETS file to .migrated
-        file:rename(MetaDets, MetaDets ++ ".migrated")
+        _ = file:rename(MetaDets, MetaDets ++ ".migrated")
     end.
 
 %% Check if WAL usage exceeds watermark and start compaction if needed
