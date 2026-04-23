@@ -19,7 +19,8 @@
          delete/2,
          delete_sync/2,
          fetch/3,
-         fetch/4
+         fetch/4,
+         await/1
         ]).
 
 -include("ra.hrl").
@@ -121,7 +122,10 @@ handle_batch(Commands, #?MODULE{shu = S0,
               ({call, From, {delete, Id}},
                {Inserts0, Replies}) ->
                   {handle_delete(TblName, Id, Inserts0),
-                   [{reply, From, ok} | Replies]}
+                   [{reply, From, ok} | Replies]};
+              ({call, From, ping},
+               {Inserts0, Replies}) ->
+                  {Inserts0, [{reply, From, ok} | Replies]}
           end, {#{}, []}, Commands),
 
     Objects = maps:values(Inserts),
@@ -208,6 +212,11 @@ delete(Name, UId) ->
 -spec delete_sync(atom(), ra_uid()) -> ok.
 delete_sync(Name, UId) ->
     gen_batch_server:call(Name, {delete, UId}, ?TIMEOUT).
+
+%% Wait for the metadata store to be ready (used in tests)
+-spec await(atom()) -> ok.
+await(Name) ->
+    gen_batch_server:call(Name, ping, ?TIMEOUT).
 
 %% READER API
 

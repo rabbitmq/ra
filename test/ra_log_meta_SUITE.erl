@@ -62,9 +62,10 @@ roundtrip(Config) ->
     ok = ra_log_meta:store_sync(ra_log_meta, Id, voted_for, {custard, cream}),
     {custard, cream} = ra_log_meta:fetch(ra_log_meta, Id, voted_for),
     %% lose and re-open
-    proc_lib:stop(whereis(ra_log_meta), killed, infinity),
-    timer:sleep(200),
-    % give it some time to restart
+    proc_lib:stop(whereis(ra_log_meta), shutdown, infinity),
+    timer:sleep(100),
+    % give it some time to restart and be ready
+    ok = ra_log_meta:await(ra_log_meta),
     199 = ra_log_meta:fetch(ra_log_meta, Id, last_applied),
     5 = ra_log_meta:fetch(ra_log_meta, Id, current_term),
     {custard, cream} = ra_log_meta:fetch(ra_log_meta, Id, voted_for),
