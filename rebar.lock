@@ -1,7 +1,11 @@
 {"1.2.0",
 [{<<"aten">>,{pkg,<<"aten">>,<<"0.6.0">>},0},
  {<<"gen_batch_server">>,{pkg,<<"gen_batch_server">>,<<"0.10.0">>},0},
- {<<"seshat">>,{pkg,<<"seshat">>,<<"1.0.1">>},0}]}.
+ {<<"seshat">>,{pkg,<<"seshat">>,<<"1.0.1">>},0},
+ {<<"shu">>,
+  {git,"https://github.com/rabbitmq/shu.git",
+       {ref,"aa63d38c46adc86e4e18f5b2afdcdf051cef5daf"}},
+  0}]}.
 [
 {pkg_hash,[
  {<<"aten">>, <<"7A57B275A6DAF515AC3683FB9853E280B4D0DCDD74292FD66AC4A01C8694F8C7">>},
