@@ -319,19 +319,23 @@ schema() ->
 populate_ets_from_shu(TblName, ShuState) ->
     shu:fold(
         fun(Key, _Acc) ->
-            {ok, Fields} = shu:read_all(ShuState, Key),
-            CT = maps:get(current_term, Fields, undefined),
-            Node = maps:get(voted_for_node, Fields, undefined),
-            ServerNameBin = maps:get(voted_for_name, Fields, undefined),
-            ServerName = case ServerNameBin of
-                             undefined -> undefined;
-                             B when is_binary(B) -> binary_to_atom(B, utf8);
-                             _ -> ServerNameBin
-                         end,
-            VF = encode_voted_for(Node, ServerName),
-            LA = maps:get(last_applied, Fields, undefined),
-            ?DEBUG("ra_log_meta: recovered from shu - Key=~p, CT=~p, VF=~p, LA=~p", [Key, CT, VF, LA]),
-            ets:insert(TblName, {Key, CT, VF, LA}),
+            case shu:read_all(ShuState, Key) of
+                {ok, Fields} when is_map(Fields), map_size(Fields) > 0 ->
+                    CT = maps:get(current_term, Fields, undefined),
+                    Node = maps:get(voted_for_node, Fields, undefined),
+                    ServerNameBin = maps:get(voted_for_name, Fields, undefined),
+                    ServerName = case ServerNameBin of
+                                     undefined -> undefined;
+                                     B when is_binary(B) -> binary_to_atom(B, utf8);
+                                     _ -> ServerNameBin
+                                 end,
+                    VF = encode_voted_for(Node, ServerName),
+                    LA = maps:get(last_applied, Fields, undefined),
+                    ?DEBUG("ra_log_meta: recovered from shu - Key=~p, CT=~p, VF=~p, LA=~p", [Key, CT, VF, LA]),
+                    ets:insert(TblName, {Key, CT, VF, LA});
+                _ ->
+                    ok
+            end,
             _Acc
         end,
         ok,
