@@ -256,10 +256,11 @@ update_key(last_applied, Value, Data) ->
 
 %% Helper to convert ETS row {UId, CT, VF, LA} to shu write operations
 to_shu_write_op({UId, CurrentTerm, VotedFor, LastApplied}) ->
-    FieldValues = [],
     FieldValues1 = case CurrentTerm of
-                       undefined -> FieldValues;
-                       _ -> FieldValues ++ [{current_term, CurrentTerm}]
+                       undefined ->
+                           [];
+                       _ ->
+                           [{current_term, CurrentTerm}]
                    end,
     FieldValues2 = case VotedFor of
                        undefined ->
@@ -272,14 +273,14 @@ to_shu_write_op({UId, CurrentTerm, VotedFor, LastApplied}) ->
                                                    atom_to_binary(S, utf8);
                                                S -> S
                                            end,
-                           FieldValues1 ++ [{voted_for_node, Node},
-                                            {voted_for_name, ServerNameBin}]
+                           [{voted_for_name, ServerNameBin},
+                            {voted_for_node, Node} | FieldValues1]
                    end,
     FieldValues3 = case LastApplied of
                        undefined ->
                            FieldValues2;
                        _ ->
-                           FieldValues2 ++ [{last_applied, LastApplied}]
+                           [{last_applied, LastApplied} | FieldValues2]
                    end,
     {UId, FieldValues3}.
 
@@ -287,23 +288,23 @@ to_shu_write_op({UId, CurrentTerm, VotedFor, LastApplied}) ->
 %% If VotedFor is an atom (old format), convert to {undefined, Atom}
 %% If VotedFor is a {Node, ServerName} tuple, return as-is
 %% If VotedFor is undefined, return {undefined, undefined}
+decode_voted_for({_, _} = ServerId) ->
+    ServerId;
 decode_voted_for(undefined) ->
     {undefined, undefined};
 decode_voted_for(Atom) when is_atom(Atom) ->
-    {undefined, Atom};
-decode_voted_for({Node, ServerName}) ->
-    {Node, ServerName}.
+    {undefined, Atom}.
 
 %% Schema definition for shu
 schema() ->
     #{fields => [#{name => current_term,
                     type => {integer, 64},
                     frequency => low},
-                  #{name => voted_for_node,
-                    type => {atom, 255},
-                    frequency => low},
                   #{name => voted_for_name,
                     type => {binary, 255},
+                    frequency => low},
+                  #{name => voted_for_node,
+                    type => {atom, 255},
                     frequency => low},
                   #{name => last_applied,
                     type => {integer, 64},
@@ -329,7 +330,8 @@ populate_ets_from_shu(TblName, ShuState) ->
                          end,
             VF = encode_voted_for(Node, ServerName),
             LA = maps:get(last_applied, Fields, undefined),
-            ?DEBUG("ra_log_meta: recovered from shu - Key=~p, CT=~p, VF=~p, LA=~p", [Key, CT, VF, LA]),
+            ?DEBUG("ra_log_meta: recovered from shu - Key=~p, CT=~p, VF=~p, LA=~p",
+                   [Key, CT, VF, LA]),
             ets:insert(TblName, {Key, CT, VF, LA}),
             _Acc
         end,
@@ -355,15 +357,15 @@ migrate_from_dets(MetaDets, ShuState0, _TblName) ->
         %% Collect all DETS rows and convert to shu write operations
         Ops = dets:foldl(
             fun({UId, CurrentTerm, VotedFor, LastApplied}, Acc) ->
-                {Node, ServerName} = decode_voted_for(VotedFor),
+                {ServerName, Node} = decode_voted_for(VotedFor),
                 ServerNameBin = case ServerName of
                                     undefined -> undefined;
                                     S when is_atom(S) -> atom_to_binary(S, utf8);
                                     S -> S
                                 end,
                 WriteOp = {UId, [{current_term, CurrentTerm},
-                                 {voted_for_node, Node},
                                  {voted_for_name, ServerNameBin},
+                                 {voted_for_node, Node},
                                  {last_applied, LastApplied}]},
                 [WriteOp | Acc]
             end,
