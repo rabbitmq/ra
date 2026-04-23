@@ -179,8 +179,8 @@ handle_info({'DOWN', MRef, process, _Pid, {compact_result, Result}},
             ?ERROR("ra_log_meta: compaction finish failed: ~p", [Reason]),
             exit({compaction_failed, Reason})
     end;
-handle_info({'DOWN', MRef, process, Pid, Reason},
-            #?MODULE{compact_mref = MRef}) ->
+handle_info({'DOWN', _MRef, process, Pid, Reason},
+            #?MODULE{compact_mref = _MRef2} = _State) ->
     ?ERROR("ra_log_meta: compaction worker ~p crashed: ~p", [Pid, Reason]),
     exit({compaction_worker_crashed, Reason});
 handle_info(Info, State) ->
@@ -397,11 +397,12 @@ check_and_start_compaction(State) ->
     State.
 
 %% Start async compaction
-start_compact(#?MODULE{shu = S0, compact_pid = undefined} = State) ->
+-dialyzer({nowarn_function, start_compact/1}).
+start_compact(#?MODULE{compact_pid = undefined, shu = S0} = State) ->
     {Work, S1} = shu:prepare_compact(S0),
     {Pid, MRef} = spawn_monitor(fun () -> exit({compact_result, shu:do_compact(Work)}) end),
     State#?MODULE{shu = S1, compact_pid = Pid, compact_mref = MRef};
-start_compact(State) ->
+start_compact(#?MODULE{compact_pid = Pid} = State) when is_pid(Pid) ->
     %% already compacting
     State.
 
