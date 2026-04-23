@@ -312,7 +312,7 @@ schema() ->
                   #{name => last_applied,
                     type => {integer, 64},
                     frequency => high}],
-       key => {binary, 24},
+       key => {binary, 255},
        expected_count => 50000}.
 
 %% Populate ETS table from shu on startup
