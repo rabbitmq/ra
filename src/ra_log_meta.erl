@@ -275,12 +275,12 @@ to_shu_write_op({UId, CurrentTerm, VotedFor, LastApplied}) ->
                        undefined ->
                            FieldValues1;
                        _ ->
-                           {Node, ServerName} = decode_voted_for(VotedFor),
+                           {ServerName, Node} = decode_voted_for(VotedFor),
                            ServerNameBin = case ServerName of
-                                               undefined -> undefined;
+                                               undefined ->
+                                                   undefined;
                                                S when is_atom(S) ->
-                                                   atom_to_binary(S, utf8);
-                                               S -> S
+                                                   atom_to_binary(S, utf8)
                                            end,
                            [{voted_for_name, ServerNameBin},
                             {voted_for_node, Node} | FieldValues1]
@@ -336,7 +336,7 @@ populate_ets_from_shu(TblName, ShuState) ->
                              _ ->
                                  ServerNameBin
                          end,
-            VF = encode_voted_for(Node, ServerName),
+            VF = encode_voted_for(ServerName, Node),
             LA = maps:get(last_applied, Fields, undefined),
             % ?DEBUG("ra_log_meta: recovered from shu - Key=~p, CT=~p, VF=~p, LA=~p",
             %        [Key, CT, VF, LA]),
@@ -352,8 +352,8 @@ populate_ets_from_shu(TblName, ShuState) ->
 %% If only ServerName is set, return it as an atom (legacy format)
 %% If both are set, return {Node, ServerName} tuple
 encode_voted_for(undefined, undefined) -> undefined;
-encode_voted_for(undefined, ServerName) -> ServerName;
-encode_voted_for(Node, ServerName) -> {Node, ServerName}.
+encode_voted_for(ServerName, undefined) -> ServerName;
+encode_voted_for(ServerName, Node) -> {ServerName, Node}.
 
 %% Migrate from DETS to shu
 migrate_from_dets(MetaDets, ShuState0, _TblName) ->
@@ -367,9 +367,12 @@ migrate_from_dets(MetaDets, ShuState0, _TblName) ->
             fun({UId, CurrentTerm, VotedFor, LastApplied}, Acc) ->
                 {ServerName, Node} = decode_voted_for(VotedFor),
                 ServerNameBin = case ServerName of
-                                    undefined -> undefined;
-                                    S when is_atom(S) -> atom_to_binary(S, utf8);
-                                    S -> S
+                                    undefined ->
+                                        undefined;
+                                    S when is_atom(S) ->
+                                        atom_to_binary(S, utf8);
+                                    S ->
+                                        S
                                 end,
                 WriteOp = {UId, [{current_term, CurrentTerm},
                                  {voted_for_name, ServerNameBin},
