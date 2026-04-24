@@ -78,12 +78,12 @@ init(#{name := System,
     ETSCount = ets:info(TblName, size),
 
     ?INFO("ra: meta data store initialised for system ~ts. ~b record(s) "
-          "recovered from ~s, ~b total records",
+          "converted from DETS, ~b total records",
           [System, RecoveredCount,
-           case RecoveredCount of
-               0 -> "shu";
-               _ -> "dets"
-           end,
+           % case RecoveredCount of
+           %     0 -> "shu";
+           %     _ -> "dets"
+           % end,
            ETSCount]),
 
     {ok, #?MODULE{shu = ShuState1,
