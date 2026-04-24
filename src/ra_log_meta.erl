@@ -324,8 +324,7 @@ schema() ->
 %% Populate ETS table from shu on startup
 populate_ets_from_shu(TblName, ShuState) ->
     shu:fold(
-        fun(Key, _Acc) ->
-            {ok, Fields} = shu:read_all(ShuState, Key),
+        fun(Key, Fields, _Acc) ->
             CT = maps:get(current_term, Fields, undefined),
             Node = maps:get(voted_for_node, Fields, undefined),
             ServerNameBin = maps:get(voted_for_name, Fields, undefined),
