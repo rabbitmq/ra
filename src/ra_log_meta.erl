@@ -338,8 +338,8 @@ populate_ets_from_shu(TblName, ShuState) ->
                          end,
             VF = encode_voted_for(Node, ServerName),
             LA = maps:get(last_applied, Fields, undefined),
-            ?DEBUG("ra_log_meta: recovered from shu - Key=~p, CT=~p, VF=~p, LA=~p",
-                   [Key, CT, VF, LA]),
+            % ?DEBUG("ra_log_meta: recovered from shu - Key=~p, CT=~p, VF=~p, LA=~p",
+            %        [Key, CT, VF, LA]),
             ets:insert(TblName, {Key, CT, VF, LA}),
             _Acc
         end,
