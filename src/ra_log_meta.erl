@@ -11,7 +11,6 @@
 -export([start_link/1,
          init/1,
          handle_batch/2,
-         handle_info/2,
          terminate/2,
          format_status/1,
          store/4,
@@ -28,7 +27,7 @@
 %% centralised meta data storage server for ra servers.
 
 -type key() :: current_term | voted_for | last_applied.
--type value() :: non_neg_integer() | atom() | {atom(), atom()}.
+-type value() :: non_neg_integer() | atom() | {atom() | binary(), atom()} | {binary(), atom()}.
 
 -define(TIMEOUT, 30000).
 % -define(SYNC_INTERVAL, 5000).
@@ -37,8 +36,7 @@
                   table_name     :: atom(),
                   data_dir       :: file:filename_all(),
                   compact_pid    :: undefined | pid(),
-                  compact_mref   :: undefined | reference(),
-                  compact_watermark = 0.8 :: float()}).
+                  compact_mref   :: undefined | reference()}).
 
 -opaque state() :: #?MODULE{}.
 
@@ -90,8 +88,7 @@ init(#{name := System,
                   table_name = TblName,
                   data_dir = Dir}}.
 
-handle_batch(Commands, #?MODULE{shu = S0,
-                                table_name = TblName} = State) ->
+handle_batch(Commands, #?MODULE{table_name = TblName} = State) ->
     DoInsert =
         fun (Id, Key, Value, Inserts0) ->
                 case Inserts0 of
@@ -107,26 +104,46 @@ handle_batch(Commands, #?MODULE{shu = S0,
                         end
                 end
         end,
-    {Inserts, Replies} =
+    {Inserts, Replies, FinalState} =
         lists:foldl(
           fun ({cast, {store, Id, Key, Value}},
-               {Inserts0, Replies}) ->
-                  {DoInsert(Id, Key, Value, Inserts0), Replies};
+               {Inserts0, Replies0, State0}) ->
+                  {DoInsert(Id, Key, Value, Inserts0), Replies0, State0};
               ({call, From, {store, Id, Key, Value}},
-               {Inserts0, Replies}) ->
+               {Inserts0, Replies0, State0}) ->
                   {DoInsert(Id, Key, Value, Inserts0),
-                   [{reply, From, ok} | Replies]};
+                   [{reply, From, ok} | Replies0], State0};
               ({cast, {delete, Id}},
-               {Inserts0, Replies}) ->
-                  {handle_delete(TblName, Id, Inserts0), Replies};
+               {Inserts0, Replies0, State0}) ->
+                  {handle_delete(TblName, Id, Inserts0), Replies0, State0};
               ({call, From, {delete, Id}},
-               {Inserts0, Replies}) ->
+               {Inserts0, Replies0, State0}) ->
                   {handle_delete(TblName, Id, Inserts0),
-                   [{reply, From, ok} | Replies]};
+                   [{reply, From, ok} | Replies0], State0};
               ({call, From, ping},
-               {Inserts0, Replies}) ->
-                  {Inserts0, [{reply, From, ok} | Replies]}
-          end, {#{}, []}, Commands),
+               {Inserts0, Replies0, State0}) ->
+                  {Inserts0, [{reply, From, ok} | Replies0], State0};
+              ({info, {'DOWN', MRef, process, _Pid, {compact_result, Result}}},
+               {Inserts0, Replies0, State0}) when State0#?MODULE.compact_mref == MRef ->
+                  case shu:finish_compact(Result, State0#?MODULE.shu) of
+                      {ok, S1} ->
+                          {Inserts0, Replies0, State0#?MODULE{shu = S1, compact_pid = undefined,
+                                                              compact_mref = undefined}};
+                      {error, Reason} ->
+                          ?ERROR("ra_log_meta: compaction finish failed: ~p", [Reason]),
+                          exit({compaction_failed, Reason})
+                  end;
+              ({info, {'DOWN', _MRef, process, Pid, Reason}},
+               {_Inserts0, _Replies0, State0}) when State0#?MODULE.compact_pid == Pid ->
+                  ?ERROR("ra_log_meta: compaction worker ~p crashed: ~p", [Pid, Reason]),
+                  exit({compaction_worker_crashed, Reason});
+              ({info, Info}, {Inserts0, Replies0, State0}) ->
+                  ?ERROR("ra_log_meta: unexpected info message: ~p", [Info]),
+                  {Inserts0, Replies0, State0};
+              (Unhandled, Acc) ->
+                  ?DEBUG("ra: meta data unhandled ~p", [Unhandled]),
+                  Acc
+          end, {#{}, [], State}, Commands),
 
     Objects = maps:values(Inserts),
     true = ets:insert(TblName, Objects),
@@ -135,23 +152,20 @@ handle_batch(Commands, #?MODULE{shu = S0,
     WriteOps = [to_shu_write_op(Obj) || Obj <- Objects],
 
     %% Write to shu - shu handles syncing based on schema frequency config
-    case shu:write_batch(S0, WriteOps) of
+    case shu:write_batch(FinalState#?MODULE.shu, WriteOps) of
         {ok, S1} ->
-            %% Check if we should proactively compact
-            State1 = check_and_start_compaction(State#?MODULE{shu = S1}),
-            {ok, Replies, State1};
+            {ok, Replies, FinalState#?MODULE{shu = S1}};
         {wal_full, S1} ->
-            %% WAL is full, kick off compaction and retry
-            State1 = do_sync_compact(State#?MODULE{shu = S1}),
-            %% After sync compact, retry the write
+            %% WAL is full, kick off background compaction and retry
+            State1 = start_compact(FinalState#?MODULE{shu = S1}),
+            %% After setting compacting = true, retry the write
+            %% The new write will be buffered in memory until compaction completes
             case shu:write_batch(State1#?MODULE.shu, WriteOps) of
                 {ok, S2} ->
-                    State2 = State1#?MODULE{shu = S2},
-                    State3 = check_and_start_compaction(State2),
-                    {ok, Replies, State3};
+                    {ok, Replies, State1#?MODULE{shu = S2}};
                 {wal_full, _S2} ->
-                    %% Still full after compact - crash with descriptive error
-                    ?ERROR("ra_log_meta: WAL still full after compaction for ~ts", [TblName]),
+                    %% Still full after compacting=true - should not happen
+                    ?ERROR("ra_log_meta: WAL still full after starting compaction for ~ts", [TblName]),
                     exit({wal_full_after_compaction, TblName});
                 {error, Reason} = Err ->
                     ?ERROR("ra_log_meta: write_batch failed: ~p", [Reason]),
@@ -161,24 +175,6 @@ handle_batch(Commands, #?MODULE{shu = S0,
             ?ERROR("ra_log_meta: write_batch failed: ~p", [Reason]),
             exit(Err)
     end.
-
-handle_info({'DOWN', MRef, process, _Pid, {compact_result, Result}},
-            #?MODULE{compact_mref = MRef, shu = S0} = State) ->
-    case shu:finish_compact(Result, S0) of
-        {ok, S1} ->
-            {ok, State#?MODULE{shu = S1, compact_pid = undefined,
-                               compact_mref = undefined}};
-        {error, Reason} ->
-            ?ERROR("ra_log_meta: compaction finish failed: ~p", [Reason]),
-            exit({compaction_failed, Reason})
-    end;
-handle_info({'DOWN', _MRef, process, Pid, Reason},
-            #?MODULE{compact_mref = _MRef2} = _State) ->
-    ?ERROR("ra_log_meta: compaction worker ~p crashed: ~p", [Pid, Reason]),
-    exit({compaction_worker_crashed, Reason});
-handle_info(Info, State) ->
-    ?ERROR("ra_log_meta: unexpected info message: ~p", [Info]),
-    {ok, State}.
 
 terminate(_, #?MODULE{shu = S0, compact_mref = MRef} = State) ->
     ?DEBUG("ra: meta data store is terminating", []),
@@ -280,7 +276,9 @@ to_shu_write_op({UId, CurrentTerm, VotedFor, LastApplied}) ->
                                                undefined ->
                                                    undefined;
                                                S when is_atom(S) ->
-                                                   atom_to_binary(S, utf8)
+                                                   atom_to_binary(S, utf8);
+                                               B when is_binary(B) ->
+                                                   B
                                            end,
                            [{voted_for_name, ServerNameBin},
                             {voted_for_node, Node} | FieldValues1]
@@ -398,16 +396,6 @@ migrate_from_dets(MetaDets, ShuState0, _TblName) ->
         _ = file:rename(MetaDets, MetaDets ++ ".migrated")
     end.
 
-%% Check if WAL usage exceeds watermark and start compaction if needed
-check_and_start_compaction(#?MODULE{shu = S, compact_pid = undefined, compact_watermark = Watermark} = State) ->
-    #{wal_usage := Usage} = shu:info(S),
-    case Usage >= Watermark of
-        true -> start_compact(State);
-        false -> State
-    end;
-check_and_start_compaction(State) ->
-    State.
-
 %% Start async compaction
 -dialyzer({nowarn_function, start_compact/1}).
 start_compact(#?MODULE{compact_pid = undefined, shu = S0} = State) ->
@@ -417,23 +405,6 @@ start_compact(#?MODULE{compact_pid = undefined, shu = S0} = State) ->
 start_compact(#?MODULE{compact_pid = Pid} = State) when is_pid(Pid) ->
     %% already compacting
     State.
-
-%% Synchronous compaction (used when WAL is full and we need to retry immediately)
-do_sync_compact(#?MODULE{shu = S0} = State) ->
-    {Work, S1} = shu:prepare_compact(S0),
-    case shu:do_compact(Work) of
-        ok ->
-            case shu:finish_compact(ok, S1) of
-                {ok, S2} ->
-                    State#?MODULE{shu = S2};
-                {error, Reason} ->
-                    ?ERROR("ra_log_meta: sync compaction finish failed: ~p", [Reason]),
-                    exit({sync_compaction_failed, Reason})
-            end;
-        {error, Reason} ->
-            ?ERROR("ra_log_meta: do_compact failed: ~p", [Reason]),
-            exit({do_compact_failed, Reason})
-    end.
 
 %% Wait for compaction to finish with timeout (used in terminate)
 await_compaction(#?MODULE{compact_mref = MRef, shu = S0}, Timeout) ->

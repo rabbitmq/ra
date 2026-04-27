@@ -24,7 +24,8 @@ all() ->
 all_tests() ->
     [
      roundtrip,
-     delete
+     delete,
+     trigger_compaction
     ].
 
 groups() ->
@@ -82,6 +83,25 @@ delete(Config) ->
     %% store some other id just to make sure the delete is processed
     undefined = ra_log_meta:fetch(ra_log_meta, Oth, last_applied),
     undefined = ra_log_meta:fetch(ra_log_meta, Id, last_applied),
+    ok.
+
+trigger_compaction(Config) ->
+    Id = ?config(key, Config),
+    %% Write enough data to fill the WAL and trigger a background compaction.
+    %% Default wal_size is 16MB. To make it fast, we can overwrite a large 
+    %% `voted_for` string (must be {Name, Node}, both binaries or atoms) repeatedly.
+    %% A voted_for value of {binary, atom} works well.
+    %% Note: the binary name max size in schema is 255. Let's make it 200 bytes.
+    LargeName = binary:copy(<<"A">>, 200),
+    LargeVotedFor = {LargeName, node()},
+    
+    %% Since the entry size will be ~250 bytes, to fill 16MB we need ~65000 writes.
+    %% This might take 10-15 seconds in a test. That's fine.
+    [ok = ra_log_meta:store(ra_log_meta, Id, voted_for, LargeVotedFor) || _ <- lists:seq(1, 70000)],
+    ok = ra_log_meta:store_sync(ra_log_meta, Id, voted_for, {<<"Final">>, node()}),
+    
+    %% Verify we can read the final value and that the server is alive
+    {<<"Final">>, _} = ra_log_meta:fetch(ra_log_meta, Id, voted_for),
     ok.
 
 migrate_from_dets(Config) ->
