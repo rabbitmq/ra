@@ -41,8 +41,8 @@
 
 -spec start_server(System :: atom(), ra_server:ra_server_config()) ->
     supervisor:startchild_ret() |
-    {error, not_new | system_not_started | invalid_initial_machine_version} |
-    {badrpc, term()}.
+    {error, not_new | system_not_started | nodedown |
+    invalid_initial_machine_version} | {badrpc, term()}.
 start_server(System, #{id := NodeId,
                        uid := UId} = Config)
   when is_atom(System) ->
@@ -50,7 +50,8 @@ start_server(System, #{id := NodeId,
     rpc:call(Node, ?MODULE, start_server_rpc, [System, UId, Config]).
 
 -spec restart_server(atom(), ra_server_id(), ra_server:mutable_config()) ->
-    supervisor:startchild_ret() | {error, system_not_started} | {badrpc, term()}.
+    supervisor:startchild_ret() | {badrpc, term()} |
+    {error, system_not_started | nodedown}.
 restart_server(System, {RaName, Node}, AddConfig) ->
     rpc:call(Node, ?MODULE, restart_server_rpc,
              [System, {RaName, Node}, AddConfig]).
@@ -259,7 +260,7 @@ init([]) ->
 
 start_child(Name, Config) ->
     Ref = make_ref(),
-    case supervisor:start_child(Name, [Config#{reply_to => {Ref, self()}}]) of
+    try supervisor:start_child(Name, [Config#{reply_to => {Ref, self()}}]) of
         {ok, Pid} ->
             %% we have started the process now and have to wait for reply
             %% that is sent after init but before state machine recovery
@@ -275,4 +276,9 @@ start_child(Name, Config) ->
             end;
         Err ->
             Err
+    catch
+        exit:{noproc, _} ->
+            {error, system_not_started};
+        exit:{{nodedown, _}, _} ->
+            {error, nodedown}
     end.
