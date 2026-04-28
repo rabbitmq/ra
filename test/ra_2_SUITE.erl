@@ -36,6 +36,7 @@ all_tests() ->
      cluster_is_deleted_with_server_down,
      cluster_cannot_be_deleted_in_minority,
      diverged_follower,
+     start_server_noproc,
      server_restart_after_application_restart,
      restarted_server_does_not_reissue_side_effects,
      recover,
@@ -953,6 +954,27 @@ enq_deq_n(N, ServerId, Acc) ->
     Deq = dequeue(ServerId),
     true = Deq /= empty,
     enq_deq_n(N-1, ServerId, [Deq | Acc]).
+
+start_server_noproc(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    PrivDir = ?config(priv_dir, Config),
+    ServerId = ?config(server_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(ClusterName, UId, ServerId, PrivDir, []),
+    meck:new(ra_system, [passthrough]),
+    meck:expect(ra_system, lookup_name,
+                fun(?SYS, server_sup) ->
+                        {ok, ra_server_sup_sup_noproc_test};
+                   (Sys, Key) ->
+                        meck:passthrough([Sys, Key])
+                end),
+    try
+        ?assertEqual({error, system_not_started},
+                     ra:start_server(?SYS, Conf))
+    after
+        meck:unload(ra_system)
+    end,
+    ok.
 
 conf(ClusterName, UId, ServerId, _, Peers) ->
     #{cluster_name => ClusterName,
