@@ -1393,7 +1393,7 @@ start_peer(N, PrivDir, SysCfg) ->
     Dir = "'" ++ Dir0 ++ "'",
     %Host = get_current_host(),
     Pa = [filename:dirname(code:which(App))
-          || App <- [aten, gen_batch_server, seshat, ra]],
+          || App <- [aten, gen_batch_server, seshat, ra, shu]],
     Args = ["-pa"] ++ Pa ++ ["-ra", "data_dir", Dir],
     ct:pal("starting child node ~ts with args ~ts", [N, Args]),
     {ok, P, S} = ?CT_PEER(#{name => N, args => Args}),

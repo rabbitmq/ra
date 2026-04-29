@@ -1294,9 +1294,14 @@ wal_crash_recover(Config) ->
     Log0 = ra_log_init(Config, #{resend_window => 1}),
     Log1 = write_n(1, 50, 2, Log0),
     % crash the wal
+    WalPid = whereis(ra_log_wal),
+    ?assert(is_pid(WalPid)),
     ok = proc_lib:stop(ra_log_segment_writer),
     % write something
-    timer:sleep(100),
+    await_cond(fun () ->
+                       P = whereis(ra_log_wal),
+                       is_pid(P) andalso P =/= WalPid
+               end, 100),
     Log2 = deliver_one_log_events(write_n(50, 75, 2, Log1), 100),
     spawn(fun () -> proc_lib:stop(ra_log_segment_writer) end),
     Log3 = write_n(75, 100, 2, Log2),

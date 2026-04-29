@@ -1,0 +1,22 @@
+Error: terminated
+[{io,format,
+     ["===> Verifying dependencies...~n",[]],
+     [{file,"io.erl"},
+      {line,202},
+      {error_info,#{cause => {io,terminated},module => erl_stdlib_errors}}]},
+ {rebar_prv_install_deps,do,1,
+                         [{file,"/home/runner/work/rebar3/rebar3/apps/rebar/src/rebar_prv_install_deps.erl"},
+                          {line,73}]},
+ {rebar_core,do,2,
+             [{file,"/home/runner/work/rebar3/rebar3/apps/rebar/src/rebar_core.erl"},
+              {line,155}]},
+ {rebar3,run_aux,2,
+         [{file,"/home/runner/work/rebar3/rebar3/apps/rebar/src/rebar3.erl"},
+          {line,205}]},
+ {rebar3,main,1,
+         [{file,"/home/runner/work/rebar3/rebar3/apps/rebar/src/rebar3.erl"},
+          {line,66}]},
+ {init,start_it,1,[]},
+ {init,start_em,1,[]},
+ {init,do_boot,3,[]}]
+

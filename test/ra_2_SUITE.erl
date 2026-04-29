@@ -51,7 +51,8 @@ all_tests() ->
      force_start_follower_as_single_member_nonvoter,
      force_start_nonvoter_as_single_member,
      initial_members_query,
-     recovery_checkpoint_written_on_shutdown
+     recovery_checkpoint_written_on_shutdown,
+     create_300_single_member_clusters
     ].
 
 groups() ->
@@ -942,6 +943,48 @@ recovery_checkpoint_written_on_shutdown(Config) ->
 
     %% Clean up
     ok = ra:stop_server(?SYS, ServerId),
+    ok.
+
+create_300_single_member_clusters(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    Node = node(),
+    erlang:garbage_collect(),
+    timer:sleep(100),
+    AtomCountBefore = erlang:system_info(atom_count),
+
+    %% Get list of all atoms before (by dumping to a list and checking memory or something)
+    %% Actually, let's just assert diff < 1500 for now.
+
+    %% Create 300 single member clusters using binaries for uid.
+    %% ClusterName must be an atom, so we expect exactly 300 atoms to be created
+    %% for the process names, plus maybe a few system atoms, but not thousands.
+    Servers = [begin
+                   ClusterName = list_to_atom("cluster_300_" ++ integer_to_list(I)),
+                   UId = list_to_binary("uid_create_300_" ++ integer_to_list(I)),
+                   ServerId = {ClusterName, Node},
+                   Conf = conf(ClusterName, UId, ServerId, PrivDir, []),
+                   ok = ra:start_server(?SYS, Conf),
+                   ServerId
+               end || I <- lists:seq(1, 300)],
+
+    %% Wait for them all to start up
+    [begin
+         ok = ra:trigger_election(ServerId),
+         {ok, _, _} = ra:members(ServerId)
+     end || ServerId <- Servers],
+
+    erlang:garbage_collect(),
+    timer:sleep(100),
+    AtomCountAfter = erlang:system_info(atom_count),
+
+    %% Stop all servers
+    [ok = ra:stop_server(?SYS, ServerId) || ServerId <- Servers],
+
+    %% Check that the number of atoms hasn't increased by more than 1500
+    AtomDiff = AtomCountAfter - AtomCountBefore,
+    ct:pal("AtomCountBefore: ~p, AtomCountAfter: ~p, Diff: ~p",
+           [AtomCountBefore, AtomCountAfter, AtomDiff]),
+    ?assert(AtomDiff < 1500),
     ok.
 
 enq_deq_n(N, ServerId) ->
