@@ -399,7 +399,7 @@ send_segments(System, ServerUId, TidRanges, SegRefs) ->
             %% Delete from the memtable on the non-running server's behalf.
             %% ra_mt:delete/1 supports {indexes, Tid, Seq} format for
             %% sparse sequence deletion.
-            _ = [_ = catch ra_mt:delete({indexes, Tid, Seq})
+            _ = [?CATCH(ra_mt:delete({indexes, Tid, Seq}))
                  || {Tid, Seq} <- TidRanges],
             ok;
         Pid ->

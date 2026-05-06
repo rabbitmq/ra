@@ -55,7 +55,7 @@ stop_system(Name) when is_atom(Name) ->
     end.
 
 cleanup(Name) when is_atom(Name) ->
-    _ = (catch supervisor:delete_child(?MODULE, Name)),
+    ?CATCH(supervisor:delete_child(?MODULE, Name)),
     _ = persistent_term:erase({'$ra_system', Name}),
     ok.
 

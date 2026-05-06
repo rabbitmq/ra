@@ -185,12 +185,12 @@ delete_server_rpc(System, RaName) ->
             _ = delete_data_directory(Dir),
             _ = ra_directory:unregister_name(Names, UId),
             %% forcefully clean up ETS tables
-            catch ets:delete(ra_log_metrics, UId),
-            catch ets:delete(ra_log_snapshot_state, UId),
-            catch ets:delete(ra_state, RaName),
-            catch ets:delete(ra_open_file_metrics, Pid),
-            catch ra_counters:delete({RaName, node()}),
-            catch ra_leaderboard:clear(RaName),
+            ?CATCH(ets:delete(ra_log_metrics, UId)),
+            ?CATCH(ets:delete(ra_log_snapshot_state, UId)),
+            ?CATCH(ets:delete(ra_state, RaName)),
+            ?CATCH(ets:delete(ra_open_file_metrics, Pid)),
+            ?CATCH(ra_counters:delete({RaName, node()})),
+            ?CATCH(ra_leaderboard:clear(RaName)),
             ok
     end.
 

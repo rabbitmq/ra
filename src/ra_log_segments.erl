@@ -408,7 +408,7 @@ fold(_FromIdx, _ToIdx, _Fun, Acc, #?STATE{} = State, _Strat) ->
 -spec sparse_read(state(), [ra_index()], [log_entry()]) ->
     {[log_entry()], state()}.
 sparse_read(#?STATE{cfg = #cfg{} = Cfg} = State, Indexes, Entries0) ->
-    {Open, SegC, Entries} = (catch segment_sparse_read(State, Indexes, Entries0)),
+    {Open, SegC, Entries} = segment_sparse_read(State, Indexes, Entries0),
     ok = incr_counter(Cfg, ?C_RA_LOG_READ_SEGMENT, SegC),
     {Entries, State#?MODULE{open_segments = Open}}.
 

@@ -319,6 +319,7 @@
 
 -spec name(ClusterName :: ra_cluster_name(), UniqueSuffix::string()) -> atom().
 name(ClusterName, UniqueSuffix) ->
+    % elp:ignore W0023 (atoms_exhaustion)
     list_to_atom("ra_" ++ ClusterName ++ "_server_" ++ UniqueSuffix).
 
 -spec init(ra_server_config()) -> ra_server_state().
@@ -1387,7 +1388,6 @@ handle_follower(#append_entries_rpc{term = Term,
              Effects};
         {term_mismatch, OtherTerm, Log0} ->
             State1 = State0#{log => Log0},
-            LastApplied = maps:get(last_applied, State1),
             ?INFO("~ts: term mismatch - follower had entry at ~b with term ~b "
                   "but not with term ~b. "
                   "Asking leader ~tw to resend from ~b",
@@ -1944,10 +1944,9 @@ handle_await_condition(Msg, #{condition := #{predicate_fun := Pred} = Cond} = St
     {ra_server_state(), [from()]}.
 process_new_leader_queries(#{pending_consistent_queries := Pending,
                              queries_waiting_heartbeats := Waiting} = State0) ->
-    From0 = lists:map(fun({_, From, _, _}) -> From end, Pending),
+    From0 = [From || {_, From, _, _} <- Pending],
 
-    From1 = lists:map(fun({_, {_, From, _, _}}) -> From end,
-                      queue:to_list(Waiting)),
+    From1 = [From || {_, {_, From, _, _}} <- queue:to_list(Waiting)],
 
     {State0#{pending_consistent_queries => [],
              queries_waiting_heartbeats => queue:new()},
@@ -2242,11 +2241,7 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
     ApplyTo = min(Idx, CommitIndex),
 
     % need to catch a termination throw
-    case catch apply_to(ApplyTo, State0, Effects0) of
-        {delete_and_terminate, State1, Effects} ->
-            Reply = append_entries_reply(Term, true, State1),
-            {delete_and_terminate, State1,
-             [cast_reply(Id, LeaderId, Reply) | Effects]};
+    try apply_to(ApplyTo, State0, Effects0) of
         {#{last_applied := LastApplied} = State, Effects} ->
             {State1, Effects1} = maybe_emit_pending_release_cursor(State, Effects),
             case LastApplied > LastApplied0 of
@@ -2257,6 +2252,10 @@ evaluate_commit_index_follower(#{commit_index := CommitIndex,
                     %% no entries were applied
                     {follower, State1, Effects1}
             end
+    catch throw:{delete_and_terminate, State1, Effects} ->
+              Reply = append_entries_reply(Term, true, State1),
+              {delete_and_terminate, State1,
+               [cast_reply(Id, LeaderId, Reply) | Effects]}
     end;
 evaluate_commit_index_follower(State, Effects) ->
     %% when no leader is known
@@ -2676,13 +2675,13 @@ handle_node_status(RaftState, Type, Node, Status, _Info,
 terminate(#{log := Log,
             cfg := #cfg{log_id = LogId}} = _State, {shutdown, delete}) ->
     ?NOTICE("~ts: terminating with reason 'delete'", [LogId]),
-    catch ra_log:delete_everything(Log),
+    ?CATCH(ra_log:delete_everything(Log)),
     ok;
 terminate(#{cfg := #cfg{log_id = LogId}} = State, Reason) ->
     ?DEBUG("~ts: terminating with reason '~w'", [LogId, Reason]),
     State1 = maybe_write_recovery_checkpoint(State),
     #{log := Log} = persist_last_applied(State1),
-    catch ra_log:close(Log),
+    ?CATCH(ra_log:close(Log)),
     ok.
 
 %% @doc Maybe write a recovery checkpoint during shutdown.

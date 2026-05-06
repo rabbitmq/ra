@@ -35,6 +35,7 @@ pool_size() ->
 
 -spec worker_name(atom(), non_neg_integer()) -> atom().
 worker_name(BaseName, Idx) ->
+    % elp:ignore W0023 (atoms_exhaustion)
     list_to_atom(atom_to_list(BaseName) ++ "_" ++ integer_to_list(Idx)).
 
 -spec start_link(#{name := atom()}) ->

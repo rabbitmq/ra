@@ -461,6 +461,7 @@ recover_wal(Dir, #conf{system = System,
     State = roll_over(#state{conf = Conf,
                              writers = TrimmedWriters,
                              file_num = FileNum}),
+    % elp:ignore W0047 (no_garbage_collect)
     true = erlang:garbage_collect(),
     State.
 
@@ -583,7 +584,7 @@ handle_msg({append, {UId, Pid} = Id, MtTid, ExpectedPrevIdx, Idx, Term, Entry},
     end;
 handle_msg({query, Fun}, State) ->
     %% for testing
-    _ = catch Fun(State),
+    ?CATCH(Fun(State)),
     State;
 handle_msg(rollover, State) ->
     complete_batch_and_roll(State);
@@ -793,9 +794,7 @@ complete_batch(#state{batch = #batch{waiting = Waiting,
     counters:add(Cfg#conf.counter, ?C_WRITES, NumWrites),
 
     %% process writers
-    Ranges = maps:fold(fun (Pid, BatchWriter, Acc) ->
-                               complete_batch_writer(Pid, BatchWriter, Acc)
-                       end, Wal#wal.ranges, Waiting),
+    Ranges = maps:fold(fun complete_batch_writer/3, Wal#wal.ranges, Waiting),
     State#state{wal = Wal#wal{ranges = Ranges}}.
 
 complete_batch_writer(Pid, #batch_writer{smallest_live_idx = SmallestIdx,

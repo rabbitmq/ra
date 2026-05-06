@@ -179,7 +179,6 @@ start_in(DataDir) ->
     ok = application:set_env(sasl, sasl_error_logger, {file, SaslFile}),
     _ = application:stop(sasl),
     ok = application:start(sasl),
-    _ = error_logger:tty(false),
     start([{data_dir, DataDir}]).
 
 %% @doc Restarts a previously successfully started ra server
@@ -194,12 +193,14 @@ start_in(DataDir) ->
 restart_server(System, ServerId)
   when is_atom(System) ->
     % don't match on return value in case it is already running
-    case catch ra_server_sup_sup:restart_server(System, ServerId, #{}) of
+    try ra_server_sup_sup:restart_server(System, ServerId, #{}) of
         {ok, _} -> ok;
         {ok, _, _} -> ok;
         {error, _} = Err -> Err;
-        {badrpc, Reason} -> {error, Reason};
-        {'EXIT', Err} -> {error, Err}
+        {badrpc, Reason} -> {error, Reason}
+    catch
+        exit:Reason -> {error, Reason};
+        error:Reason:Stacktrace -> {error, {Reason, Stacktrace}}
     end.
 
 %% @doc Restarts a previously successfully started ra server
@@ -217,12 +218,14 @@ restart_server(System, ServerId)
 restart_server(System, ServerId, AddConfig)
   when is_atom(System) ->
     % don't match on return value in case it is already running
-    case catch ra_server_sup_sup:restart_server(System, ServerId, AddConfig) of
+    try ra_server_sup_sup:restart_server(System, ServerId, AddConfig) of
         {ok, _} -> ok;
         {ok, _, _} -> ok;
         {error, _} = Err -> Err;
-        {badrpc, Reason} -> {error, Reason};
-        {'EXIT', Err} -> {error, Err}
+        {badrpc, Reason} -> {error, Reason}
+    catch
+        exit:Reason -> {error, Reason};
+        error:Reason:Stacktrace -> {error, {Reason, Stacktrace}}
     end.
 
 %% @doc Stops a ra server
@@ -505,12 +508,14 @@ start_server(System, Conf) when is_atom(System) ->
     case ra_lib:validate_base64uri(maps:get(uid, Conf)) of
         true ->
             % don't match on return value in case it is already running
-            case catch ra_server_sup_sup:start_server(System, Conf) of
+            try ra_server_sup_sup:start_server(System, Conf) of
                 {ok, _} -> ok;
                 {ok, _, _} -> ok;
                 {error, _} = Err -> Err;
-                {'EXIT', Err} -> {error, Err};
                 {badrpc, Reason} -> {error, Reason}
+            catch
+                exit:Reason -> {error, Reason};
+                error:Reason:Stacktrace -> {error, {Reason, Stacktrace}}
             end;
         false ->
             {error, invalid_uid}

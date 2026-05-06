@@ -106,7 +106,7 @@ pre_init(System, UId) ->
                                            "complete with a corrupt config file "
                                            "unregistering name to start as new member",
                                            [UId, Err]),
-                                    _ = catch ra_directory:unregister_name(System, UId),
+                                    ?CATCH(ra_directory:unregister_name(System, UId)),
                                     ok;
                                 {error, Err} ->
                                     ?ERROR("pre_init failed to read config file "
@@ -118,7 +118,7 @@ pre_init(System, UId) ->
                             ?INFO("pre_init UId '~ts' is registered but no data
                                   directory was found, removing from ra directory",
                                   [UId]),
-                            _ = catch ra_directory:unregister_name(System, UId),
+                            ?CATCH(ra_directory:unregister_name(System, UId)),
                             ok
                     end
             end
