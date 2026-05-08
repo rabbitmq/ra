@@ -323,6 +323,9 @@ recover_indexes(UId, Module, Machine, SnapDir, Err) ->
             Idxs = ra_machine:live_indexes(
                      MacMod, MacState),
             ok = write_indexes(SnapDir, Idxs),
+            ?INFO("ra_snapshot: ~ts: indexes file recovered "
+                  "~b live indexes recovered from snapshot",
+                  [UId, ra_seq:length(Idxs)]),
             Idxs;
         {error, RecoverErr} ->
             ?WARN("ra_snapshot: ~ts: failed to "
