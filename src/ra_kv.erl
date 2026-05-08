@@ -248,6 +248,7 @@ init(_) ->
     #?MODULE{}.
 
 %% we use improper lists in this module
+% elp:ignore W0048 (no_dialyzer_attribute)
 -dialyzer({no_improper_lists, [apply/3]}).
 
 apply(#{index := Idx} = Meta,

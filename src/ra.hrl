@@ -242,14 +242,18 @@
 
 -define(DISPATCH_LOG(Level, Fmt, Args),
         %% same as OTP logger does when using the macro
-        catch (persistent_term:get('$ra_logger')):log(Level, Fmt, Args,
-                                                      #{mfa => {?MODULE,
-                                                                ?FUNCTION_NAME,
-                                                                ?FUNCTION_ARITY},
-                                                        file => ?FILE,
-                                                        line => ?LINE,
-                                                        domain => [ra]}),
-       ok).
+        try
+            (persistent_term:get('$ra_logger')):log(Level, Fmt, Args,
+                                                    #{mfa => {?MODULE,
+                                                              ?FUNCTION_NAME,
+                                                              ?FUNCTION_ARITY},
+                                                      file => ?FILE,
+                                                      line => ?LINE,
+                                                      domain => [ra]})
+        catch
+            _:_ -> ok
+        end,
+        ok).
 
 -define(DEFAULT_TIMEOUT, 5000).
 
@@ -432,3 +436,8 @@
         ?RA_SRV_METRICS_COUNTER_FIELDS).
 
 -define(FIELDSPEC_KEY, ra_seshat_fields_spec).
+
+-define(CATCH(Expr), try Expr of
+                         _ -> ok
+                     catch _:_ -> ok
+                     end).

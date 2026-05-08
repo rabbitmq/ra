@@ -40,11 +40,11 @@
 
 -define(VERSION, 2).
 -define(MAGIC, "RASG").
--define(HEADER_SIZE, 4 + (16 div 8) + (16 div 8)).
+-define(HEADER_SIZE, (4 + (16 div 8) + (16 div 8))).
 -define(INDEX_RECORD_SIZE_V1, ((2 * 64 + 3 * 32) div 8)).
 -define(INDEX_RECORD_SIZE_V2, ((3 * 64 + 2 * 32) div 8)).
 -define(BLOCK_SIZE, 4096). %% assumed block size
--define(READ_AHEAD_B, ?BLOCK_SIZE * 16). %% some multiple of common block sizes
+-define(READ_AHEAD_B, (?BLOCK_SIZE * 16)). %% some multiple of common block sizes
 
 -type index_record_data() :: {Term :: ra_term(), % 64 bit
                               Offset :: non_neg_integer(), % 32 bit

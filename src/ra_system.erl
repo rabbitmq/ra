@@ -197,6 +197,7 @@ lookup_name(System, Key) when is_atom(System) ->
 
 derive(N, Suff) ->
     S = atom_to_binary(N, utf8),
+    % elp:ignore W0023 (atoms_exhaustion)
     binary_to_atom(<<"ra_", S/binary, "_", Suff/binary>>, utf8).
 
 -spec stop(ra_system:config() | atom()) -> ok | {error, any()}.

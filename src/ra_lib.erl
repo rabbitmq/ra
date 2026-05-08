@@ -66,9 +66,9 @@ ceiling(X) when X < 0 ->
     trunc(X);
 ceiling(X) ->
     T = trunc(X),
-    case X-T =:= 0 of
-      true -> T;
-      false -> T + 1
+    case X-T of
+        0 -> T;
+        _ -> T + 1
     end.
 
 default(undefined, Def) ->
@@ -132,8 +132,10 @@ to_string(L) when is_list(L) ->
 to_atom(A) when is_atom(A) ->
     A;
 to_atom(B) when is_binary(B) ->
+    % elp:ignore W0023 (atoms_exhaustion)
     list_to_atom(binary_to_list(B));
 to_atom(L) when is_list(L) ->
+    % elp:ignore W0023 (atoms_exhaustion)
     list_to_atom(L).
 
 ra_server_id_to_local_name({Name, _}) -> Name;
@@ -251,7 +253,7 @@ make_uid() ->
 
 -spec make_uid(atom() | binary() | string()) -> binary().
 make_uid(Prefix0) ->
-    ChrsSize = size(?GENERATED_UID_CHARS),
+    ChrsSize = tuple_size(?GENERATED_UID_CHARS),
     F = fun(_, R) ->
                 [element(rand:uniform(ChrsSize), ?GENERATED_UID_CHARS) | R]
         end,
@@ -288,15 +290,19 @@ make_dir(Dir) ->
 
 -spec validate_base64uri(string()) -> boolean().
 validate_base64uri(Str) ->
-    catch
-    begin
-        [begin
-             case lists:member(C, ?BASE64_URI_CHARS) of
-                 true -> ok;
-                 false -> throw(false)
-             end
-         end || C <- string:to_graphemes(Str)],
-        string:is_empty(Str) == false
+    try
+        (begin
+             [begin
+                  case lists:member(C, ?BASE64_URI_CHARS) of
+                      true -> ok;
+                      false -> throw(false)
+                  end
+              end || C <- string:to_graphemes(Str)],
+             string:is_empty(Str) == false
+         end) of
+        Res -> Res
+    catch throw:Res ->
+              Res
     end.
 
 
@@ -354,12 +360,15 @@ retry(_Func, 0, _Sleep) ->
     exhausted;
 retry(Func, Attempt, Sleep) ->
     % do not retry immediately
-    case catch Func() of
+    try Func() of
         ok ->
             ok;
         true ->
             ok;
-        _Err ->
+        false ->
+            timer:sleep(Sleep),
+            retry(Func, Attempt - 1, Sleep)
+        catch _:_ ->
             timer:sleep(Sleep),
             retry(Func, Attempt - 1, Sleep)
     end.
@@ -582,14 +591,14 @@ make_uid_test() ->
 zpad_filename_incr_test() ->
     Fn = "/lib/blah/prefix_0000000000000001.segment",
     Ex = "/lib/blah/prefix_0000000000000002.segment",
-    Ex = zpad_filename_incr(Fn),
+    ?assertEqual(Ex, zpad_filename_incr(Fn)),
     undefined = zpad_filename_incr("000000000000001"),
     ok.
 
 zpad_filename_incr_utf8_test() ->
     Fn = "/lib/🐰/prefix/0000000000000001.segment",
     Ex = "/lib/🐰/prefix/0000000000000002.segment",
-    Ex = zpad_filename_incr(Fn),
+    ?assertEqual(Ex, zpad_filename_incr(Fn)),
     undefined = zpad_filename_incr("000000000000001"),
     ok.
 

@@ -10,6 +10,7 @@
         ]).
 
 -include_lib("eunit/include/eunit.hrl").
+-include("ra.hrl").
 
 -define(SYS, default).
 -define(CLUSTER_NAME, kv).
@@ -188,6 +189,7 @@ start_peer_nodes(N, PeerRefs, NodeNames, Opts) when N > 0 ->
     end.
 
 start_single_peer_node(NodeId, Opts) ->
+    % elp:ignore W0023 (atoms_exhaustion)
     NodeName = list_to_atom("ra_test_" ++ integer_to_list(NodeId) ++ "@" ++
                             inet_db:gethostname()),
 
@@ -236,8 +238,8 @@ teardown_cluster(#{members := Members}) ->
     maps:foreach(fun(Member, PeerRef) ->
                          NodeName = element(2, Member),
 			 log("~s Stopping member ~p~n", [timestamp(), Member]),
-                         catch erpc:call(NodeName, ra, stop_server, [?SYS, Member]),
-                         catch peer:stop(PeerRef),
+                         ?CATCH(erpc:call(NodeName, ra, stop_server, [?SYS, Member])),
+                         ?CATCH(peer:stop(PeerRef)),
                          ok
                  end, Members),
     ok.
@@ -403,7 +405,8 @@ execute_operation(State, {update_almost_all_keys}) ->
     end,
 
     % Only update reference map for successfully updated keys
-    NewRefMap = maps:merge(RefMap, maps:from_list([{key(N), OpCount} || N <- SuccessfulKeys])),
+    NewRefMap = maps:merge(RefMap, #{ key(N) => OpCount
+                                      || N <- SuccessfulKeys }),
     State#{reference_map => NewRefMap,
            operations_count => OpCount + 1,
            successful_ops => SuccessOps + 1};
@@ -481,7 +484,7 @@ execute_operation(#{options := Opts} = State, {add_member}) ->
                     log("~s Timeout adding member ~p~n",
                         [timestamp(), NewMember]),
                     % Clean up the peer node since add failed
-                    catch peer:stop(PeerRef),
+                    ?CATCH(peer:stop(PeerRef)),
                     State#{operations_count => OpCount + 1,
                            failed_ops => FailedOps + 1,
                            next_node_id => NextNodeId + 1};
@@ -489,7 +492,7 @@ execute_operation(#{options := Opts} = State, {add_member}) ->
                     log("~s Failed to add member ~p: ~p~n",
                         [timestamp(), NewMember, Reason]),
                     % Clean up the peer node since add failed
-                    catch peer:stop(PeerRef),
+                    ?CATCH(peer:stop(PeerRef)),
                     State#{operations_count => OpCount + 1,
                            failed_ops => FailedOps + 1,
                            next_node_id => NextNodeId + 1}
@@ -532,7 +535,7 @@ execute_operation(State, {remove_member}) ->
                         undefined ->
                             ok;
                         PeerRef ->
-                            catch peer:stop(PeerRef)
+                            ?CATCH(peer:stop(PeerRef))
                     end,
 
                     NewMembers = maps:remove(MemberToRemove, Members),
@@ -740,12 +743,12 @@ wait_for_applied_index_convergence(Members, 0) ->
 
 -spec get_applied_indices([ra:server_id()]) -> #{ra:server_id() => ra:index() | undefined}.
 get_applied_indices(Members) ->
-    maps:from_list([{Member, case ra:member_overview(Member, 1000) of
-                                 {ok, #{last_applied := Index}, _} ->
-                                     Index;
-                                 _ ->
-                                     undefined
-                             end} || Member <- Members]).
+    #{Member => case ra:member_overview(Member, 1000) of
+                    {ok, #{last_applied := Index}, _} ->
+                        Index;
+                    _ ->
+                        undefined
+                end || Member <- Members}.
 
 -spec validate_consistency(state()) -> state().
 validate_consistency(State) ->
@@ -830,7 +833,7 @@ format_consistency_failure(Members, Results) ->
         MultipleResults ->
             ["  ANALYSIS: Found ~p different result patterns:\n" |
              [io_lib:format("    Pattern ~p: ~p\n", [I, Pattern]) ||
-              {I, Pattern} <- lists:zip(lists:seq(1, length(MultipleResults)), MultipleResults)] ++
+              {I, Pattern} <- lists:enumerate(MultipleResults)] ++
              ["  DIFFERENCES:\n"] ++
              analyze_field_differences(MultipleResults)]
     end,
@@ -886,7 +889,6 @@ validate_final_consistency(State) ->
     % Validate all keys across all members
     Keys = maps:keys(RefMap),
 
-    MembersList = maps:keys(Members),
     ValidationCount = lists:foldl(
                         fun(Key, Acc) ->
                                 RefValue = maps:get(Key, RefMap),

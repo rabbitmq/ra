@@ -344,7 +344,8 @@ delete({indexes, Tid, Seq}) ->
             NumToDelete
     end;
 delete({Op, Tid, Idx})
-  when is_integer(Idx) and is_atom(Op) ->
+  when is_integer(Idx) andalso
+       is_atom(Op) ->
     DelSpec = [{{'$1', '_', '_'}, [{'<', '$1', Idx}], [true]}],
     ets:select_delete(Tid, DelSpec);
 delete({delete, Tid}) ->

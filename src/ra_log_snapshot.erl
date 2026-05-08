@@ -53,7 +53,7 @@ write(Dir, Meta, MacState, Sync) ->
     %% as possible
     MetaBin = term_to_binary(Meta),
     IOVec = term_to_iovec(MacState),
-    Data = [<<(size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
+    Data = [<<(byte_size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
     Checksum = erlang:crc32(Data),
     File = filename(Dir),
     Bytes = 9 + iolist_size(Data),
@@ -77,7 +77,7 @@ begin_accept(SnapDir, Meta) ->
     File = filename(SnapDir),
     {ok, Fd} = file:open(File, [write, binary, raw]),
     MetaBin = term_to_binary(Meta),
-    Data = [<<(size(MetaBin)):32/unsigned>>, MetaBin],
+    Data = [<<(byte_size(MetaBin)):32/unsigned>>, MetaBin],
     PartialCrc = erlang:crc32(Data),
     Chunk = [<<?MAGIC,
                ?VERSION:8/unsigned,

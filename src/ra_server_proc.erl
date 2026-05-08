@@ -380,6 +380,7 @@ do_init(#{id := Id,
                                  ?DEFAULT_SNAPSHOT_CHUNK_SIZE),
     ReceiveSnapshotTimeout = maps:get(receive_snapshot_timeout, SysConf,
                                       ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT),
+    % elp:ignore W0011 (application_get_env)
     AtenPollInt = application:get_env(aten, poll_interval, 1000),
     LogId = ra_server:log_id(ServerState),
     %% TODO: full error handling
@@ -448,6 +449,7 @@ recovered(enter, OldState, State0) ->
     ok = record_cluster_change(State),
     {keep_state, State, Actions};
 recovered(internal, next, State) ->
+    % elp:ignore W0047 (no_garbage_collect)
     true = erlang:garbage_collect(),
     next_state(follower, State, set_tick_timer(State, [])).
 
@@ -1243,7 +1245,7 @@ terminate(Reason, StateName,
             %% try to wait a bit for the worker to finish any pending work
             %% before continuing
             if is_pid(WorkerPid) ->
-                   _ = catch gen_server:call(WorkerPid, undefined, 1000);
+                   ?CATCH(gen_server:call(WorkerPid, undefined, 1000));
                true -> ok
             end,
             Parent = ra_directory:where_is_parent(Names, UId),
@@ -1253,11 +1255,11 @@ terminate(Reason, StateName,
             %% after the server is removed from the ra directory.
             %% This is so that the segment writer can avoid
             %% crashing if it detects a missing key
-            catch ra_directory:unregister_name(Names, UId),
-            catch ra_log_wal:forget_writer(maps:get(wal, Names), UId),
+            ?CATCH(ra_directory:unregister_name(Names, UId)),
+            ?CATCH(ra_log_wal:forget_writer(maps:get(wal, Names), UId)),
             _ = ra_server:terminate(ServerState, Reason),
-            catch ra_log_meta:delete_sync(MetaName, UId),
-            catch ra_counters:delete(Id),
+            ?CATCH(ra_log_meta:delete_sync(MetaName, UId)),
+            ?CATCH(ra_counters:delete(Id)),
             Self = self(),
             %% we have to terminate the child spec from the supervisor as it
             %% won't do this automatically, even for transient children
@@ -1277,7 +1279,7 @@ terminate(Reason, StateName,
             _ = ra_server:terminate(ServerState, Reason),
             ok
     end,
-    catch ra_leaderboard:clear(ClusterName),
+    ?CATCH(ra_leaderboard:clear(ClusterName)),
     _ = ets:delete(ra_state, Key),
     ok;
 %% This occurs if there is a crash in the init callback of the ra_machine,
@@ -1775,6 +1777,7 @@ handle_effect(RaftState, {checkpoint, Index, MacState}, EvtType,
     State1 = State0#state{server_state = ServerState},
     handle_effects(RaftState, Effects, EvtType, State1, Actions0);
 handle_effect(_, garbage_collection, _EvtType, State, Actions) ->
+    % elp:ignore W0047 (no_garbage_collect)
     true = erlang:garbage_collect(),
     incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),
     {State, Actions};
