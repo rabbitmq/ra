@@ -89,9 +89,19 @@ pre_init(System, UId) ->
                     case ra_lib:is_dir(Dir) of
                         true ->
                             case ra_log:read_config(Dir) of
-                                {ok, #{log_init_args := Log}} ->
-                                    ok = ra_log:pre_init(
-                                           Log#{system_config => SysCfg}),
+                                {ok, #{log_init_args := Log,
+                                       machine := MachineConf}} ->
+                                    Machine = case MachineConf of
+                                                  {simple, Fun, S} ->
+                                                      {machine, ra_machine_simple,
+                                                       #{simple_fun => Fun,
+                                                         initial_state => S}};
+                                                  {module, Mod, Args} ->
+                                                      {machine, Mod, Args}
+                                              end,
+                                    ok = ra_log:pre_init(Machine,
+                                                         Log#{system_config =>
+                                                              SysCfg}),
                                     ok;
                                 {error, Err}
                                   when Err == parsing orelse
