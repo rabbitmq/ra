@@ -2183,8 +2183,8 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                     ok
                             catch Class:Err:Stack ->
                                       ?INFO("~ts: send_pre_snapshot_entries "
-                                            "encountered an error: ~w",
-                                            [LogId, Err]),
+                                            "encountered an error: ~W",
+                                            [LogId, Err, 10]),
                                       erlang:raise(Class, Err,
                                                    safe_stacktrace(Stack))
                             end,
