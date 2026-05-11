@@ -10,7 +10,7 @@
 -include_lib("stdlib/include/assert.hrl").
 -compile([inline_list_funcs]).
 
--export([pre_init/1,
+-export([pre_init/2,
          init/1,
          close/1,
          begin_tx/1,
@@ -181,8 +181,8 @@
 -define(CHECKPOINTS_DIR, <<"checkpoints">>).
 -define(RECOVERY_CHECKPOINT_DIR, <<"recovery_checkpoint">>).
 
-pre_init(#{uid := UId,
-           system_config := #{data_dir := DataDir}} = Conf) ->
+pre_init(Machine, #{uid := UId,
+                    system_config := #{data_dir := DataDir}} = Conf) ->
     Dir = server_data_dir(DataDir, UId),
     SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
     MaxCheckpoints = maps:get(max_checkpoints, Conf, ?DEFAULT_MAX_CHECKPOINTS),
@@ -191,7 +191,7 @@ pre_init(#{uid := UId,
     RecoveryCheckpointDir = filename:join(Dir, ?RECOVERY_CHECKPOINT_DIR),
     _ = ra_snapshot:init(UId, SnapModule, SnapshotsDir,
                          CheckpointsDir, RecoveryCheckpointDir,
-                         undefined, undefined, MaxCheckpoints),
+                         Machine, undefined, MaxCheckpoints),
     ok.
 
 -spec init(ra_log_init_args()) -> state().

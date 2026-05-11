@@ -92,8 +92,9 @@ all_tests() ->
      concurrent_snapshot_install_and_compaction,
      snapshot_installation_with_live_indexes,
      init_with_dangling_symlink,
-     init_after_missing_segments_event
-   ].
+     init_after_missing_segments_event,
+     snapshot_install_with_empty_indexes_file
+    ].
 
 groups() ->
     [
@@ -682,6 +683,80 @@ recover_after_snapshot(Config) ->
                    last_term := 1,
                    snapshot_index := 2,
                    last_written_index_term := {2, 1}}, Overview),
+    ok.
+
+snapshot_install_with_empty_indexes_file(Config) ->
+    UId = ?config(uid, Config),
+    MachineConf = {module, ?MODULE, #{}},
+    LogConf = #{uid => UId,
+                initial_access_pattern => ?config(access_pattern, Config)},
+    ServerConf = #{cluster_name => ?MODULE,
+                   id => {?MODULE, node()},
+                   uid => UId,
+                   log_init_args => LogConf,
+                   initial_members => [],
+                   machine => MachineConf},
+    Log0 = ra_log_init(Config, LogConf),
+    %% write config to check recovery
+    ok = ra_log:write_config(ServerConf, Log0),
+
+    {0, 0} = ra_log:last_index_term(Log0),
+    Log1 = assert_log_events(write_n(1, 6, 2, Log0),
+                             fun (L) ->
+                                     LW = ra_log:last_written(L),
+                                     {5, 2} == LW
+                             end),
+
+    %% snapshot at 10
+    SnapIdx = 10,
+    SnapTerm = 2,
+    Meta = meta(SnapIdx, SnapTerm, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, #{}),
+    SnapState0 = ra_log:snapshot_state(Log1),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} = ra_snapshot:complete_accept(Chunk, 1,
+                                                                     Machine,
+                                                                     SnapState1),
+    run_effs(AEffs),
+    {ok, Log2, Effs4} = ra_log:install_snapshot({SnapIdx, SnapTerm}, ?MODULE,
+                                                LiveIndexes,
+                                                ra_log:set_snapshot_state(SnapState, Log1)),
+    run_effs(Effs4),
+
+    {SnapIdx, _} = ra_log:last_index_term(Log2),
+    {SnapIdx, _} = ra_log:last_written(Log2),
+
+    %% append after snapshot
+    Log3 = append_n(11, 16, SnapTerm, Log2),
+    Log4 = assert_log_events(Log3, fun (L) ->
+                                           {15, SnapTerm} == ra_log:last_written(L)
+                                   end),
+
+    SnapStateForDir = ra_log:snapshot_state(Log4),
+    SnapDir = ra_snapshot:current_snapshot_dir(SnapStateForDir),
+
+    ra_log:close(Log4),
+
+    IndexesFile = filename:join(SnapDir, <<"indexes">>),
+    ok = file:write_file(IndexesFile, <<>>),
+
+    application:stop(ra),
+    start_ra(Config),
+    timer:sleep(100),
+    ct:pal("snapshot state ~p",
+           [ra_log_snapshot_state:read(ra_log_snapshot_state, UId)]),
+
+
+    Log5 = ra_log_init(Config, LogConf),
+
+    %% Fetch items 1..10 (should be dropped because of snapshot)
+    {[], _} = ra_log_take(1, 10, Log5),
+
+    %% Fetch items 11..15
+    {[_, _, _, _, _], _} = ra_log_take(11, 16, Log5),
+
+    ra_log:close(Log5),
     ok.
 
 writes_lower_than_snapshot_index_are_dropped(Config) ->
