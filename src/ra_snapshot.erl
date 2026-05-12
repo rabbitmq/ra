@@ -633,7 +633,8 @@ begin_snapshot(#{index := Idx,
 -spec promote_checkpoint(Idx :: ra_index(), State0 :: state()) ->
     {boolean(), State :: state(), Effects :: [effect()]}.
 promote_checkpoint(PromotionIdx,
-                   #?MODULE{module = Mod,
+                   #?MODULE{uid = UId,
+                            module = Mod,
                             sync_server = SyncServer,
                             snapshot_directory = SnapDir,
                             checkpoint_directory = CheckpointDir,
@@ -660,7 +661,12 @@ promote_checkpoint(PromotionIdx,
                           Indexes = case indexes(Snapshot) of
                                         {ok, Idxs} ->
                                             Idxs;
-                                        _ ->
+                                        {error, Err} ->
+                                            ?WARN("ra_snapshot: ~ts: indexes file "
+                                                  "corrupt during checkpoint "
+                                                  "promotion (~w), using empty "
+                                                  "indexes",
+                                                  [UId, Err]),
                                             []
                                     end,
                           EndTime = erlang:monotonic_time(),
@@ -1040,9 +1046,15 @@ indexes(Dir) ->
                     try
                         case binary_to_term(Data) of
                             Seq when is_list(Seq) -> {ok, Seq};
-                            _ -> {error, invalid_format}
+                            Invalid ->
+                                ?WARN("ra_snapshot: indexes file ~ts: CRC passed "
+                                      "but decoded term is not a list: ~0p",
+                                      [File, Invalid]),
+                                {error, invalid_format}
                         end
-                    catch _:_ ->
+                    catch _:Err ->
+                        ?WARN("ra_snapshot: indexes file ~ts: CRC passed but "
+                              "binary_to_term failed: ~w", [File, Err]),
                         {error, invalid_format}
                     end;
                 _ ->
@@ -1056,10 +1068,15 @@ indexes(Dir) ->
             try
                 case binary_to_term(Bin) of
                     Seq when is_list(Seq) -> {ok, Seq};
-                    _ -> {error, invalid_format}
+                    Invalid ->
+                        ?WARN("ra_snapshot: indexes file ~ts: old format term "
+                              "is not a list: ~0p", [File, Invalid]),
+                        {error, invalid_format}
                 end
             catch
                 _:_ ->
+                    ?WARN("ra_snapshot: indexes file ~ts: failed to parse "
+                           "as term (empty or truncated)", [File]),
                     {error, invalid_format}
             end;
         {error, enoent} ->
