@@ -93,7 +93,7 @@ all_tests() ->
      snapshot_installation_with_live_indexes,
      init_with_dangling_symlink,
      init_after_missing_segments_event,
-     snapshot_install_with_empty_indexes_file
+     snapshot_install_with_corrupted_indexes
     ].
 
 groups() ->
@@ -685,7 +685,11 @@ recover_after_snapshot(Config) ->
                    last_written_index_term := {2, 1}}, Overview),
     ok.
 
-snapshot_install_with_empty_indexes_file(Config) ->
+snapshot_install_with_corrupted_indexes(Config) ->
+    %% Verify that any byte sequence in the indexes file (empty, truncated,
+    %% garbage, adversarial) never causes startup to abort. The server must
+    %% always recover gracefully: either use the indexes (if valid) or rebuild
+    %% them from the snapshot.
     UId = ?config(uid, Config),
     MachineConf = {module, ?MODULE, #{}},
     LogConf = #{uid => UId,
@@ -739,25 +743,53 @@ snapshot_install_with_empty_indexes_file(Config) ->
     ra_log:close(Log4),
 
     IndexesFile = filename:join(SnapDir, <<"indexes">>),
-    ok = file:write_file(IndexesFile, <<>>),
+    {ok, ValidIndexesContent} = file:read_file(IndexesFile),
+    TruncatedBytes = binary:part(ValidIndexesContent, 0,
+                                 max(1, byte_size(ValidIndexesContent) div 2)),
 
-    application:stop(ra),
-    start_ra(Config),
-    timer:sleep(100),
-    ct:pal("snapshot state ~p",
-           [ra_log_snapshot_state:read(ra_log_snapshot_state, UId)]),
+    %% CRC of <<>> is 0, so this 9-byte blob passes the CRC check and then
+    %% passes <<>> to binary_to_term — this was an uncaught crash before the fix.
+    CrcOfEmpty = erlang:crc32(<<>>),
+    Gap1Trigger = <<"RASI", 1, CrcOfEmpty:32/unsigned>>,
 
+    CorruptContents =
+        [
+         <<>>,                            %% empty
+         <<"garbage">>,                   %% random bytes, no RASI magic
+         binary:copy(<<0>>, 50),          %% all-zero bytes
+         <<"RASI", 99>>,                  %% valid magic, unknown version
+         <<"RASI", 1, 0:32, "notterm">>,  %% valid header, wrong CRC
+         Gap1Trigger,                     %% CRC of <<>> passes, binary_to_term(<<>>) would throw
+         term_to_binary(some_atom),       %% old format, non-list Erlang term
+         term_to_binary(42),              %% old format, integer
+         term_to_binary(#{}),             %% old format, map
+         term_to_binary([]),              %% old format, valid empty ra_seq — must work
+         TruncatedBytes                   %% first half of a legitimately written file
+        ],
 
-    Log5 = ra_log_init(Config, LogConf),
+    lists:foreach(
+      fun (Content) ->
+              ct:pal("Testing indexes file content (~w bytes): ~w",
+                     [byte_size(Content), Content]),
+              ok = file:write_file(IndexesFile, Content),
 
-    %% Fetch items 1..10 (should be dropped because of snapshot)
-    {[], _} = ra_log_take(1, 10, Log5),
+              application:stop(ra),
+              start_ra(Config),
+              timer:sleep(100),
 
-    %% Fetch items 11..15
-    {[_, _, _, _, _], _} = ra_log_take(11, 16, Log5),
+              Log = ra_log_init(Config, LogConf),
 
-    ra_log:close(Log5),
-    ok.
+              %% Fetch items 1..10 (should be dropped because of snapshot)
+              {[], _} = ra_log_take(1, 10, Log),
+              %% Fetch items 11..15
+              {[_, _, _, _, _], _} = ra_log_take(11, 16, Log),
+
+              ra_log:close(Log),
+
+              %% Restore a clean indexes file for the next iteration
+              ok = file:write_file(IndexesFile, ValidIndexesContent)
+      end,
+      CorruptContents).
 
 writes_lower_than_snapshot_index_are_dropped(Config) ->
     logger:set_primary_config(level, debug),

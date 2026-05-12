@@ -1037,7 +1037,14 @@ indexes(Dir) ->
         {ok, <<?IDX_MAGIC, ?IDX_VERSION:8/unsigned, Crc:32/unsigned, Data/binary>>} ->
             case erlang:crc32(Data) of
                 Crc ->
-                    {ok, binary_to_term(Data)};
+                    try
+                        case binary_to_term(Data) of
+                            Seq when is_list(Seq) -> {ok, Seq};
+                            _ -> {error, invalid_format}
+                        end
+                    catch _:_ ->
+                        {error, invalid_format}
+                    end;
                 _ ->
                     {error, checksum_error}
             end;
@@ -1047,7 +1054,10 @@ indexes(Dir) ->
             %% Backward compatibility: old format without header
             %% Try to parse as plain term_to_binary data
             try
-                {ok, binary_to_term(Bin)}
+                case binary_to_term(Bin) of
+                    Seq when is_list(Seq) -> {ok, Seq};
+                    _ -> {error, invalid_format}
+                end
             catch
                 _:_ ->
                     {error, invalid_format}
