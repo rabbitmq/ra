@@ -1013,7 +1013,7 @@ take_extra_checkpoints(#?MODULE{checkpoints = Checkpoints0,
 %% Data             (binary - term_to_binary of indexes)
 %% @end
 -spec write_indexes(file:filename_all(), ra_seq:state()) ->
-    ok | {error, file:posix()}.
+    ok | {error, ra_lib:file_err()}.
 write_indexes(Dir, Indexes) ->
     File = filename:join(Dir, <<"indexes">>),
     Data = term_to_binary(Indexes),
@@ -1037,21 +1037,14 @@ indexes(Dir) ->
         {ok, <<?IDX_MAGIC, ?IDX_VERSION:8/unsigned, Crc:32/unsigned, Data/binary>>} ->
             case erlang:crc32(Data) of
                 Crc ->
-                    {ok, binary_to_term(Data)};
+                    ra_seq:from_binary(Data);
                 _ ->
                     {error, checksum_error}
             end;
         {ok, <<?IDX_MAGIC, Version:8/unsigned, _Crc:32/unsigned, _Data/binary>>} ->
             {error, {invalid_version, Version}};
-        {ok, Bin} ->
-            %% Backward compatibility: old format without header
-            %% Try to parse as plain term_to_binary data
-            try
-                {ok, binary_to_term(Bin)}
-            catch
-                _:_ ->
-                    {error, invalid_format}
-            end;
+        {ok, _Bin} ->
+            {error, invalid_format};
         {error, enoent} ->
             %% no indexes
             {ok, []};

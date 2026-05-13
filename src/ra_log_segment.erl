@@ -63,7 +63,7 @@
               max_pending = ?SEGMENT_MAX_PENDING :: non_neg_integer(),
               max_size = ?SEGMENT_MAX_SIZE_B :: non_neg_integer(),
               filename :: file:filename_all(),
-              fd :: option(file:io_device()),
+              fd :: file:io_device(),
               index_size :: pos_integer(),
               index_record_size :: pos_integer(),
               access_pattern :: sequential | random,
@@ -251,7 +251,10 @@ process_file(false, Mode, Filename, Fd, Options) ->
 
 -spec append(state(), ra_index(), ra_term(),
              iodata() | {non_neg_integer(), iodata()}) ->
-    {ok, state()} | {error, full | inet:posix()}.
+    {ok, state()} | {error, full |
+                            file:posix() |
+                            badarg |
+                            terminated}.
 append(#state{cfg = #cfg{max_pending = PendingCount},
               pending_count = PendingCount} = State0,
        Index, Term, Data) ->
@@ -313,14 +316,18 @@ sync(State0) ->
             Err
     end.
 
--spec flush(state()) -> {ok, state()} | {error, term()}.
+-spec flush(state()) -> {ok, state()} |
+                        {error, file:posix() |
+                                badarg |
+                                terminated}.
 flush(#state{cfg = #cfg{fd = Fd},
              pending_data = PendData,
              pending_index = PendIndex,
              index_offset = IdxOffs,
              data_offset = DataOffs,
              index_write_offset = IdxWriteOffs,
-             data_write_offset = DataWriteOffs} = State) ->
+             data_write_offset = DataWriteOffs} = State)
+  when Fd =/= undefined ->
     case file:pwrite(Fd, DataWriteOffs, PendData) of
         ok ->
             case file:pwrite(Fd, IdxWriteOffs, PendIndex) of
@@ -342,7 +349,7 @@ flush(#state{cfg = #cfg{fd = Fd},
            ToIdx :: ra_index(),
            fun((binary()) -> term()),
            fun(({ra_index(), ra_term(), term()}, Acc) -> Acc), Acc) ->
-    Acc when Acc :: term().
+    Acc.
 fold(#state{cfg = #cfg{mode = read}} = State,
      FromIdx, ToIdx, Fun, AccFun, Acc) ->
     fold0(State, FromIdx, ToIdx, Fun, AccFun, Acc, error).
@@ -498,7 +505,7 @@ prepare_cache_binary(Fd, Version, RecSize, NumEntries, IndexBin,
 %% Create cache by reading data range from file
 make_cache(Fd, FstPos, FstLength, LastPos, LastLength) ->
     CacheLen = cache_length(FstPos, FstLength, LastPos, LastLength),
-    {ok, CacheData} = file:pread(Fd, FstPos, CacheLen),
+    {ok, CacheData} = file_pread(Fd, FstPos, CacheLen),
     {FstPos, byte_size(CacheData), CacheData}.
 
 %% Binary search with hint optimization for sequential ascending reads
@@ -702,7 +709,7 @@ data_size(#state{data_offset = DataOffset, data_start = DataStart}) ->
 max_count(#state{cfg = #cfg{max_count = Max}}) ->
     Max.
 
--spec filename(state()) -> file:filename().
+-spec filename(state()) -> file:filename_all().
 filename(#state{cfg = #cfg{filename = Fn}}) ->
     Fn.
 
@@ -796,7 +803,8 @@ is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
 -spec close(state()) -> ok | {error, term()}.
 close(#state{cfg = #cfg{fd = Fd,
                         mode = append,
-                        file_advise = FileAdvise}} = State0) ->
+                        file_advise = FileAdvise}} = State0)
+      when Fd =/= undefined ->
     case sync(State0) of
         {ok, State} ->
             %% do not report errors from file:advise, it isn't necessary
@@ -847,7 +855,7 @@ copy_with_cache_loop(SrcFd, SrcIndex, DstState, [Idx | Rem] = Indexes, Cache0)
             case prepare_cache(SrcFd, Indexes, SrcIndex) of
                 undefined ->
                     %% Single entry, no consecutive run - read directly
-                    {ok, Data} = file:pread(SrcFd, Pos, Length),
+                    {ok, Data} = file_pread(SrcFd, Pos, Length),
                     {ok, DstState1} = append_raw(DstState, Idx, Term, Length,
                                                  Data, Crc),
                     copy_with_cache_loop(SrcFd, SrcIndex, DstState1, Rem,
@@ -874,7 +882,7 @@ copy_with_cache_loop(_SrcFd, SrcIndex,
 %% This is used during copy operations where the source CRC is known valid.
 -spec append_raw(state(), ra_index(), ra_term(),
                  non_neg_integer(), binary(), integer()) ->
-    {ok, state()} | {error, full | file:posix()}.
+    {ok, state()} | {error, full | file:posix() | badarg | terminated}.
 append_raw(#state{cfg = #cfg{max_pending = PendingCount},
                   pending_count = PendingCount} = State0,
            Index, Term, Length, Data, Crc) ->
@@ -1139,10 +1147,20 @@ read_header(Fd) ->
             Err
     end.
 
+file_pread(Fd, Pos, Length) ->
+    case file:pread(Fd, Pos, Length) of
+        {ok, Data} when is_binary(Data) ->
+            {ok, Data};
+        {ok, _} ->
+            exit(unexpected_data_type);
+        Err ->
+            Err
+    end.
+
 pread(#cfg{access_pattern = random,
            fd = Fd}, Cache, Pos, Length) ->
     %% no cache
-    {ok, Data} = file:pread(Fd, Pos, Length),
+    {ok, Data} = file_pread(Fd, Pos, Length),
     case byte_size(Data)  of
         Length ->
             {ok, Data, Cache};
@@ -1157,7 +1175,7 @@ pread(#cfg{}, {CPos, CLen, Bin} = Cache, Pos, Length)
 pread(#cfg{access_pattern = sequential,
            fd = Fd} = Cfg, undefined, Pos, Length) ->
     CacheLen = max(Length, ?READ_AHEAD_B),
-    {ok, CacheData} = file:pread(Fd, Pos, CacheLen),
+    {ok, CacheData} = file_pread(Fd, Pos, CacheLen),
     case byte_size(CacheData) >= Length  of
         true ->
             pread(Cfg, {Pos, byte_size(CacheData), CacheData}, Pos, Length);

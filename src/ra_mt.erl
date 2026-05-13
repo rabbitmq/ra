@@ -72,6 +72,7 @@ init(Tid, Mode) ->
                 read_write ->
                     %% Use ets:select for efficient projection - extracts only indexes
                     %% without building intermediate tuples or function closures
+                    % eqwalizer:ignore
                     ra_seq:from_list(
                         ets:select(Tid, [{{'$1', '_', '_'}, [], ['$1']}]))
             end,
@@ -325,8 +326,8 @@ delete({indexes, _Tid, []}) ->
     0;
 delete({indexes, Tid, Seq}) ->
     NumToDelete = ra_seq:length(Seq),
-    Start = ra_seq:first(Seq),
-    End = ra_seq:last(Seq),
+    {Start, End} = ra_seq:range(Seq),
+    % End = ra_seq:last(Seq),
     Limit = ets:info(Tid, size) div 2,
     %% check if there is an entry below the start of the deletion range,
     %% if there is we've missed a segment event at some point and need
@@ -444,7 +445,7 @@ record_flushed(TID = Tid, FlushedSeq,
                         indexes = Seq} = State) ->
     End = ra_seq:last(FlushedSeq),
     case ra_seq:in(End, Seq) of
-        true ->
+        true when End =/= undefined ->
             %% indexes are always written in order so we can delete
             %% the entire sequence preceeding, this will handle the case
             %% where a segments notifications is missed
@@ -460,7 +461,7 @@ record_flushed(TID = Tid, FlushedSeq,
              State#?MODULE{indexes = NewSeq,
                            size = ra_seq:length(NewSeq),
                            prev = Prev}};
-        false ->
+        _ ->
             {undefined, State}
     end;
 record_flushed(_Tid, _FlushedSeq, #?MODULE{prev = undefined} = State) ->

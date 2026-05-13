@@ -53,7 +53,9 @@
          is_any_file/1,
          ensure_dir/1,
          consult/1,
-         cons/2
+         cons/2,
+         max/2,
+         unwrap/1
         ]).
 
 -type file_err() :: file:posix() | badarg | terminated | system_limit.
@@ -122,11 +124,13 @@ to_binary(I) when is_integer(I) ->
 to_binary(L) when is_list(L) ->
     list_to_binary(L).
 
--spec to_string(binary() | string()) -> string().
+-spec to_string(binary() | string() | atom()) -> string().
 to_string(B) when is_binary(B) ->
     binary_to_list(B);
 to_string(L) when is_list(L) ->
-    L.
+    L;
+to_string(A) when is_atom(A) ->
+    atom_to_list(A).
 
 -spec to_atom(atom() | list() | binary()) -> atom().
 to_atom(A) when is_atom(A) ->
@@ -251,13 +255,15 @@ throw_error(Format, Args) ->
 make_uid() ->
     make_uid(<<>>).
 
--spec make_uid(atom() | binary() | string()) -> binary().
+-spec make_uid(atom() | binary() | string() | unicode:chardata()) ->
+    binary().
 make_uid(Prefix0) ->
     ChrsSize = tuple_size(?GENERATED_UID_CHARS),
     F = fun(_, R) ->
                 [element(rand:uniform(ChrsSize), ?GENERATED_UID_CHARS) | R]
         end,
     Prefix = to_binary(Prefix0),
+    % eqwalizer:ignore
     B = list_to_binary(lists:foldl(F, "", lists:seq(1, ?UID_LENGTH))),
     <<Prefix/binary, B/binary>>.
 
@@ -566,6 +572,16 @@ tokens(Str) ->
             {error, Err}
     end.
 
+-spec max(integer(), integer()) -> integer().
+max(A, B) when is_integer(A) andalso
+               is_integer(B) andalso
+               A < B -> B;
+max(A, _) when is_integer(A) -> A.
+
+unwrap(undefined) ->
+    error(unwrap_unexpected_undefined);
+unwrap(T) ->
+    T.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -642,7 +658,8 @@ lists_detect_sort_test() ->
 partition_parallel_test() ->
     ?assertMatch({error, {partition_parallel_timeout, [], []}},
                  partition_parallel(fun(_) ->
-                                        timer:sleep(infinity)
+                                        timer:sleep(infinity),
+                                        true
                                     end, [1, 2, 3], 1000)),
     ok.
 

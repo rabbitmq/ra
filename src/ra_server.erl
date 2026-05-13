@@ -68,9 +68,9 @@
         ]).
 
 -type ra_await_condition_fun() ::
-    fun((ra_msg(), ra_server_state()) -> {boolean(), ra_server_state()}).
+    fun((ra_msg(), state()) -> {boolean(), state()}).
 
--type ra_server_state() ::
+-type state() ::
     #{cfg := #cfg{},
       leader_id => option(ra_server_id()),
       cluster := ra_cluster(),
@@ -78,7 +78,7 @@
       cluster_index_term := ra_idxterm(),
       previous_cluster => {ra_index(), ra_term(), ra_cluster()},
       current_term := ra_term(),
-      log := term(),
+      log := ra_log:state(),
       voted_for => option(ra_server_id()), % persistent
       votes => non_neg_integer(),
       membership => ra_membership(),
@@ -110,8 +110,6 @@
       current_event_type => term(),
       snapshot_has_live_indexes => boolean()
      }.
-
--type state() :: ra_server_state().
 
 -type ra_state() :: leader | follower | candidate
                     | pre_vote | await_condition | delete_and_terminate
@@ -152,8 +150,11 @@
                   election_timeout |
                   await_condition_timeout |
                   {command, command()} |
+                  %% this is the external "ra_server_proc" format
+                  {command, low, {command_type(), term(), command_reply_mode()}} |
                   {commands, [command()]} |
                   ra_log:event() |
+                  {aux_command, cast | info | {call, from()}, term()} |
                   {consistent_query, from(), ra:query_fun()} |
                   {consistent_aux, from(), AuxCmd :: term()} |
                   #heartbeat_rpc{} |
@@ -161,12 +162,16 @@
                   #info_reply{} |
                   {ra_server_id, #heartbeat_reply{}} |
                   pipeline_rpcs |
-                  {snapshot_retry_timeout, ra_server_id()}.
+                  {snapshot_retry_timeout, ra_server_id()} |
+                  {transfer_leadership, ra:server_id()} |
+                  force_member_change |
+                  try_become_leader.
 
 -type ra_reply_body() :: #append_entries_reply{} |
                          #request_vote_result{} |
                          #install_snapshot_result{} |
-                         #pre_vote_result{}.
+                         #pre_vote_result{} |
+                         term().
 
 -type effect() ::
     ra_machine:effect() |
@@ -185,10 +190,9 @@
      #heartbeat_rpc{} |
      #info_rpc{}} |
     {send_snapshot, To :: ra_server_id(),
-     {Module :: module(), Ref :: term(),
-      LeaderId :: ra_server_id(), Term :: ra_term()}} |
+     {ra_snapshot:state(), LeaderId :: ra_server_id(), Term :: ra_term()}} |
     {next_event, ra_msg()} |
-    {next_event, cast, ra_msg()} |
+    {next_event, cast | info, ra_msg()} |
     {notify, #{pid() => [term()]}} |
     %% used for tracking valid leader messages
     {record_leader_msg, ra_server_id()} |
@@ -297,7 +301,6 @@
 
 -export_type([state/0,
               config/0,
-              ra_server_state/0,
               ra_state/0,
               ra_server_config/0,
               ra_server_info_key/0,
@@ -320,9 +323,10 @@
 -spec name(ClusterName :: ra_cluster_name(), UniqueSuffix::string()) -> atom().
 name(ClusterName, UniqueSuffix) ->
     % elp:ignore W0023 (atoms_exhaustion)
-    list_to_atom("ra_" ++ ClusterName ++ "_server_" ++ UniqueSuffix).
+    list_to_atom("ra_" ++ ra_lib:to_string(ClusterName) ++
+                 "_server_" ++ UniqueSuffix).
 
--spec init(ra_server_config()) -> ra_server_state().
+-spec init(ra_server_config()) -> state().
 init(#{id := Id,
        uid := UId,
        cluster_name := _ClusterName,
@@ -379,9 +383,9 @@ init(#{id := Id,
     end,
 
     MetaName = meta_name(SystemConfig),
-    CurrentTerm = ra_log_meta:fetch(MetaName, UId, current_term, 0),
-    LastApplied = ra_log_meta:fetch(MetaName, UId, last_applied, 0),
-    VotedFor = ra_log_meta:fetch(MetaName, UId, voted_for, undefined),
+    CurrentTerm = ra_log_meta:fetch(MetaName, UId, current_term),
+    LastApplied = ra_log_meta:fetch(MetaName, UId, last_applied),
+    VotedFor = ra_log_meta:fetch(MetaName, UId, voted_for),
 
     LatestMacVer = ra_machine:version(Machine),
     InitialMachineVersion = min(LatestMacVer,
@@ -405,7 +409,7 @@ init(#{id := Id,
         end,
     MacMod = ra_machine:which_module(Machine, EffectiveMacVer),
 
-    CommitIndex = max(LastApplied, SnapshotIdx),
+    CommitIndex = ra_lib:max(LastApplied, SnapshotIdx),
     MinRecoveryCheckpointInterval = maps:get(min_recovery_checkpoint_interval,
                                              Config, 0),
     Cfg = #cfg{id = Id,
@@ -430,7 +434,7 @@ init(#{id := Id,
     put_counter(Cfg, ?C_RA_SVR_METRIC_EFFECTIVE_MACHINE_VERSION, EffectiveMacVer),
 
     NonVoter = get_membership(Cluster0, Id, UId,
-                             maps:get(membership, Config, voter)),
+                              maps:get(membership, Config, voter)),
 
     #{cfg => Cfg,
       leader_id => undefined,
@@ -496,8 +500,8 @@ recover(#{cfg := #cfg{log_id = LogId,
     ?DEBUG("~ts: scanning for cluster changes ~b:~b ",
            [LogId, FromScan, ToScan]),
     %% if we're recovering after a partial sparse write phase this will fail
-    {{LastScannedIdx, State3}, Log1} = ra_log:fold(FromScan, ToScan,
-                                                   fun cluster_scan_fun/2,
+    {{LastScannedIdx, State3}, Log1} = ra_log:fold(fun cluster_scan_fun/2,
+                                                   FromScan, ToScan,
                                                    {CommitIndex, State2}, Log0,
                                                    return),
 
@@ -514,12 +518,12 @@ recover(#{cfg := #cfg{log_id = LogId,
             end,
 
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
-    State#{
-           %% reset commit latency as recovery may calculate a very old value
-           commit_latency => 0}.
 
--spec handle_leader(ra_msg(), ra_server_state()) ->
-    {ra_state(), ra_server_state(), effects()}.
+    %% reset commit latency as recovery may calculate a very old value
+    State#{commit_latency => 0}.
+
+-spec handle_leader(ra_msg(), state()) ->
+    {ra_state(), state(), effects()}.
 handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
                                              next_index = NextIdx,
                                              last_index = LastIdx}},
@@ -587,7 +591,8 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                              last_index = PeerLastIdx,
                                              last_term = PEER_LAST_TERM}},
               #{cfg := #cfg{log_id = LogId} = Cfg,
-                cluster := Nodes, log := Log0} = State0) ->
+                cluster := Nodes,
+                log := Log0} = State0) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_AER_REPLIES_FAILED, 1),
     #{PeerId := #{match_index := MI,
                   next_index := NI} = Peer0} = Nodes,
@@ -1024,8 +1029,8 @@ handle_leader(Msg, State) ->
     {leader, State, [{reply, {error, {unsupported_call, Msg}}}]}.
 
 
--spec handle_candidate(ra_msg() | election_timeout, ra_server_state()) ->
-    {ra_state(), ra_server_state(), effects()}.
+-spec handle_candidate(ra_msg() | election_timeout, state()) ->
+    {ra_state(), state(), effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  #{cfg := #cfg{id = Id,
                                log_id = LogId},
@@ -1171,8 +1176,8 @@ handle_candidate(Msg, State) ->
     log_unhandled_msg(candidate, Msg, State),
     {candidate, State, [{reply, {error, {unsupported_call, Msg}}}]}.
 
--spec handle_pre_vote(ra_msg(), ra_server_state()) ->
-    {ra_state(), ra_server_state(), effects()}.
+-spec handle_pre_vote(ra_msg(), state()) ->
+    {ra_state(), state(), effects()}.
 handle_pre_vote(#append_entries_rpc{term = Term} = Msg,
                 #{current_term := CurTerm} = State0)
   when Term >= CurTerm ->
@@ -1262,8 +1267,8 @@ handle_pre_vote(Msg, State) ->
     {pre_vote, State, [{reply, {error, {unsupported_call, Msg}}}]}.
 
 
--spec handle_follower(ra_msg(), ra_server_state()) ->
-    {ra_state(), ra_server_state(), effects()}.
+-spec handle_follower(ra_msg(), state()) ->
+    {ra_state(), state(), effects()}.
 handle_follower(#append_entries_rpc{term = Term,
                                     leader_id = LeaderId,
                                     leader_commit = LeaderCommit,
@@ -1596,7 +1601,7 @@ handle_follower(#request_vote_result{}, State) ->
 handle_follower(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {follower, State, []};
-handle_follower(#append_entries_reply{}, State) ->
+handle_follower({_, #append_entries_reply{}}, State) ->
     %% handle to avoid logging as unhandled
     %% could receive a lot of these shortly after standing down as leader
     {follower, State, []};
@@ -1614,7 +1619,7 @@ handle_follower(force_member_change,
                 #{cfg := #cfg{id = Id,
                               uid = Uid,
                               log_id = LogId}} = State0) ->
-    Cluster = #{Id => new_peer_with(#{voter_status => #{uid => Uid, 
+    Cluster = #{Id => new_peer_with(#{voter_status => #{uid => Uid,
                                                         membership => voter}})},
     ?WARN("~ts: Forcing cluster change. New cluster ~tw",
           [LogId, Cluster]),
@@ -1897,8 +1902,8 @@ abort_receive(#{snapshot_phase := _Phase,
                                   current_event_type],
                                  State#{log => Log})).
 
--spec handle_await_condition(ra_msg(), ra_server_state()) ->
-    {ra_state(), ra_server_state(), effects()}.
+-spec handle_await_condition(ra_msg(), state()) ->
+    {ra_state(), state(), effects()}.
 handle_await_condition(#request_vote_rpc{} = Msg, State) ->
     {follower, State, [{next_event, Msg}]};
 handle_await_condition(#pre_vote_rpc{} = PreVote, State) ->
@@ -1940,8 +1945,8 @@ handle_await_condition(Msg, #{condition := #{predicate_fun := Pred} = Cond} = St
             {await_condition, State, []}
     end.
 
--spec process_new_leader_queries(ra_server_state()) ->
-    {ra_server_state(), [from()]}.
+-spec process_new_leader_queries(state()) ->
+    {state(), [from()]}.
 process_new_leader_queries(#{pending_consistent_queries := Pending,
                              queries_waiting_heartbeats := Waiting} = State0) ->
     From0 = [From || {_, From, _, _} <- Pending],
@@ -1952,14 +1957,14 @@ process_new_leader_queries(#{pending_consistent_queries := Pending,
              queries_waiting_heartbeats => queue:new()},
      From0 ++ From1}.
 
--spec tick(ra_server_state()) -> effects().
+-spec tick(state()) -> effects().
 tick(#{cfg := #cfg{effective_machine_module = MacMod},
        machine_state := MacState} = State) ->
     InfoRpcEffects = info_rpc_effects(State),
     Now = erlang:system_time(millisecond),
     InfoRpcEffects ++ ra_machine:tick(MacMod, Now, MacState).
 
--spec log_tick(ra_server_state()) -> ra_server_state().
+-spec log_tick(state()) -> state().
 log_tick(#{cfg := #cfg{},
            log := Log0} = State) ->
     Now = erlang:system_time(millisecond),
@@ -1967,8 +1972,8 @@ log_tick(#{cfg := #cfg{},
     State#{log => Log}.
 
 
--spec handle_state_enter(ra_state() | eol, ra_state(), ra_server_state()) ->
-    {ra_server_state() | eol, effects()}.
+-spec handle_state_enter(ra_state() | eol, ra_state(), state()) ->
+    {state(), effects()}.
 handle_state_enter(RaftState, OldRaftState,
                    #{cfg := #cfg{effective_machine_module = MacMod},
                      machine_state := MacState} = State) ->
@@ -1976,7 +1981,7 @@ handle_state_enter(RaftState, OldRaftState,
      ra_machine:state_enter(MacMod, RaftState, MacState)}.
 
 
--spec overview(ra_server_state()) -> map().
+-spec overview(state()) -> map().
 overview(#{cfg := #cfg{effective_machine_module = MacMod} = Cfg,
            log := Log,
            machine_state := MacState,
@@ -2011,17 +2016,17 @@ cfg_to_map(Cfg) ->
                          {N + 1, Acc#{F => element(N, Cfg)}}
                  end, {2, #{}}, record_info(fields, cfg))).
 
--spec is_new(ra_server_state()) -> boolean().
+-spec is_new(state()) -> boolean().
 is_new(#{log := Log}) ->
     ra_log:next_index(Log) =:= 1.
 
--spec is_fully_persisted(ra_server_state()) -> boolean().
+-spec is_fully_persisted(state()) -> boolean().
 is_fully_persisted(#{log := Log}) ->
     LastWritten = ra_log:last_written(Log),
     LastIdxTerm = ra_log:last_index_term(Log),
     LastWritten =:= LastIdxTerm.
 
--spec is_fully_replicated(ra_server_state()) -> boolean().
+-spec is_fully_replicated(state()) -> boolean().
 is_fully_replicated(#{commit_index := CI} = State) ->
     case maps:values(peers(State)) of
         [] -> true; % there is only one server
@@ -2102,39 +2107,39 @@ wrap_reply(true, Cmd) ->
 wrap_reply(false, Cmd) ->
     Cmd.
 
--spec id(ra_server_state()) -> ra_server_id().
+-spec id(state()) -> ra_server_id().
 id(#{cfg := #cfg{id = Id}}) -> Id.
 
--spec log_id(ra_server_state()) -> unicode:chardata().
+-spec log_id(state()) -> unicode:chardata().
 log_id(#{cfg := #cfg{log_id = LogId}}) -> LogId.
 
--spec uid(ra_server_state()) -> ra_uid().
+-spec uid(state()) -> ra_uid().
 uid(#{cfg := #cfg{uid = UId}}) -> UId.
 
--spec system_config(ra_server_state()) -> ra_system:config().
+-spec system_config(state()) -> ra_system:config().
 system_config(#{cfg := #cfg{system_config = SC}}) -> SC.
 
--spec leader_id(ra_server_state()) -> option(ra_server_id()).
+-spec leader_id(state()) -> option(ra_server_id()).
 leader_id(State) ->
     maps:get(leader_id, State, undefined).
 
--spec clear_leader_id(ra_server_state()) -> ra_server_state().
+-spec clear_leader_id(state()) -> state().
 clear_leader_id(State) ->
     State#{leader_id => undefined}.
 
--spec current_term(ra_server_state()) -> option(ra_term()).
+-spec current_term(state()) -> option(ra_term()).
 current_term(State) ->
     maps:get(current_term, State).
 
--spec machine_version(ra_server_state()) -> non_neg_integer().
+-spec machine_version(state()) -> non_neg_integer().
 machine_version(#{cfg := #cfg{machine_version = MacVer}}) ->
     MacVer.
 
--spec machine(ra_server_state()) -> ra_machine:machine().
+-spec machine(state()) -> ra_machine:machine().
 machine(#{cfg := #cfg{machine = Machine}}) ->
     Machine.
 
--spec machine_query(ra:query_fun(), ra_server_state()) ->
+-spec machine_query(ra:query_fun(), state()) ->
     {ra_idxterm(), term()}.
 machine_query(QueryFun, #{cfg := #cfg{effective_machine_module = MacMod,
                                       effective_machine_version = MacVer},
@@ -2432,8 +2437,8 @@ log_fold_cache(From, _To, _Cache, Acc) ->
 
 % stores the cluster config at an index such that we can later snapshot
 % at this index.
--spec update_release_cursor(ra_index(), term(), map(), ra_server_state()) ->
-    {ra_server_state(), effects()}.
+-spec update_release_cursor(ra_index(), term(), map(), state()) ->
+    {state(), effects()}.
 update_release_cursor(Index, MacState, #{condition := Conds}, State)
   when is_list(Conds) ->
     case check_release_cursor_conditions(Conds, State) of
@@ -2495,8 +2500,8 @@ maybe_emit_pending_release_cursor(#{pending_release_cursor :=
 maybe_emit_pending_release_cursor(State, Effects) ->
     {State, Effects}.
 
--spec checkpoint(ra_index(), term(), ra_server_state()) ->
-      {ra_server_state(), effects()}.
+-spec checkpoint(ra_index(), term(), state()) ->
+      {state(), effects()}.
 checkpoint(Index, MacState,
            #{cfg := #cfg{machine = Machine},
              log := Log0, cluster := Cluster} = State) ->
@@ -2507,8 +2512,8 @@ checkpoint(Index, MacState,
                                        MacState, Log0),
     {State#{log => Log}, Effects}.
 
--spec promote_checkpoint(ra_index(), ra_server_state()) ->
-    {ra_server_state(), effects()}.
+-spec promote_checkpoint(ra_index(), state()) ->
+    {state(), effects()}.
 promote_checkpoint(Index, #{log := Log0} = State) ->
     {Log, Effects} = ra_log:promote_checkpoint(Index, Log0),
     {State#{log => Log}, Effects}.
@@ -2518,7 +2523,7 @@ promote_checkpoint(Index, #{log := Log0} = State) ->
 % follower that has seen an entry but not the commit_index
 % takes over and this
 % This is done on a schedule
--spec persist_last_applied(ra_server_state()) -> ra_server_state().
+-spec persist_last_applied(state()) -> state().
 persist_last_applied(#{persisted_last_applied := PLA,
                        last_applied := LA} = State) when LA =< PLA ->
     % if last applied is less than or equal to PL do nothing
@@ -2547,14 +2552,14 @@ persist_last_applied(#{last_applied := LastApplied0,
                     query_index => non_neg_integer(),
                     commit_index_sent => non_neg_integer(),
                     status => ra_peer_status()},
-                  ra_server_state()) -> ra_server_state().
+                  state()) -> state().
 update_peer(PeerId, Update, #{cluster := Peers} = State)
   when is_map(Update) ->
     Peer = maps:merge(maps:get(PeerId, Peers), Update),
     put_peer(PeerId, Peer, State).
 
--spec update_disconnected_peers(node(), nodeup | nodedown, ra_server_state()) ->
-    ra_server_state().
+-spec update_disconnected_peers(node(), nodeup | nodedown, state()) ->
+    state().
 update_disconnected_peers(Node, nodeup, #{cluster := Peers} = State) ->
     State#{cluster => maps:map(
                         fun ({_, PeerNode}, #{status := disconnected} = Peer)
@@ -2602,9 +2607,9 @@ peer_snapshot_process_exited_with_backoff(SnapshotPid, #{cluster := Peers} = Sta
     end.
 
 -spec handle_down(ra_state(),
-                  machine | snapshot_sender | snapshot_writer | aux,
-                  pid(), term(), ra_server_state()) ->
-    {ra_state(), ra_server_state(), effects()}.
+                  machine | snapshot_sender | snapshot_writer | aux | log,
+                  pid(), term(), state()) ->
+    {ra_state(), state(), effects()}.
 handle_down(leader, machine, Pid, Info, State)
   when is_pid(Pid) ->
     % %% commit command to be processed by state machine
@@ -2651,10 +2656,10 @@ handle_down(RaftState, Type, Pid, Info, #{cfg := #cfg{log_id = LogId}} = State) 
            [LogId, Type, Pid, Info, 10]),
     {RaftState, State, []}.
 
--spec handle_node_status(ra_state(), machine | aux,
+-spec handle_node_status(ra_state(), ra_monitors:component(),
                          node(), nodeup | nodedown,
-                         term(), ra_server_state()) ->
-    {ra_state(), ra_server_state(), effects()}.
+                         term(), state()) ->
+    {ra_state(), state(), effects()}.
 handle_node_status(leader, machine, Node, Status, _Infos, State)
   when is_atom(Node) ->
     %% commit command to be processed by state machine
@@ -2671,7 +2676,7 @@ handle_node_status(RaftState, Type, Node, Status, _Info,
           [LogId, Type, Node, Status]),
     {RaftState, State, []}.
 
--spec terminate(ra_server_state(), Reason :: {shutdown, delete} | term()) -> ok.
+-spec terminate(state(), Reason :: {shutdown, delete} | term()) -> ok.
 terminate(#{log := Log,
             cfg := #cfg{log_id = LogId}} = _State, {shutdown, delete}) ->
     ?NOTICE("~ts: terminating with reason 'delete'", [LogId]),
@@ -2808,9 +2813,9 @@ maybe_recover_from_recovery_checkpoint(LastApplied, CommitIndex, SnapState,
             {LastApplied, State}
     end.
 
--spec log_fold(ra_server_state(), fun((term(), State) -> State), State) ->
-    {ok, State, ra_server_state()} |
-    {error, term(), ra_server_state()}.
+-spec log_fold(state(), fun((term(), State) -> State), State) ->
+    {ok, State, state()} |
+    {error, term(), state()}.
 log_fold(#{log := Log} = RaState, Fun, State) ->
     Idx = case ra_log:snapshot_index_term(Log) of
               {PrevIdx, _PrevTerm} ->
@@ -2826,9 +2831,9 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
     end.
 
 %% reads user commands at the specified index
--spec log_read([ra_index()], ra_server_state()) ->
-    {ok, [term()], ra_server_state()} |
-    {error, ra_server_state()}.
+-spec log_read([ra_index()], state()) ->
+    {ok, [term()], state()} |
+    {error, state()}.
 log_read(Indexes, #{log := Log0} = State) ->
     {Entries, Log} = ra_log:sparse_read(Indexes, Log0),
     {ok, [Data
@@ -2836,7 +2841,7 @@ log_read(Indexes, #{log := Log0} = State) ->
      State#{log => Log}}.
 
 %% reads user commands at the specified index
--spec log_partial_read([ra_index()], ra_server_state()) ->
+-spec log_partial_read([ra_index()], state()) ->
     ra_log:read_plan().
 log_partial_read(Indexes, #{log := Log0}) ->
     ra_log:partial_read(Indexes, Log0,
@@ -3887,7 +3892,7 @@ already_member(State, Effects) ->
 %%% Voter status helpers
 %%% ====================
 
--spec ensure_promotion_target(ra_voter_status(), ra_server_state()) ->
+-spec ensure_promotion_target(ra_voter_status(), state()) ->
     {ok, ra_voter_status()} | {error, term()}.
 ensure_promotion_target(#{membership := promotable, target := _, uid := _} = Status,
                         _) ->
@@ -3920,7 +3925,7 @@ get_membership(Cluster, PeerId, UId, Default) ->
             Default
     end.
 
--spec get_condition_timeout(ra_server_state(), Default :: term()) ->
+-spec get_condition_timeout(state(), Default :: term()) ->
     term() | integer().
 get_condition_timeout(#{condition := #{timeout := #{duration := D}}}, _Def) ->
     D;
@@ -3931,7 +3936,7 @@ get_condition_timeout(_, Def) ->
 %% Get this node's membership from a (possibly new) cluster.
 %% Defaults to last known-locally value.
 -spec get_membership(ra_cluster() | ra_cluster_snapshot() | ra_cluster_servers(),
-                    ra_server_state()) ->
+                    state()) ->
     ra_membership().
 get_membership(Cluster, #{cfg := #cfg{id = Id, uid = UId}} = State) ->
     Default = maps:get(membership, State, voter),
@@ -3939,12 +3944,12 @@ get_membership(Cluster, #{cfg := #cfg{id = Id, uid = UId}} = State) ->
 
 %% Get this node's membership.
 %% Defaults to last known-locally value.
--spec get_membership(ra_server_state()) -> ra_membership().
+-spec get_membership(state()) -> ra_membership().
 get_membership(#{cfg := #cfg{id = Id, uid = UId}, cluster := Cluster} = State) ->
     Default = maps:get(membership, State, voter),
     get_membership(Cluster, Id, UId, Default).
 
--spec maybe_promote_peer(ra_server_id(), ra_server_state(), effects()) -> 
+-spec maybe_promote_peer(ra_server_id(), state(), effects()) ->
     effects().
 maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
     case Cluster of

@@ -76,6 +76,7 @@
          compacted_segrefs = [] :: [segment_ref()]}).
 
 -opaque state() :: #?STATE{}.
+-opaque compaction_result() :: #compaction_result{}.
 -type read_plan() :: [{BaseName :: file:filename_all(), [ra:index()]}].
 -type read_plan_options() :: #{access_pattern => random | sequential,
                                file_advise => ra_log_segment:posix_file_advise(),
@@ -85,7 +86,8 @@
               state/0,
               read_plan/0,
               read_plan_options/0,
-              major_compaction_strategy/0
+              major_compaction_strategy/0,
+              compaction_result/0
              ]).
 
 %% PUBLIC
@@ -421,16 +423,19 @@ read_plan(#?STATE{cfg = Cfg,
 -spec exec_read_plan(file:filename_all(),
                      read_plan(),
                      undefined | ra_flru:state(),
-                     TransformFun :: fun((ra_index(), ra_term(), binary()) -> term()),
+                     TransformFun :: fun((ra:index(), ra_term(), dynamic()) -> dynamic()),
                      read_plan_options(),
                      #{ra_index() => Command :: term()}) ->
     {#{ra_index() => Command :: term()}, ra_flru:state()}.
 exec_read_plan(Dir, Plan, undefined, TransformFun, Options, Acc0) ->
-    Open = ra_flru:new(1, fun({_, Seg}) -> ra_log_segment:close(Seg) end),
+    Open = ra_flru:new(1, fun({_, Seg}) ->
+                                  _ = ra_log_segment:close(Seg),
+                                  ok
+                          end),
     exec_read_plan(Dir, Plan, Open, TransformFun, Options, Acc0);
 exec_read_plan(Dir, Plan, Open0, TransformFun, Options, Acc0)
   when is_list(Plan) ->
-    Fun = fun (I, T, B, Acc) ->
+    Fun = fun (I, T, B, Acc) when is_binary(B) ->
                   E = TransformFun(I, T, binary_to_term(B)),
                   Acc#{I => E}
           end,
@@ -457,7 +462,7 @@ exec_read_plan(Dir, Plan, Open0, TransformFun, Options, Acc0)
               end
       end, {Acc0, Open0}, Plan).
 
--spec fetch_term(ra_index(), state()) -> {option(ra_index()), state()}.
+-spec fetch_term(ra_index(), state()) -> {option(ra_term()), state()}.
 fetch_term(Idx, #?STATE{cfg = #cfg{} = Cfg} = State0) ->
     incr_counter(Cfg, ?C_RA_LOG_FETCH_TERM, 1),
     segment_term_query(Idx, State0).

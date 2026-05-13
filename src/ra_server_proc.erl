@@ -101,6 +101,7 @@
                                    {timeout, ra_server_id()}.
 
 -type ra_cmd_ret() :: ra_leader_call_ret(term()).
+-type ra_cmd_ret(T) :: ra_leader_call_ret(T).
 
 -type gen_statem_start_ret() :: {ok, pid()} | ignore | {error, term()}.
 
@@ -125,6 +126,7 @@
 -export_type([ra_leader_call_ret/1,
               ra_local_call_ret/1,
               ra_cmd_ret/0,
+              ra_cmd_ret/1,
               safe_call_ret/1,
               ra_event_reject_detail/0,
               ra_event/0,
@@ -152,7 +154,7 @@
               }).
 
 -record(state, {conf :: #conf{},
-                server_state :: ra_server:ra_server_state(),
+                server_state :: ra_server:state(),
                 monitors = ra_monitors:init() :: ra_monitors:state(),
                 pending_commands = [] :: [{{pid(), any()}, term()}],
                 leader_monitor :: reference() | undefined,
@@ -178,7 +180,7 @@ start_link(Config = #{id := Id}) ->
     gen_statem:start_link({local, Name}, ?MODULE, Config, []).
 
 -spec command(server_loc(), ra_command(), timeout()) ->
-    ra_cmd_ret().
+    ra_cmd_ret(dynamic()).
 command(ServerLoc, Cmd, Timeout) ->
     leader_call(ServerLoc, {command, normal, Cmd}, Timeout).
 
@@ -194,9 +196,9 @@ cast_command(ServerId, Priority, Cmd) ->
             local | consistent | consistent_aux | leader,
             query_options(),
             timeout()) ->
-    ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()})
-    | ra_server_proc:ra_leader_call_ret(Reply :: term())
-    | {ok, {ra_idxterm(), Reply :: term()}, not_known}.
+    ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: dynamic()})
+    | ra_server_proc:ra_leader_call_ret(Reply :: dynamic())
+    | {ok, {ra_idxterm(), Reply :: dynamic()}, not_known}.
 query(ServerLoc, QueryFun, local, Options, Timeout)
   when map_size(Options) =:= 0 ->
     statem_call(ServerLoc, {local_query, QueryFun}, Timeout);
@@ -242,7 +244,7 @@ read_entries({_, Node} = ServerId, Indexes, Flru0, Timeout)
                   members_info |
                   initial_members |
                   machine, timeout()) ->
-    ra_leader_call_ret(term()).
+    ra_leader_call_ret(dynamic()).
 state_query(ServerLoc, Spec, Timeout) ->
     leader_call(ServerLoc, {state_query, Spec}, Timeout).
 
@@ -254,7 +256,7 @@ state_query(ServerLoc, Spec, Timeout) ->
                         members_info |
                         initial_members |
                         machine, timeout()) ->
-    ra_local_call_ret(term()).
+    ra_local_call_ret(dynamic()).
 local_state_query(ServerLoc, Spec, Timeout) ->
     local_call(ServerLoc, {state_query, Spec}, Timeout).
 
@@ -381,12 +383,18 @@ do_init(#{id := Id,
     ReceiveSnapshotTimeout = maps:get(receive_snapshot_timeout, SysConf,
                                       ?DEFAULT_RECEIVE_SNAPSHOT_TIMEOUT),
     % elp:ignore W0011 (application_get_env)
-    AtenPollInt = application:get_env(aten, poll_interval, 1000),
+    AtenPollInt = case application:get_env(aten, poll_interval, undefined) of
+                      undefined ->
+                          1000;
+                      PollInt when is_integer(PollInt) ->
+                          PollInt
+                  end,
     LogId = ra_server:log_id(ServerState),
     %% TODO: full error handling
     WorkerPid = case ra_server_sup:start_ra_worker(ParentPid, Config) of
-                    {ok, P} -> P;
-                    {error, {already_started, P}} ->
+                    {ok, P} when is_pid(P) -> P;
+                    {error, {already_started, P}}
+                      when is_pid(P) ->
                         P
                 end,
     ra_env:configure_logger(logger),
@@ -2245,6 +2253,19 @@ send_pre_snapshot_entries(Id, To, RPC, Indexes, InstallTimeout, Flru0) ->
                                        InstallTimeout, Flru1)
     end.
 
+% -spec receive_read_plan(term()) -> ra_log:read_plan().
+% receive_read_plan(ReqId) ->
+%     {ok, ReadPlan} = case gen_statem:receive_response(ReqId, infinity) of
+%                          {reply, {ok, RP}} ->
+%                              {ok, RP};
+%                          {error, Reason} ->
+%                              error(Reason);
+%                          timeout ->
+%                              error(read_entries_timeout)
+%                      end,
+%     {ok, Plan} = ra_log:check_read_plan_type(ReadPlan),
+%     Plan.
+
 send_pre_snapshot_entries0(Id, To, RPC, SeqIter, CurrentEnts,
                            InstallTimeout, Flru0) ->
     case ra_seq:list_chunk(16, SeqIter) of
@@ -2273,6 +2294,7 @@ send_pre_snapshot_entries0(Id, To, RPC, SeqIter, CurrentEnts,
                                  timeout ->
                                      error(read_entries_timeout)
                              end,
+            % ReadPlan = receive_read_plan(ReqId),
             %% Execute the read plan to get actual entries
             {Reads, Flru1} = ra_log:execute_read_plan(ReadPlan, Flru0,
                                                       fun (Idx, Term, Cmd) ->
@@ -2454,6 +2476,7 @@ maybe_record_cluster_change(#state{conf = #conf{cluster_name = ClusterName},
         map_get(cluster_index_term, ServerStateB) orelse
         LeaderA =/= LeaderB) ->
             MembersB = ra_server:state_query(members, ServerStateB),
+            %% TODO: can we ever record undefined here?
             ok = ra_leaderboard:record(ClusterName, LeaderB, MembersB);
         true ->
             ok

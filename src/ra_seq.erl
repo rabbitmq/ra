@@ -9,7 +9,8 @@
 %% sequences are ordered high -> low but ranges are ordered
 %% {low, high} so a typical sequence could look like
 %% [55, {20, 52}, 3]
--type state() :: [ra:index() | ra:range()].
+-type non_empty_state() :: [ra:index() | ra:range(), ...].
+-type state() :: [] | non_empty_state().
 
 -record(i, {seq :: state()}).
 -opaque iter() :: #i{}.
@@ -37,7 +38,8 @@
          in/2,
          range/1,
          in_range/2,
-         has_overlap/2
+         has_overlap/2,
+         from_binary/1
         ]).
 
 -spec append(ra:index(), state()) -> state().
@@ -72,7 +74,7 @@ floor(FloorIdxIncl, Seq) when is_list(Seq) ->
     floor0(FloorIdxIncl, Seq, []).
 
 
--spec limit(ra:index(), state()) -> state().
+-spec limit(ra:index() | undefined, state()) -> state().
 limit(CeilIdxIncl, [Last | Rem])
   when is_integer(Last) andalso
        Last > CeilIdxIncl ->
@@ -102,16 +104,16 @@ add([], To) ->
 add(Add, []) ->
     Add;
 add(Add, To) ->
-    Fst = first(Add),
+    Fst = first0(Add),
     fold(fun append/2, limit(Fst - 1, To), Add).
 
 -spec fold(fun ((ra:index(), Acc) -> Acc), Acc, state()) ->
-    Acc when Acc :: term().
+    Acc.
 fold(Fun, Acc0, Seq) ->
     lists:foldr(
       fun ({_, _} = Range, Acc) ->
               ra_range:fold(Range, Fun, Acc);
-          (Idx, Acc) ->
+          (Idx, Acc) when is_integer(Idx) ->
               Fun(Idx, Acc)
       end, Acc0, Seq).
 
@@ -131,23 +133,13 @@ subtract(SeqA, SeqB) ->
 first([]) ->
     undefined;
 first(Seq) ->
-    case lists:last(Seq) of
-        {I, _} ->
-            I;
-        I ->
-            I
-    end.
+    first0(Seq).
 
 -spec last(state()) -> undefined | ra:index().
 last([]) ->
     undefined;
 last(Seq) ->
-    case hd(Seq) of
-        {_, I} ->
-            I;
-        I ->
-            I
-    end.
+    last0(Seq).
 
 -spec remove_prefix(state(), state()) ->
     {ok, state()} | {error, not_prefix}.
@@ -156,7 +148,7 @@ remove_prefix(Prefix, Seq) ->
     S = iterator(Seq),
     drop_prefix(next(P), next(S)).
 
--spec iterator(state()) -> iter() | end_of_seq.
+-spec iterator(state()) -> iter().
 iterator(Seq) when is_list(Seq) ->
     #i{seq = lists:reverse(Seq)}.
 
@@ -225,7 +217,7 @@ in(Idx, [Range | Rem]) ->
 range([]) ->
     undefined;
 range(Seq) ->
-    ra_range:new(first(Seq), last(Seq)).
+    ra_range:new(first0(Seq), last0(Seq)).
 
 
 -spec in_range(ra:range(), state()) ->
@@ -251,7 +243,28 @@ has_overlap(undefined, _Seq) ->
 has_overlap({Start, End}, Seq) ->
     has_overlap0(Start, End, Seq).
 
+-spec from_binary(binary()) ->
+    {ok, state()} | {error, invalid_format}.
+from_binary(Bin) when is_binary(Bin) ->
+    %% TODO: consider option deep check | validate
+    try binary_to_term(Bin) of
+        [] ->
+            {ok, []};
+        [{A, B} | _] = Seq
+          when is_integer(A) andalso
+               is_integer(B)->
+            {ok, Seq};
+        [I | _] = Seq when is_integer(I) ->
+            {ok, Seq};
+        _ ->
+            {error, invalid_format}
+    catch _:_ ->
+              {error, invalid_format}
+    end.
+
+
 %% Internal functions
+
 
 %% Traverse the sequence (ordered high -> low) checking for overlap.
 %% - Skip elements entirely above End
@@ -319,3 +332,17 @@ floor0(FloorIdx, [{_, _} = T | Rem], Acc) ->
     end;
 floor0(_FloorIdx, _Seq, Acc) ->
     lists:reverse(Acc).
+
+last0([{_, I} | _]) when is_integer(I) ->
+            I;
+last0([I | _]) when is_integer(I) ->
+            I.
+
+first0(Seq) ->
+    case lists:last(Seq) of
+        {I, _} when is_integer(I) ->
+            I;
+        I when is_integer(I) ->
+            I
+    end.
+

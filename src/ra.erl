@@ -82,6 +82,7 @@
 -define(START_TIMEOUT, ?DEFAULT_TIMEOUT).
 
 -type ra_cmd_ret() :: ra_server_proc:ra_cmd_ret().
+-type ra_cmd_ret(T) :: ra_server_proc:ra_cmd_ret(T).
 
 -type environment_param() ::
     {data_dir, file:filename()} |
@@ -566,7 +567,7 @@ delete_cluster(ServerIds, Timeout) ->
 %% @end
 -spec add_member(ra_server_id() | [ra_server_id()],
                  ra_server_id() | ra_new_server()) ->
-    ra_cmd_ret() |
+    ra_cmd_ret(ra_idxterm()) |
     {error, already_member} |
     {error, cluster_change_not_permitted}.
 add_member(ServerLoc, ServerId) ->
@@ -578,7 +579,7 @@ add_member(ServerLoc, ServerId) ->
 -spec add_member(ra_server_id() | [ra_server_id()],
                  ra_server_id() | ra_new_server(),
                  timeout()) ->
-    ra_cmd_ret() |
+    ra_cmd_ret(ra_idxterm()) |
     {error, already_member} |
     {error, cluster_change_not_permitted}.
 add_member(ServerLoc, ServerId, Timeout) ->
@@ -661,7 +662,7 @@ leave_and_terminate(System, ServerRef, ServerId) ->
 -spec leave_and_terminate(atom(),
                           ra_server_id() | [ra_server_id()],
                           ra_server_id(), timeout()) ->
-    ok | timeout | {error, noproc | system_not_started}.
+    ok | timeout | {error, nodedown | noproc | system_not_started}.
 leave_and_terminate(System, ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
@@ -1101,7 +1102,9 @@ members(ServerId, Timeout) ->
 %%
 %% @param ServerId the Ra server(s) to send the query to
 %% @end
--spec members_info(ra_server_id() | [ra_server_id()] | {local, ra_server_id()}) ->
+-spec members_info(ra_server_id() |
+                   [ra_server_id()] |
+                   {local, ra_server_id()}) ->
     ra_server_proc:ra_leader_call_ret(ra_cluster()).
 members_info(ServerId) ->
     members_info(ServerId, ?DEFAULT_TIMEOUT).
@@ -1120,7 +1123,7 @@ members_info(ServerId) ->
 %% @param Timeout the timeout to use
 %% @end
 -spec members_info(ra_server_id() | [ra_server_id()] | {local, ra_server_id()},
-              timeout()) ->
+                   timeout()) ->
     ra_server_proc:ra_leader_call_ret(ra_cluster()).
 members_info({local, ServerId}, Timeout) ->
     ra_server_proc:local_state_query(ServerId, members_info, Timeout);

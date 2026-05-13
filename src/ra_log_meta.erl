@@ -31,7 +31,7 @@
 -define(TIMEOUT, 30000).
 -define(SYNC_INTERVAL, 5000).
 
--record(?MODULE, {ref :: reference(),
+-record(?MODULE, {ref :: dets:tab_name(),
                   table_name :: atom()}).
 
 -opaque state() :: #?MODULE{}.
@@ -41,6 +41,7 @@
 -spec start_link(ra_system:config()) ->
     {ok, pid()} | {error, {already_started, pid()}}.
 start_link(#{names := #{log_meta := Name}} = Cfg) ->
+    % eqwalizer:ignore
     gen_batch_server:start_link({local, Name}, ?MODULE, Cfg, []).
 
 -spec init(ra_system:config()) -> {ok, state()}.
@@ -50,9 +51,11 @@ init(#{name := System,
     process_flag(trap_exit, true),
     ok = ra_lib:make_dir(Dir),
     MetaFile = filename:join(Dir, "meta.dets"),
+    % eqwalizer:ignore a binary filename works even if the type does
     {ok, Ref} = dets:open_file(TblName, [{file, MetaFile},
                                          {auto_save, ?SYNC_INTERVAL}]),
     _ = ets:new(TblName, [named_table, public, {read_concurrency, true}]),
+    % elp:ignore W0060 (bound_var_in_lhs)
     TblName = dets:to_ets(TblName, TblName),
     ?INFO("ra: meta data store initialised for system ~ts. ~b record(s) recovered",
           [System, ets:info(TblName, size)]),
@@ -61,35 +64,22 @@ init(#{name := System,
 
 handle_batch(Commands, #?MODULE{ref = Ref,
                                 table_name = TblName} = State) ->
-    DoInsert =
-        fun (Id, Key, Value, Inserts0) ->
-                case Inserts0 of
-                    #{Id := Data} ->
-                        Inserts0#{Id => update_key(Key, Value, Data)};
-                    _ ->
-                        case ets:lookup(TblName, Id) of
-                            [Data] ->
-                                Inserts0#{Id => update_key(Key, Value, Data)};
-                            [] ->
-                                Data = {Id, undefined, undefined, undefined},
-                                Inserts0#{Id => update_key(Key, Value, Data)}
-                        end
-                end
-        end,
     {Inserts, Replies, ShouldSync} =
         lists:foldl(
           fun ({cast, {store, Id, Key, Value}},
                {Inserts0, Replies, DoSync}) ->
-                  {DoInsert(Id, Key, Value, Inserts0), Replies, DoSync};
+                  {do_insert(Id, Key, Value, Inserts0, TblName), Replies, DoSync};
               ({call, From, {store, Id, Key, Value}},
-               {Inserts0, Replies, _DoSync}) ->
-                  {DoInsert(Id, Key, Value, Inserts0),
+               {Inserts0, Replies, _DoSync})
+                when is_list(Replies) ->
+                  {do_insert(Id, Key, Value, Inserts0, TblName),
                    [{reply, From, ok} | Replies], true};
               ({cast, {delete, Id}},
                {Inserts0, Replies, DoSync}) ->
                   {handle_delete(TblName, Id, Ref, Inserts0), Replies, DoSync};
               ({call, From, {delete, Id}},
-               {Inserts0, Replies, _DoSync}) ->
+               {Inserts0, Replies, _DoSync})
+                when is_list(Replies) ->
                   {handle_delete(TblName, Id, Ref, Inserts0),
                    [{reply, From, ok} | Replies], true}
           end, {#{}, [], false}, Commands),
@@ -123,6 +113,7 @@ store(Name, UId, Key, Value) when is_atom(Name) ->
 %% when it returns the store request has been safely flushed to disk
 -spec store_sync(atom(), ra_uid(), key(), value()) -> ok.
 store_sync(Name, UId, Key, Value) ->
+    % eqwalizer:ignore
     gen_batch_server:call(Name, {store, UId, Key, Value}, ?TIMEOUT).
 
 -spec delete(atom(), ra_uid()) -> ok.
@@ -131,32 +122,40 @@ delete(Name, UId) ->
 
 -spec delete_sync(atom(), ra_uid()) -> ok.
 delete_sync(Name, UId) ->
+    % eqwalizer:ignore
     gen_batch_server:call(Name, {delete, UId}, ?TIMEOUT).
 
 %% READER API
 
--spec fetch(atom(), ra_uid(), key()) -> value() | undefined.
+-spec fetch(atom(), ra_uid(), current_term) -> ra:index();
+           (atom(), ra_uid(), voted_for) -> option(ra:server_id());
+           (atom(), ra_uid(), last_applied) -> ra:index().
 fetch(MetaName, Id, current_term) ->
-    maybe_fetch(MetaName, Id, 2);
+    maybe_fetch(MetaName, Id, 2, 0);
 fetch(MetaName, Id, voted_for) ->
-    maybe_fetch(MetaName, Id, 3);
+    maybe_fetch(MetaName, Id, 3, undefined);
 fetch(MetaName, Id, last_applied) ->
-    maybe_fetch(MetaName, Id, 4).
+    maybe_fetch(MetaName, Id, 4, 0).
 
--spec fetch(atom(), ra_uid(), key(), term()) -> value().
+-spec fetch(atom(), ra_uid(), current_term, Def) ->
+    ra:index() | Def when Def :: term();
+           (atom(), ra_uid(), voted_for, Def) ->
+    ra:server_id() | Def when Def :: term();
+           (atom(), ra_uid(), last_applied, Def) ->
+    ra:index() | Def when Def :: term().
 fetch(MetaName, Id, Key, Default) ->
-    case fetch(MetaName, Id, Key) of
+    case fetch(MetaName, Id, Key, undefined) of
         undefined -> Default;
         Value -> Value
     end.
 
 %%% internal
 
-maybe_fetch(MetaName, Id, Pos) ->
-    try ets:lookup_element(MetaName, Id, Pos)
+maybe_fetch(MetaName, Id, Pos, Def) ->
+    try ets:lookup_element(MetaName, Id, Pos, Def)
     catch
         _:badarg ->
-            undefined
+            Def
     end.
 
 handle_delete(TblName, Id, Ref, Inserts) ->
@@ -178,3 +177,18 @@ update_key(voted_for, Value, Data) ->
     setelement(3, Data, Value);
 update_key(last_applied, Value, Data) ->
     setelement(4, Data, Value).
+
+do_insert(Id, Key, Value, Inserts0, TblName) ->
+    case Inserts0 of
+        #{Id := Data} ->
+            Inserts0#{Id => update_key(Key, Value, Data)};
+        _ ->
+            case ets:lookup(TblName, Id) of
+                [Data] ->
+                    Inserts0#{Id => update_key(Key, Value, Data)};
+                [] ->
+                    Data = {Id, undefined, undefined, undefined},
+                    Inserts0#{Id => update_key(Key, Value, Data)}
+            end
+    end.
+
