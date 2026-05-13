@@ -67,7 +67,7 @@ start_link(#{name := Name} = Config) ->
 
 -spec accept_mem_tables(atom() | pid(),
                         #{ra_uid() => [{ets:tid(), ra_seq:state()}]},
-                        string()) -> ok.
+                        file:filename_all()) -> ok.
 accept_mem_tables(_SegmentWriter, Tables, undefined)
   when map_size(Tables) == 0 ->
     ok;

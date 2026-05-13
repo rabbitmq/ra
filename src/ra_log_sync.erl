@@ -58,6 +58,9 @@ sync({pool, BaseName, PoolSize}, SyncFun) when is_function(SyncFun, 0) ->
 init({}) ->
     {ok, #state{}}.
 
+-spec handle_batch([{call, term(), {sync, fun(() -> ok | {error, term()})}}],
+                   #state{}) ->
+    {ok, [], #state{}}.
 handle_batch(Ops, State) ->
     %% Ops arrive in reverse arrival order (most recent first) because
     %% reversed_batch = true. On journaling filesystems (ext4, XFS),

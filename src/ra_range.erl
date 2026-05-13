@@ -145,7 +145,7 @@ subtract({_SubStart, _SubEnd} = SubRange, {Start, End} = Range) ->
     end.
 
 -spec fold(range(), fun((ra:index(), Acc) -> Acc), Acc) ->
-    Acc when Acc :: term().
+    Acc.
 fold(undefined, _Fun, Acc) ->
     Acc;
 fold({S, E}, Fun, Acc) ->

@@ -236,7 +236,7 @@ read_meta_internal(Fd) ->
         {ok, <<?MAGIC, ?VERSION:8/unsigned, Crc:32/integer,
                MetaSize:32/unsigned>>} ->
             case file:read(Fd, MetaSize) of
-                {ok, MetaBin} ->
+                {ok, MetaBin} when is_binary(MetaBin) ->
                     {ok, binary_to_term(MetaBin), Crc};
                 Err ->
                     Err

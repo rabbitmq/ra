@@ -13,8 +13,8 @@
 %%
 
 %% taken from gen_statem as this type isn't exported for some reason.
--type from() ::
-	{To :: pid(), Tag :: term()}.
+-type from() :: gen_statem:from().
+	% {To :: pid(), Tag :: term()}.
 
 %% Sections 5.1 in the paper.
 -type ra_index() :: non_neg_integer().
@@ -232,6 +232,8 @@
             true -> ?DISPATCH_LOG(debug, Fmt, Args);
             false -> ok
         end).
+
+% eqwalizer:ignore we know what this is
 -define(DEBUG(Fmt, Args), ?DISPATCH_LOG(debug, Fmt, Args)).
 -define(INFO(Fmt, Args), ?DISPATCH_LOG(info, Fmt, Args)).
 -define(NOTICE(Fmt, Args), ?DISPATCH_LOG(notice, Fmt, Args)).
@@ -243,13 +245,13 @@
 -define(DISPATCH_LOG(Level, Fmt, Args),
         %% same as OTP logger does when using the macro
         try
-            (persistent_term:get('$ra_logger')):log(Level, Fmt, Args,
-                                                    #{mfa => {?MODULE,
-                                                              ?FUNCTION_NAME,
-                                                              ?FUNCTION_ARITY},
-                                                      file => ?FILE,
-                                                      line => ?LINE,
-                                                      domain => [ra]})
+            (ra_env:logger_mod()):log(Level, Fmt, Args,
+                                      #{mfa => {?MODULE,
+                                                ?FUNCTION_NAME,
+                                                ?FUNCTION_ARITY},
+                                        file => ?FILE,
+                                        line => ?LINE,
+                                        domain => [ra]})
         catch
             _:_ -> ok
         end,
