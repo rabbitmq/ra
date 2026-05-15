@@ -191,7 +191,7 @@ write_batch(Wal, WalCommands) when is_atom(Wal) ->
     case whereis(Wal) of
         undefined ->
             {error, wal_down};
-        Pid ->
+        Pid when is_pid(Pid) ->
             write_batch(Pid, WalCommands)
     end.
 
@@ -208,7 +208,7 @@ last_writer_seq(Wal, UId) when is_atom(Wal) ->
     case whereis(Wal) of
         undefined ->
             {error, wal_down};
-        Pid ->
+        Pid when is_pid(Pid) ->
             last_writer_seq(Pid, UId)
     end.
 
@@ -1109,11 +1109,18 @@ recover_entry(Names, UId, {Idx, _, _} = Entry, SmallestIdx,
             {ok, State#recovery{ranges = Ranges,
                                 writers = Writers#{UId => {in_seq, Idx}},
                                 tables = Tables#{UId => Mt1}}};
-        {error, overwriting} ->
+        {error, Reason}
+          when Reason =:= overwriting orelse
+               Reason =:= limit_reached ->
             %% create successor memtable
             {ok, Mt1} = ra_log_ets:new_mem_table_please(Names, UId, Mt0),
             {retry, State#recovery{tables = Tables#{UId => Mt1},
-                                   writers = maps:remove(UId, Writers)}}
+                                   writers = maps:remove(UId, Writers)}};
+        {error, gap_detected} ->
+            ?ERROR("WAL recovery gap detected for ~ts when inserting into "
+                   "mem table - index ~b, prev_idx ~w",
+                   [UId, Idx, PrevIdx]),
+            exit({gap_detected, UId, Idx, PrevIdx})
     end;
 recover_entry(Names, UId, {Idx, Term, _}, SmallestIdx,
               #recovery{mode = post_boot,
