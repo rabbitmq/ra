@@ -41,6 +41,7 @@ all_tests() ->
      overwrite_inside,
      recover,
      recover_overwrite,
+     recover_limit_reached,
      recover_with_snapshot_index,
      recover_overwrite_rollover,
      recover_existing_mem_table,
@@ -1051,6 +1052,55 @@ recover_overwrite(Config) ->
         {'$gen_cast',
          {mem_tables, #{UId := [{MtTid, [{5, 20}]},
                                 {PrevMtTid, [{1, 10}]}
+                                ]}, _Wal}} ->
+            ok
+    after 2000 ->
+              flush(),
+              ct:fail("new_mem_tables_timeout")
+    end,
+    meck:unload(),
+    proc_lib:stop(Pid2),
+    ok.
+
+recover_limit_reached(Config) ->
+    ok = logger:set_primary_config(level, all),
+    Conf = ?config(wal_conf, Config),
+    {UId, _} = WriterId = ?config(writer_id, Config),
+    Data = <<42:256/unit:8>>,
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    Tid = ets:new(?FUNCTION_NAME, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    %% write some in one term
+    [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, Idx, 1, Data)
+     || Idx <- lists:seq(1, 10)],
+    _ = await_written(WriterId, 1, [{1, 10}]),
+
+    flush(),
+    ok = proc_lib:stop(ra_log_wal, normal, 5000),
+    
+    meck:new(ra_mt, [passthrough]),
+    meck:expect(ra_mt, insert_sparse,
+                fun({Idx, _, _} = Entry, LastIdx, State) ->
+                        case Idx == 5 andalso get(limit_reached_returned) == undefined of
+                            true ->
+                               put(limit_reached_returned, true),
+                               {error, limit_reached};
+                            false ->
+                               meck:passthrough([Entry, LastIdx, State])
+                        end
+                end),
+
+    {ok, Pid2} = ra_log_wal:start_link(Conf),
+    {ok, Mt} = ra_log_ets:mem_table_please(?config(names, Config), UId),
+
+    ?assertMatch({1, 10}, ra_mt:range(Mt)),
+    MtTid = ra_mt:tid(Mt),
+    PrevMtTid = ra_mt:tid(ra_mt:prev(Mt)),
+    receive
+        {'$gen_cast',
+         {mem_tables, #{UId := [{MtTid, [{5, 10}]},
+                                {PrevMtTid, [{1, 4}]}
                                 ]}, _Wal}} ->
             ok
     after 2000 ->
