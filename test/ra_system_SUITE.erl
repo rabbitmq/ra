@@ -221,7 +221,7 @@ search_paths() ->
 start_peer(PrivDir) ->
     Name = ?CT_PEER_NAME(),
     Dir0 = filename:join(PrivDir, Name),
-    Dir = "'" ++ Dir0 ++ "'",
+    Dir = "\"" ++ Dir0 ++ "\"",
     Pa = [filename:dirname(code:which(App))
           || App <- [aten, gen_batch_server, seshat, ra]],
     Args = ["-pa"] ++ Pa ++ ["-ra", "data_dir", Dir],

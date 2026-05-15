@@ -169,10 +169,8 @@ setup_log() ->
     ok = meck:new(ra_log, []),
     ok = meck:new(ra_snapshot, [passthrough]),
     ok = meck:new(ra_machine, [passthrough]),
-    meck:expect(ra_log, init, fun(C) -> ra_log_memory:init(C) end),
-    meck:expect(ra_log, recover_snapshot, fun(Log) ->
-        ra_log_memory:recover_snapshot(Log)
-    end),
+    meck:expect(ra_log, init, fun ra_log_memory:init/1),
+    meck:expect(ra_log, recover_snapshot, fun ra_log_memory:recover_snapshot/1),
     meck:expect(ra_log_meta, store, fun (_, U, K, V) ->
                                             put({U, K}, V), ok
                                     end),

@@ -1027,61 +1027,61 @@ compact_seg_refs_test() ->
 
 compact_segref_3_test() ->
     Data = [
-            {"C", {2, 7}},
+            {<<"C">>, {2, 7}},
             %% this entry has overwritten the prior two
-            {"B", {5, 10}},
-            {"A", {1, 4}}
+            {<<"B">>, {5, 10}},
+            {<<"A">>, {1, 4}}
            ],
     Res = compact_segrefs(Data, []),
-    ?assertMatch([{"C", {2, 7}},
-                  {"A", {1, 1}}], Res),
+    ?assertMatch([{<<"C">>, {2, 7}},
+                  {<<"A">>, {1, 1}}], Res),
     ok.
 
 compact_segref_2_test() ->
     Data = [
-            {"80", {80, 89}},
+            {<<"80">>, {80, 89}},
             %% this entry has overwritten the prior two
-            {"71", {56, 79}},
-            {"70", {70, 85}},
-            {"60", {60, 69}},
-            {"50", {50, 59}}
+            {<<"71">>, {56, 79}},
+            {<<"70">>, {70, 85}},
+            {<<"60">>, {60, 69}},
+            {<<"50">>, {50, 59}}
            ],
     Res = compact_segrefs(Data, []),
-    ?assertMatch([{"80", {80, 89}},
-                  {"71", {56, 79}},
-                  {"50", {50, 55}}
+    ?assertMatch([{<<"80">>, {80, 89}},
+                  {<<"71">>, {56, 79}},
+                  {<<"50">>, {50, 55}}
                  ], Res),
     ok.
 
 compact_segref_1_test() ->
     Data = [
-            {"80", {80, 89}},
+            {<<"80">>, {80, 89}},
             %% this entry has overwritten the prior one
-            {"71", {70, 79}},
-            {"70", {70, 85}},
+            {<<"71">>, {70, 79}},
+            {<<"70">>, {70, 85}},
             %% partial overwrite
-            {"65", {65, 69}},
-            {"60", {60, 69}},
-            {"50", {50, 59}},
-            {"40", {40, 49}}
+            {<<"65">>, {65, 69}},
+            {<<"60">>, {60, 69}},
+            {<<"50">>, {50, 59}},
+            {<<"40">>, {40, 49}}
            ],
 
     Res = compact_segrefs(Data, [
-                                 {"30", {30, 39}},
-                                 {"20", {20, 29}}
+                                 {<<"30">>, {30, 39}},
+                                 {<<"20">>, {20, 29}}
                                 ]),
 
     %% overwritten entry is no longer there
     %% and the segment prior to the partial overwrite has been limited
     %% to provide a continuous range
-    ?assertMatch([{"80", {80, 89}},
-                  {"71", {70, 79}},
-                  {"65", {65, 69}},
-                  {"60", {60, 64}},
-                  {"50", {50, 59}},
-                  {"40", {40, 49}},
-                  {"30", {30, 39}},
-                  {"20", {20, 29}}
+    ?assertMatch([{<<"80">>, {80, 89}},
+                  {<<"71">>, {70, 79}},
+                  {<<"65">>, {65, 69}},
+                  {<<"60">>, {60, 64}},
+                  {<<"50">>, {50, 59}},
+                  {<<"40">>, {40, 49}},
+                  {<<"30">>, {30, 39}},
+                  {<<"20">>, {20, 29}}
                  ], Res),
     ok.
 
@@ -1093,8 +1093,8 @@ update_segments_limited_not_overwritten_test() ->
     %% {Fn, {Start, NewEnd}} would not match the original
     %% {Fn, {Start, OrigEnd}}, causing the file to be deleted while
     %% a reference to it remained in the segment_refs.
-    Existing = [{"20", {20, 29}},
-                {"10", {10, 19}}],
+    Existing = [{<<"20">>, {20, 29}},
+                {<<"10">>, {10, 19}}],
     State0 = #?STATE{cfg = #cfg{uid = <<"test">>,
                                 directory = "/tmp",
                                 counter = undefined,
@@ -1115,28 +1115,28 @@ update_segments_limited_not_overwritten_test() ->
     %%   "20" {20,29} — limited from {20,29} to {20,29} (unchanged)
     %%   "10" {10,19} — unchanged
     %% "30" is fully inside "40"'s range so it gets removed.
-    NewSegmentRefs = [{"50", {50, 59}},
-                      {"40", {30, 55}},
-                      {"30", {30, 39}}],
+    NewSegmentRefs = [{<<"50">>, {50, 59}},
+                      {<<"40">>, {30, 55}},
+                      {<<"30">>, {30, 39}}],
 
     {State1, Overwritten} = update_segments(NewSegmentRefs, State0),
 
     %% "30" was fully overwritten by "40" — its file can be deleted
-    ?assertEqual([{"30", {30, 39}}], Overwritten),
+    ?assertEqual([{<<"30">>, {30, 39}}], Overwritten),
 
     %% "40" must NOT be in Overwritten: it was limited, not removed.
     %% Its file is still needed for indexes 30-49.
-    ?assertNot(lists:keymember("40", 1, Overwritten)),
+    ?assertNot(lists:keymember(<<"40">>, 1, Overwritten)),
 
     %% "50" must NOT be in Overwritten: it was kept as-is.
-    ?assertNot(lists:keymember("50", 1, Overwritten)),
+    ?assertNot(lists:keymember(<<"50">>, 1, Overwritten)),
 
     %% Verify the resulting segment refs are correct and contiguous
     ResultRefs = segment_refs(State1),
-    ?assertEqual([{"50", {50, 59}},
-                  {"40", {30, 49}},
-                  {"20", {20, 29}},
-                  {"10", {10, 19}}], ResultRefs),
+    ?assertEqual([{<<"50">>, {50, 59}},
+                  {<<"40">>, {30, 49}},
+                  {<<"20">>, {20, 29}},
+                  {<<"10">>, {10, 19}}], ResultRefs),
     ok.
 
 segrefs_to_read_test() ->
@@ -1144,26 +1144,26 @@ segrefs_to_read_test() ->
     SegRefs = ra_lol:from_list(
                 fun seg_ref_gt/2,
                   compact_segrefs(
-                    [{"00000006.segment", {412, 499}},
-                     {"00000005.segment", {284, 411}},
+                    [{<<"00000006.segment">>, {412, 499}},
+                     {<<"00000005.segment">>, {284, 411}},
                      %% this segment got overwritten
-                     {"00000004.segment",{284, 500}},
-                     {"00000003.segment",{200, 285}},
-                     {"00000002.segment",{128, 255}},
-                     {"00000001.segment", {0, 127}}], [])),
+                     {<<"00000004.segment">>,{284, 500}},
+                     {<<"00000003.segment">>,{200, 285}},
+                     {<<"00000002.segment">>,{128, 255}},
+                     {<<"00000001.segment">>, {0, 127}}], [])),
 
 
-    ?assertEqual([{"00000002.segment", {199, 199}},
-                  {"00000003.segment", {200, 283}},
-                  {"00000005.segment", {284, 411}},
-                  {"00000006.segment", {412, 499}}],
+    ?assertEqual([{<<"00000002.segment">>, {199, 199}},
+                  {<<"00000003.segment">>, {200, 283}},
+                  {<<"00000005.segment">>, {284, 411}},
+                  {<<"00000006.segment">>, {412, 499}}],
                  segment_fold_plan(SegRefs, {199, 499}, [])),
 
     %% out of range
     ?assertEqual([], segment_fold_plan(SegRefs, {500, 500}, [])),
     ?assertEqual([
-                  {"00000001.segment", {127,127}},
-                  {"00000002.segment", {128,128}}
+                  {<<"00000001.segment">>, {127,127}},
+                  {<<"00000002.segment">>, {128,128}}
                  ],
                  segment_fold_plan(SegRefs, {127, 128}, [])),
     ok.
