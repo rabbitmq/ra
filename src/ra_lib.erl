@@ -55,7 +55,8 @@
          consult/1,
          cons/2,
          unwrap/1,
-         whereis/1
+         whereis/1,
+         rootname/1
         ]).
 
 -type file_err() :: file:posix() | badarg | terminated | system_limit.
@@ -84,6 +85,34 @@ unwrap(undefined) ->
     error(?FUNCTION_NAME);
 unwrap(Value) ->
     Value.
+
+-spec rootname(binary()) -> binary().
+rootname(Bin) when is_binary(Bin) ->
+    rootname(Bin, byte_size(Bin) - 1, -1).
+
+rootname(Bin, -1, -1) ->
+    Bin;
+rootname(Bin, -1, DotPos) ->
+    if DotPos == 0 ->
+            <<>>;
+       true ->
+            binary:part(Bin, 0, DotPos)
+    end;
+rootname(Bin, Pos, DotPos) ->
+    case binary:at(Bin, Pos) of
+        $/ ->
+            if DotPos == -1 ->
+                    Bin;
+               DotPos == Pos + 1 ->
+                    Bin;
+               true ->
+                    binary:part(Bin, 0, DotPos)
+            end;
+        $. when DotPos == -1 ->
+            rootname(Bin, Pos - 1, Pos);
+        _ ->
+            rootname(Bin, Pos - 1, DotPos)
+    end.
 
 -spec whereis(atom()) -> option(pid()).
 whereis(Name) when is_atom(Name) ->
@@ -662,6 +691,23 @@ partition_parallel_test() ->
                  partition_parallel(fun(_) ->
                                         timer:sleep(infinity)
                                     end, [1, 2, 3], 1000)),
+    ok.
+
+rootname_test() ->
+    Cases = [
+        <<".hidden">>,
+        <<"/path/.hidden">>,
+        <<"/path/a.b">>,
+        <<"/path/..hidden">>,
+        <<"..hidden">>,
+        <<"foo">>,
+        <<"foo.erl">>,
+        <<"/a/b/c.d/e">>,
+        <<"/a/b/c.d/e.f">>
+    ],
+    lists:foreach(fun(C) ->
+        ?assertEqual(filename:rootname(C), rootname(C))
+    end, Cases),
     ok.
 
 -endif.
