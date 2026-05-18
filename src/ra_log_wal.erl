@@ -281,6 +281,7 @@ start_link(#{dir := _,
                {max_batch_size, WalMaxBatchSize}
                | Opts0],
 
+    % eqwalizer:ignore
     gen_batch_server:start_link({local, Name}, ?MODULE, Config, Options).
 
 %%% Callbacks
@@ -733,12 +734,9 @@ prepare_file(File, Modes) ->
             Err
     end.
 
-make_tmp(File) ->
+make_tmp(File) when is_list(File) ->
     Tmp = filename:rootname(File) ++ ".tmp",
-    {ok, Fd} = file:open(Tmp, [write, binary, raw]),
-    ok = file:write(Fd, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>),
-    ok = ra_file:sync(Fd),
-    ok = file:close(Fd),
+    ok = ra_lib:write_file(Tmp, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>),
     Tmp.
 
 maybe_pre_allocate(#conf{system = System,

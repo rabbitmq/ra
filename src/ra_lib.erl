@@ -545,7 +545,7 @@ consult(Path) ->
             Err
     end.
 
--spec cons(term(), list()) -> list().
+-spec cons(T, list(T)) -> list(T).
 cons(Item, List)
   when is_list(List) ->
     [Item | List].

@@ -102,16 +102,16 @@ add([], To) ->
 add(Add, []) ->
     Add;
 add(Add, To) ->
-    Fst = first(Add),
+    Fst = first0(Add),
     fold(fun append/2, limit(Fst - 1, To), Add).
 
--spec fold(fun ((ra:index(), Acc) -> Acc), Acc, state()) ->
-    Acc when Acc :: term().
-fold(Fun, Acc0, Seq) ->
+-spec fold(fun ((ra:index(), Acc) -> Acc), Acc, state()) -> Acc.
+fold(Fun, Acc0, Seq)
+  when is_function(Fun) ->
     lists:foldr(
       fun ({_, _} = Range, Acc) ->
               ra_range:fold(Range, Fun, Acc);
-          (Idx, Acc) ->
+          (Idx, Acc) when is_integer(Idx) ->
               Fun(Idx, Acc)
       end, Acc0, Seq).
 
@@ -131,23 +131,13 @@ subtract(SeqA, SeqB) ->
 first([]) ->
     undefined;
 first(Seq) ->
-    case lists:last(Seq) of
-        {I, _} ->
-            I;
-        I ->
-            I
-    end.
+    first0(Seq).
 
 -spec last(state()) -> undefined | ra:index().
 last([]) ->
     undefined;
 last(Seq) ->
-    case hd(Seq) of
-        {_, I} ->
-            I;
-        I ->
-            I
-    end.
+    last0(Seq).
 
 -spec remove_prefix(state(), state()) ->
     {ok, state()} | {error, not_prefix}.
@@ -156,7 +146,7 @@ remove_prefix(Prefix, Seq) ->
     S = iterator(Seq),
     drop_prefix(next(P), next(S)).
 
--spec iterator(state()) -> iter() | end_of_seq.
+-spec iterator(state()) -> iter().
 iterator(Seq) when is_list(Seq) ->
     #i{seq = lists:reverse(Seq)}.
 
@@ -225,7 +215,7 @@ in(Idx, [Range | Rem]) ->
 range([]) ->
     undefined;
 range(Seq) ->
-    ra_range:new(first(Seq), last(Seq)).
+    ra_range:new(first0(Seq), last0(Seq)).
 
 
 -spec in_range(ra:range(), state()) ->
@@ -319,3 +309,16 @@ floor0(FloorIdx, [{_, _} = T | Rem], Acc) ->
     end;
 floor0(_FloorIdx, _Seq, Acc) ->
     lists:reverse(Acc).
+
+last0([{_, I} | _]) when is_integer(I) ->
+            I;
+last0([I | _]) when is_integer(I) ->
+            I.
+
+first0(Seq) ->
+    case lists:last(Seq) of
+        {I, _} when is_integer(I) ->
+            I;
+        I when is_integer(I) ->
+            I
+    end.

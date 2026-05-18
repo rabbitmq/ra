@@ -190,6 +190,17 @@
 -spec 'ets:select'(ets:table(), ets:match_spec()) -> [dynamic()].
 'ets:select'(_, _) -> error(eqwalizer_specs).
 
+%% -------- gen__batch_server --------
+
+% elp:ignore W0048 (no_dialyzer_attribute)
+-dialyzer({nowarn_function, 'gen_batch_server:call'/2}).
+-spec 'gen_batch_server:call'(gen_batch_server:server_ref(), term()) -> dynamic().
+'gen_batch_server:call'(_, _) -> error(eqwalizer_specs).
+
+% elp:ignore W0048 (no_dialyzer_attribute)
+-dialyzer({nowarn_function, 'gen_batch_server:call'/3}).
+-spec 'gen_batch_server:call'(gen_batch_server:server_ref(), term(), timeout()) -> dynamic().
+'gen_batch_server:call'(_, _, _) -> error(eqwalizer_specs).
 %% -------- gen_server --------
 
 % elp:ignore W0048 (no_dialyzer_attribute)

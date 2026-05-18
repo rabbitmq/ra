@@ -24,7 +24,8 @@
                      node() => #{component() => ok}}.
 
 -export_type([
-              state/0
+              state/0,
+              component/0
              ]).
 
 -spec init() -> state().

@@ -1968,7 +1968,7 @@ log_tick(#{cfg := #cfg{},
 
 
 -spec handle_state_enter(ra_state() | eol, ra_state(), ra_server_state()) ->
-    {ra_server_state() | eol, effects()}.
+    {ra_server_state(), effects()}.
 handle_state_enter(RaftState, OldRaftState,
                    #{cfg := #cfg{effective_machine_module = MacMod},
                      machine_state := MacState} = State) ->
@@ -2651,7 +2651,7 @@ handle_down(RaftState, Type, Pid, Info, #{cfg := #cfg{log_id = LogId}} = State) 
            [LogId, Type, Pid, Info, 10]),
     {RaftState, State, []}.
 
--spec handle_node_status(ra_state(), machine | aux,
+-spec handle_node_status(ra_state(), ra_monitors:component(),
                          node(), nodeup | nodedown,
                          term(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
