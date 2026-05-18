@@ -119,7 +119,7 @@
          snapshot_state :: ra_snapshot:state(),
          current_snapshot :: option(ra_idxterm()),
          last_resend_time :: option({integer(), WalPid :: pid() | undefined}),
-         last_wal_write :: {pid(), Ms :: integer(), ra:index() | -1},
+         last_wal_write :: {option(pid()), Ms :: milliseconds(), ra:index() | -1},
          reader :: ra_log_segments:state(),
          mem_table :: ra_mt:state(),
          tx = false :: false | {true, ra:range()},
@@ -355,7 +355,7 @@ init(#{uid := UId,
                       mem_table = Mt,
                       snapshot_state = SnapshotState,
                       current_snapshot = ra_snapshot:current(SnapshotState),
-                      last_wal_write = {whereis(Wal), now_ms(), LastWalIdx},
+                      last_wal_write = {ra_lib:whereis(Wal), now_ms(), LastWalIdx},
                       live_indexes = LiveIndexes,
                       pending = Pending
                      },
@@ -1765,6 +1765,7 @@ maps_with_values(Keys, Map) ->
               end
       end, [], Keys).
 
+-spec now_ms() -> milliseconds().
 now_ms() ->
     erlang:system_time(millisecond).
 

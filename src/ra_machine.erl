@@ -105,8 +105,6 @@
 %% Machine configuration.
 %% the `module()' should implement the {@link ra_machine} behaviour.
 
--type milliseconds() :: non_neg_integer().
-
 -type builtin_command() :: {down, pid(), term()} |
                            {nodeup | nodedown, node()} |
                            {machine_version, From :: version(), To :: version()} |

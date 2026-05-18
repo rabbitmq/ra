@@ -102,6 +102,7 @@
 
 -type mfargs() :: {M :: module(), F :: atom(), A :: [term()]}.
 
+-type milliseconds() :: non_neg_integer().
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
 %% done to the core protocol records (below). It is only ever exchanged by the

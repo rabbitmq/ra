@@ -54,13 +54,15 @@
          ensure_dir/1,
          consult/1,
          cons/2,
-         unwrap/1
+         unwrap/1,
+         whereis/1
         ]).
 
 -type file_err() :: file:posix() | badarg | terminated | system_limit.
 
 -export_type([file_err/0]).
 
+-include("ra.hrl").
 -include_lib("kernel/include/file.hrl").
 
 ceiling(X) when X < 0 ->
@@ -77,11 +79,20 @@ default(undefined, Def) ->
 default(Value, _Def) ->
     Value.
 
--spec unwrap(undefined | term()) -> term().
+-spec unwrap(option(T)) -> T.
 unwrap(undefined) ->
-    error(undefined);
+    error(?FUNCTION_NAME);
 unwrap(Value) ->
     Value.
+
+-spec whereis(atom()) -> option(pid()).
+whereis(Name) when is_atom(Name) ->
+    case erlang:whereis(Name) of
+        undefined ->
+            undefined;
+        Pid when is_pid(Pid) ->
+                 Pid
+    end.
 
 -spec lazy_default(undefined | term(), fun (() -> term())) -> term().
 lazy_default(undefined, DefGen) ->

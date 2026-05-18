@@ -149,7 +149,7 @@
 -export_type([wal_conf/0]).
 
 -type wal_command() ::
-    {append, writer_id(), PrevIndex :: ra:index() | -1,
+    {append, writer_id(), ets:tid(), PrevIndex :: ra:index() | -1,
      Index :: ra:index(), Term :: ra_term(), wal_cmd()}.
 
 -type wal_op() :: {cast, wal_command()} |
@@ -323,11 +323,12 @@ init(#{system := System,
                  recovery_chunk_size = RecoveryChunkSize,
                  sync_method = SyncMethod,
                  counter = CRef,
-                 mem_tables_tid = ets:whereis(MemTablesName),
+                 mem_tables_tid = ra_lib:unwrap(ets:whereis(MemTablesName)),
                  names = Names,
                  explicit_gc = Gc,
                  pre_allocate = PreAllocate,
-                 ra_log_snapshot_state_tid = ets:whereis(ra_log_snapshot_state)},
+                 ra_log_snapshot_state_tid = ra_lib:unwrap(
+                                               ets:whereis(ra_log_snapshot_state))},
     try recover_wal(Dir, Conf) of
         Result ->
             % wait for the segment writer to process any flush requests

@@ -28,7 +28,7 @@
 %% Threshold at or above which we use tuple, below we use simple list
 -define(TUPLE_THRESHOLD, 65).
 
--type gt_fun() :: fun((Item, Item) -> boolean()).
+-type gt_fun() :: fun((term(), term()) -> boolean()).
 
 %% State is either:
 %% - {list, GtFun, List} where List is stored in descending order (newest first)
