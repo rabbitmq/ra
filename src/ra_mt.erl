@@ -223,7 +223,6 @@ abort(#?MODULE{indexes = Seq,
     State#?MODULE{staged = undefined,
                   indexes = ra_seq:limit(Idx - 1, Seq)}.
 
-
 -spec lookup(ra:index(), state()) ->
     log_entry() | undefined.
 lookup(Idx, #?MODULE{staged = {FstStagedIdx, Staged}})
@@ -268,13 +267,15 @@ lookup_term(Idx, #?MODULE{tid = Tid,
     %% Note: This bypasses Seq check for efficiency. The ETS lookup handles
     %% the common case; Seq validation could be added if needed for correctness.
     case ets:lookup_element(Tid, Idx, 2, undefined) of
+        Term when is_integer(Term) ->
+            Term;
         undefined when Prev =/= undefined ->
             lookup_term(Idx, Prev);
-        Term ->
-            Term
+        undefined ->
+            undefined
     end.
 
--spec tid_for(ra:index(), ra_term(), state()) ->
+-spec tid_for(ra:index(), ra_term(), option(state())) ->
     undefined | ets:tid().
 tid_for(_Idx, _Term, undefined) ->
     undefined;
@@ -325,8 +326,9 @@ delete({indexes, _Tid, []}) ->
     0;
 delete({indexes, Tid, Seq}) ->
     NumToDelete = ra_seq:length(Seq),
-    Start = ra_seq:first(Seq),
-    End = ra_seq:last(Seq),
+    % Start = ra_seq:first(Seq),
+    % End = ra_seq:last(Seq),
+    {Start, End} = ra_seq:range(Seq),
     Limit = ets:info(Tid, size) div 2,
     %% check if there is an entry below the start of the deletion range,
     %% if there is we've missed a segment event at some point and need
@@ -444,7 +446,7 @@ record_flushed(TID = Tid, FlushedSeq,
                         indexes = Seq} = State) ->
     End = ra_seq:last(FlushedSeq),
     case ra_seq:in(End, Seq) of
-        true ->
+        true when is_integer(End) ->
             %% indexes are always written in order so we can delete
             %% the entire sequence preceeding, this will handle the case
             %% where a segments notifications is missed
@@ -460,7 +462,7 @@ record_flushed(TID = Tid, FlushedSeq,
              State#?MODULE{indexes = NewSeq,
                            size = ra_seq:length(NewSeq),
                            prev = Prev}};
-        false ->
+        _ ->
             {undefined, State}
     end;
 record_flushed(_Tid, _FlushedSeq, #?MODULE{prev = undefined} = State) ->

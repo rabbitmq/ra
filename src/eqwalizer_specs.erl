@@ -29,6 +29,11 @@
 'lists:max'(_) -> error(eqwalizer_specs).
 
  % elp:ignore W0048 (no_dialyzer_attribute)
+ -dialyzer({nowarn_function, 'lists:last'/1}).
+ -spec 'lists:last'([T]) -> T.
+'lists:last'(_) -> error(eqwalizer_specs).
+
+ % elp:ignore W0048 (no_dialyzer_attribute)
  -dialyzer({nowarn_function, 'lists:sort'/1}).
  -spec 'lists:sort'([T]) -> [T].
 'lists:sort'(_) -> error(eqwalizer_specs).
@@ -171,6 +176,19 @@
     (ets:table(), protection) -> ets:table_access();
     (ets:table(), type) -> ets:table_type().
 'ets:info'(_, _) -> error(eqwalizer_specs).
+
+ % elp:ignore W0048 (no_dialyzer_attribute)
+ -dialyzer({nowarn_function, 'ets:select'/1}).
+ -spec 'ets:select'(EtsContinuation) ->
+     {[dynamic()], EtsContinuation} | '$end_of_table'
+       when
+       EtsContinuation :: dynamic().
+'ets:select'(_) -> error(eqwalizer_specs).
+
+ % elp:ignore W0048 (no_dialyzer_attribute)
+ -dialyzer({nowarn_function, 'ets:select'/2}).
+-spec 'ets:select'(ets:table(), ets:match_spec()) -> [dynamic()].
+'ets:select'(_, _) -> error(eqwalizer_specs).
 
 %% -------- gen_server --------
 
