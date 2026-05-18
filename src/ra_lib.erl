@@ -88,7 +88,12 @@ unwrap(Value) ->
 
 -spec rootname(binary()) -> binary().
 rootname(Bin) when is_binary(Bin) ->
-    rootname(Bin, byte_size(Bin) - 1, -1).
+    case os:type() of
+        {win32, _} ->
+            rootname_win32(Bin, byte_size(Bin) - 1, -1);
+        _ ->
+            rootname(Bin, byte_size(Bin) - 1, -1)
+    end.
 
 rootname(Bin, -1, -1) ->
     Bin;
@@ -112,6 +117,38 @@ rootname(Bin, Pos, DotPos) ->
             rootname(Bin, Pos - 1, Pos);
         _ ->
             rootname(Bin, Pos - 1, DotPos)
+    end.
+
+rootname_win32(Bin, -1, -1) ->
+    Bin;
+rootname_win32(Bin, -1, DotPos) ->
+    if DotPos == 0 ->
+            <<>>;
+       true ->
+            binary:part(Bin, 0, DotPos)
+    end;
+rootname_win32(Bin, Pos, DotPos) ->
+    case binary:at(Bin, Pos) of
+        $/ ->
+            if DotPos == -1 ->
+                    Bin;
+               DotPos == Pos + 1 ->
+                    Bin;
+               true ->
+                    binary:part(Bin, 0, DotPos)
+            end;
+        $\\ ->
+            if DotPos == -1 ->
+                    Bin;
+               DotPos == Pos + 1 ->
+                    Bin;
+               true ->
+                    binary:part(Bin, 0, DotPos)
+            end;
+        $. when DotPos == -1 ->
+            rootname_win32(Bin, Pos - 1, Pos);
+        _ ->
+            rootname_win32(Bin, Pos - 1, DotPos)
     end.
 
 -spec whereis(atom()) -> option(pid()).
@@ -689,25 +726,41 @@ lists_detect_sort_test() ->
 partition_parallel_test() ->
     ?assertMatch({error, {partition_parallel_timeout, [], []}},
                  partition_parallel(fun(_) ->
-                                        timer:sleep(infinity)
+                                        timer:sleep(infinity),
+                                        true
                                     end, [1, 2, 3], 1000)),
     ok.
 
 rootname_test() ->
     Cases = [
-        <<".hidden">>,
-        <<"/path/.hidden">>,
-        <<"/path/a.b">>,
-        <<"/path/..hidden">>,
-        <<"..hidden">>,
-        <<"foo">>,
-        <<"foo.erl">>,
-        <<"/a/b/c.d/e">>,
-        <<"/a/b/c.d/e.f">>
-    ],
+             <<".hidden">>,
+             <<"/path/.hidden">>,
+             <<"/path/a.b">>,
+             <<"/path/..hidden">>,
+             <<"..hidden">>,
+             <<"foo">>,
+             <<"foo.erl">>,
+             <<"/a/b/c.d/e">>,
+             <<"/a/b/c.d/e.f">>
+            ],
     lists:foreach(fun(C) ->
-        ?assertEqual(filename:rootname(C), rootname(C))
-    end, Cases),
+                          ?assertEqual(filename:rootname(C), rootname(C))
+                  end, Cases),
+
+    Win32Cases = [
+                  {<<"C:\\path\\.hidden">>, <<"C:\\path\\.hidden">>},
+                  {<<"C:\\path\\a.b">>, <<"C:\\path\\a">>},
+                  {<<"C:\\path\\..hidden">>, <<"C:\\path\\.">>},
+                  {<<"C:\\path.dir\\a">>, <<"C:\\path.dir\\a">>}
+                 ],
+    lists:foreach(
+      fun({C, Expected}) ->
+              %% Note: We don't use filename:rootname(C) as the expected value here
+              %% because on Windows, filename:rootname/1 replaces all $\\ with $/.
+              %% Our optimized version intentionally preserves the original separators
+              %% to avoid allocating a new binary.
+              ?assertEqual(Expected, rootname_win32(C, byte_size(C) - 1, -1))
+      end, Win32Cases),
     ok.
 
 -endif.

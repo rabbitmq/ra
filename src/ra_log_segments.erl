@@ -896,7 +896,7 @@ make_symlinks(Dir, To, From)
     ok.
 
 with_ext(Fn, Ext) when is_binary(Fn) andalso is_list(Ext) ->
-    <<(filename:rootname(Fn))/binary, (ra_lib:to_binary(Ext))/binary>>.
+    <<(ra_lib:rootname(Fn))/binary, (ra_lib:to_binary(Ext))/binary>>.
 
 compaction_groups([], Groups, _Conf) ->
     lists:reverse(Groups);
