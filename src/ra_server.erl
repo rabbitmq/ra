@@ -496,8 +496,8 @@ recover(#{cfg := #cfg{log_id = LogId,
     ?DEBUG("~ts: scanning for cluster changes ~b:~b ",
            [LogId, FromScan, ToScan]),
     %% if we're recovering after a partial sparse write phase this will fail
-    {{LastScannedIdx, State3}, Log1} = ra_log:fold(FromScan, ToScan,
-                                                   fun cluster_scan_fun/2,
+    {{LastScannedIdx, State3}, Log1} = ra_log:fold(fun cluster_scan_fun/2,
+                                                   FromScan, ToScan,
                                                    {CommitIndex, State2}, Log0,
                                                    return),
 
@@ -2417,10 +2417,10 @@ make_append_entries_rpc(PeerId, PrevIdx, PrevTerm, Num,
      State#{log => Log}}.
 
 log_read(From, To, [], Log0) ->
-    ra_log:fold(From, To, fun (E, A) -> [E | A] end, [], Log0);
+    ra_log:fold(fun (E, A) -> [E | A] end, From, To, [], Log0);
 log_read(From0, To, Cache, Log0) ->
     {From, Entries0} = log_fold_cache(From0, To, Cache, []),
-    ra_log:fold(From, To, fun (E, A) -> [E | A] end, Entries0, Log0).
+    ra_log:fold(fun (E, A) -> [E | A] end, From, To, Entries0, Log0).
 
 %% this cache is a bit so and so as it will only really work when each follower
 %% begins with the same from index
@@ -3233,7 +3233,7 @@ apply_to(ApplyTo, ApplyFun, Notifys0, Effects0,
     FoldState = {MacMod, LastApplied, State0, MacState0,
                  Effects0, Notifys0, undefined},
     {{_, AppliedTo, State, MacState, Effects, Notifys, LastTs},
-     Log} = ra_log:fold(From, To, ApplyFun, FoldState, Log0),
+     Log} = ra_log:fold(ApplyFun, From, To, FoldState, Log0),
     CommitLatency = case LastTs of
                         undefined ->
                             0;
@@ -3664,7 +3664,7 @@ log_unhandled_msg(RaState, Msg, #{cfg := #cfg{log_id = LogId}}) ->
 
 fold_log_from(From, Folder, {St, Log0}) ->
     {To, _} =  ra_log:last_index_term(Log0),
-    case ra_log:fold(From, To, Folder, St, Log0) of
+    case ra_log:fold(Folder, From, To, St, Log0) of
         {St1, Log} ->
             {ok, {St1, Log}}
     end.

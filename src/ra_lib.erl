@@ -53,7 +53,8 @@
          is_any_file/1,
          ensure_dir/1,
          consult/1,
-         cons/2
+         cons/2,
+         unwrap/1
         ]).
 
 -type file_err() :: file:posix() | badarg | terminated | system_limit.
@@ -74,6 +75,12 @@ ceiling(X) ->
 default(undefined, Def) ->
     Def;
 default(Value, _Def) ->
+    Value.
+
+-spec unwrap(undefined | term()) -> term().
+unwrap(undefined) ->
+    error(undefined);
+unwrap(Value) ->
     Value.
 
 -spec lazy_default(undefined | term(), fun (() -> term())) -> term().

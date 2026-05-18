@@ -76,6 +76,7 @@
          compacted_segrefs = [] :: [segment_ref()]}).
 
 -opaque state() :: #?STATE{}.
+-type compaction_result() :: #compaction_result{}.
 -type read_plan() :: [{BaseName :: file:filename_all(), [ra:index()]}].
 -type read_plan_options() :: #{access_pattern => random | sequential,
                                file_advise => ra_log_segment:posix_file_advise(),
@@ -83,6 +84,7 @@
 
 -export_type([
               state/0,
+              compaction_result/0,
               read_plan/0,
               read_plan_options/0,
               major_compaction_strategy/0

@@ -119,7 +119,7 @@ take(Start, Num, #state{last_index = LastIdx, entries = Log} = State) ->
     Entries = sparse_take(Start, Log, Num, LastIdx, []),
     {Entries, length(Entries), State}.
 
-fold(From, To, Fun, Acc0, #state{last_index = LastIdx,
+fold(Fun, From, To, Acc0, #state{last_index = LastIdx,
                                  entries = Log} = State) ->
     Entries = sparse_take(From, Log, To - From + 1, LastIdx, []),
     Acc = lists:foldl(Fun, Acc0, Entries),

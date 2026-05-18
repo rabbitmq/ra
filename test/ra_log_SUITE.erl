@@ -340,7 +340,7 @@ append_in(Term, Data, Log0) ->
     ra_log:append_sync(Entry, Log0).
 
 ra_log_take(From, To, Log0) ->
-    {Acc, Log} = ra_log:fold(From, To, fun (E, Acc) -> [E | Acc] end, [], Log0),
+    {Acc, Log} = ra_log:fold(fun (E, Acc) -> [E | Acc] end, From, To, [], Log0),
     {lists:reverse(Acc), Log}.
 
 flush() ->
