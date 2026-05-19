@@ -85,8 +85,8 @@
 -type chunk_flag() :: init | pre | next | last.
 
 -type consistent_query_ref() ::
-    {query, From :: from(), Query :: ra:query_fun(), CommitIndex :: ra_index()} |
-    {aux, From :: from(), AuxCmd :: term(), CommitIndex :: ra_index()}.
+    {query, From :: gen_statem:from(), Query :: ra:query_fun(), CommitIndex :: ra_index()} |
+    {aux, From :: gen_statem:from(), AuxCmd :: term(), CommitIndex :: ra_index()}.
 
 -type safe_call_ret(T) :: timeout | {error, noproc | nodedown | shutdown} | T.
 

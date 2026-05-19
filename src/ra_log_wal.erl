@@ -409,7 +409,7 @@ recover_wal(Dir, #conf{system = System,
                    ok = ra_log_segment_writer:await(SegWriter),
                    post_boot
            end,
-    {ok, Files0} = file:list_dir(Dir),
+    {ok, Files0} = prim_file:list_dir(Dir),
     Files = [begin
                  ra_lib:zpad_upgrade(Dir, File, ".wal")
              end || File <- Files0,

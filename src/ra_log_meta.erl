@@ -31,7 +31,7 @@
 -define(TIMEOUT, 30000).
 -define(SYNC_INTERVAL, 5000).
 
--record(?MODULE, {ref :: reference(),
+-record(?MODULE, {ref :: dets:tab_name(),
                   table_name :: atom()}).
 
 -opaque state() :: #?MODULE{}.
@@ -135,7 +135,9 @@ delete_sync(Name, UId) ->
 
 %% READER API
 
--spec fetch(atom(), ra_uid(), key()) -> value() | undefined.
+-spec fetch(atom(), ra_uid(), current_term) -> option(ra:index());
+           (atom(), ra_uid(), voted_for) -> option(ra:server_id());
+           (atom(), ra_uid(), last_applied) -> option(ra:index()).
 fetch(MetaName, Id, current_term) ->
     maybe_fetch(MetaName, Id, 2);
 fetch(MetaName, Id, voted_for) ->
@@ -143,7 +145,10 @@ fetch(MetaName, Id, voted_for) ->
 fetch(MetaName, Id, last_applied) ->
     maybe_fetch(MetaName, Id, 4).
 
--spec fetch(atom(), ra_uid(), key(), term()) -> value().
+% -spec fetch(atom(), ra_uid(), key(), term()) -> value().
+-spec fetch(atom(), ra_uid(), current_term, T) -> T | ra:index();
+           (atom(), ra_uid(), voted_for, T) -> T | ra:server_id();
+           (atom(), ra_uid(), last_applied, T) -> T | ra:index().
 fetch(MetaName, Id, Key, Default) ->
     case fetch(MetaName, Id, Key) of
         undefined -> Default;

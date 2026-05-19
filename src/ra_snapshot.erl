@@ -1013,7 +1013,7 @@ take_extra_checkpoints(#?MODULE{checkpoints = Checkpoints0,
 %% Data             (binary - term_to_binary of indexes)
 %% @end
 -spec write_indexes(file:filename_all(), ra_seq:state()) ->
-    ok | {error, file:posix()}.
+    ok | {error, ra_lib:file_err()}.
 write_indexes(Dir, Indexes) ->
     File = filename:join(Dir, <<"indexes">>),
     Data = term_to_binary(Indexes),

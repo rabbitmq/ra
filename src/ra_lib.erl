@@ -273,7 +273,7 @@ zpad_upgrade(Dir, File, Ext) ->
             F = "00000000" ++ B ++ Ext,
             New = filename:join(Dir, F),
             Old = filename:join(Dir, File),
-            ok = file:rename(Old, New),
+            ok = prim_file:rename(Old, New),
             F;
         16 ->
             File
@@ -403,13 +403,13 @@ derive_safe_string(S, Num) ->
          end,
      string:slice(F(string:next_grapheme(S), []), 0, Num).
 
--spec partition_parallel(fun((any()) -> boolean()), [any()]) ->
-    {ok, [any()], [any()]} | {error, any()}.
+-spec partition_parallel(fun((T) -> boolean()), [T]) ->
+    {ok, [T], [T]} | {error, term()}.
 partition_parallel(F, Es) ->
     partition_parallel(F, Es, 60000).
 
--spec partition_parallel(fun((any()) -> boolean()), [any()], timeout()) ->
-    {ok, [any()], [any()]} | {error, any()}.
+-spec partition_parallel(fun((T) -> boolean()), [T], timeout()) ->
+    {ok, [T], [T]} | {error, term()}.
 partition_parallel(F, Es, Timeout) ->
     Parent = self(),
     Running = [{spawn_monitor(fun() ->
@@ -417,8 +417,10 @@ partition_parallel(F, Es, Timeout) ->
                               end), E}
                || E <- Es],
     case collect(Running, {[], []}, Timeout) of
-        {error, _} = E -> E;
-        {Successes, Failures} -> {ok, Successes, Failures}
+        {error, _} = E ->
+            E;
+        {Successes, Failures} ->
+            {ok, Successes, Failures}
     end.
 
 collect([], Acc, _Timeout) ->

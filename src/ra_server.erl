@@ -1941,7 +1941,7 @@ handle_await_condition(Msg, #{condition := #{predicate_fun := Pred} = Cond} = St
     end.
 
 -spec process_new_leader_queries(ra_server_state()) ->
-    {ra_server_state(), [from()]}.
+    {ra_server_state(), [gen_statem:from()]}.
 process_new_leader_queries(#{pending_consistent_queries := Pending,
                              queries_waiting_heartbeats := Waiting} = State0) ->
     From0 = [From || {_, From, _, _} <- Pending],
