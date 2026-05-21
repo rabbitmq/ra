@@ -11,7 +11,8 @@ ESCRIPT_EMU_ARGS = -noinput -setcookie ra_fifo_cli
 dep_gen_batch_server = hex 0.10.0
 dep_aten = hex 0.6.0
 dep_seshat = hex 1.0.1
-DEPS = aten gen_batch_server seshat
+dep_shu = git https://github.com/rabbitmq/shu main
+DEPS = aten gen_batch_server seshat shu
 
 TEST_DEPS = proper meck inet_tcp_proxy
 
@@ -24,7 +25,7 @@ dep_eunit_formatters = git https://github.com/seancribbs/eunit_formatters main
 
 DEP_PLUGINS = elvis_mk
 
-PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten mnesia ssh ssl meck gen_batch_server inet_tcp_proxy
+PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten mnesia ssh ssl meck gen_batch_server inet_tcp_proxy shu
 
 EDOC_OUTPUT = docs
 EDOC_OPTS = {pretty_printer, erl_pp}, {sort_functions, false}

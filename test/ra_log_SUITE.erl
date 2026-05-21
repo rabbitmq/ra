@@ -72,7 +72,8 @@ end_per_group(_, Config) ->
 init_per_testcase(TestCase, Config) ->
     Fun = ?config(init_fun, Config),
     Log = Fun(TestCase),
-    [{ra_log, Log} | Config].
+    UId = atom_to_binary(TestCase, utf8),
+    [{ra_log, Log}, {uid, UId} | Config].
 
 fetch_when_empty(Config) ->
     Log0 = ?config(ra_log, Config),

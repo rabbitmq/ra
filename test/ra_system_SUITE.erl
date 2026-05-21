@@ -223,7 +223,7 @@ start_peer(PrivDir) ->
     Dir0 = filename:join(PrivDir, Name),
     Dir = "'" ++ Dir0 ++ "'",
     Pa = [filename:dirname(code:which(App))
-          || App <- [aten, gen_batch_server, seshat, ra]],
+          || App <- [aten, gen_batch_server, seshat, shu, ra]],
     Args = ["-pa"] ++ Pa ++ ["-ra", "data_dir", Dir],
     ct:pal("starting child node ~ts for node ~ts~n", [Name, Args]),
     {ok, P, S} = ?CT_PEER(#{name => Name, args => Args}),
