@@ -6,6 +6,7 @@
 
 -compile(nowarn_export_all).
 -compile(export_all).
+-dialyzer({nowarn_function, [follower_handles_append_entries_rpc/1, leader_consistent_query_delay/1, leader_consistent_query/1]}).
 
 -include("src/ra.hrl").
 -include("src/ra_server.hrl").

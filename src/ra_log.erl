@@ -132,7 +132,8 @@
                     plan :: ra_log_segments:read_plan()}).
 
 -opaque read_plan() :: #read_plan{}.
--opaque state() :: #?MODULE{}.
+%-opaque state() :: #?MODULE{}.
+-type state() :: #?MODULE{}.
 
 -type ra_log_init_args() :: #{uid := ra_uid(),
                               system_config => ra_system:config(),

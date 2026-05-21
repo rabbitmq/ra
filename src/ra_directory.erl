@@ -186,7 +186,7 @@ overview(System) when is_atom(System) ->
     #{directory := Tbl,
       directory_rev := _TblRev} = get_names(System),
 
-    Rows = [{K, {S, V}} || {K, S, V} <:- ets:tab2list(ra_state)],
+    Rows = [{K, {S, V}} || {K, S, V} <- ets:tab2list(ra_state)],
     States = maps:from_list(Rows),
     Snaps = lists:foldl(
               fun (T, Acc) ->

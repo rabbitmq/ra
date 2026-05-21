@@ -54,7 +54,8 @@
                 snapshot :: option(ra_idxterm()), 
                 snapshot_data :: option(tuple())}).
 
--opaque ra_log_memory_state() :: #state{} | ra_log:state().
+%-opaque ra_log_memory_state() :: #state{} | ra_log:state().
+-type ra_log_memory_state() :: #state{} | ra_log:state().
 
 -export_type([ra_log_memory_state/0]).
 
@@ -316,6 +317,12 @@ delete_everything(_Log) -> ok.
 release_resources(_, _, State) ->
     State.
 
-to_list(#state{entries = Log}) ->
+-spec to_list(any()) -> list().
+to_list(LogState) ->
+    State = case LogState of
+                #state{} -> LogState;
+                _ -> LogState % dialyzer trick
+            end,
+    #state{entries = Log} = State,
     [{Idx, Term, Data} || {Idx, {Term, Data}} <- maps:to_list(Log)].
 
