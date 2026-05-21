@@ -1,5 +1,4 @@
--module(eqwalizer_specs).
--compile(warn_missing_spec).
+-module(eqwalizer_specs). -compile(warn_missing_spec).
 % elp:ignore W0054 (no_nowarn_suppressions)
 -compile([export_all, nowarn_export_all]).
 
@@ -24,9 +23,19 @@
 'lists:nth'(_, _) -> error(eqwalizer_specs).
 
  % elp:ignore W0048 (no_dialyzer_attribute)
+ -dialyzer({nowarn_function, 'lists:unzip'/1}).
+ -spec 'lists:unzip'([{A, B}]) -> {[A], [B]}.
+'lists:unzip'(_) -> error(eqwalizer_specs).
+
+ % elp:ignore W0048 (no_dialyzer_attribute)
  -dialyzer({nowarn_function, 'lists:max'/1}).
  -spec 'lists:max'([T]) -> T.
 'lists:max'(_) -> error(eqwalizer_specs).
+
+ % elp:ignore W0048 (no_dialyzer_attribute)
+ -dialyzer({nowarn_function, 'lists:append'/1}).
+ -spec 'lists:append'([T | [T]]) -> [T].
+'lists:append'(_) -> error(eqwalizer_specs).
 
  % elp:ignore W0048 (no_dialyzer_attribute)
  -dialyzer({nowarn_function, 'lists:last'/1}).
@@ -190,6 +199,11 @@
 -spec 'ets:select'(ets:table(), ets:match_spec()) -> [dynamic()].
 'ets:select'(_, _) -> error(eqwalizer_specs).
 
+ % elp:ignore W0048 (no_dialyzer_attribute)
+ -dialyzer({nowarn_function, 'dets:select'/2}).
+-spec 'dets:select'(dets:tab_name(), ets:match_spec()) -> [dynamic()].
+'dets:select'(_, _) -> error(eqwalizer_specs).
+
 %% -------- gen__batch_server --------
 
 % elp:ignore W0048 (no_dialyzer_attribute)
@@ -212,3 +226,8 @@
 -dialyzer({nowarn_function, 'gen_server:call'/3}).
 -spec 'gen_server:call'(gen_server:server_ref(), term(), timeout()) -> dynamic().
 'gen_server:call'(_, _, _) -> error(eqwalizer_specs).
+
+% elp:ignore W0048 (no_dialyzer_attribute)
+-dialyzer({nowarn_function, 'persistent_term:get'/2}).
+-spec 'persistent_term:get'(dynamic(), dynamic()) -> dynamic().
+'persistent_term:get'(_, _) -> error(eqwalizer_specs).

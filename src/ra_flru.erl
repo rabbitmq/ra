@@ -22,12 +22,12 @@
 
 -define(MAX_SIZE, 5).
 
--type kv_item() :: {Key :: term(), Value :: term()}.
+-type kv_item() :: {Key :: dynamic(), Value :: dynamic()}.
 
 -type handler_fun() :: fun((kv_item()) -> ok).
 
 -record(?MODULE, {max_size = ?MAX_SIZE :: non_neg_integer(),
-                  items = [] :: [term()],
+                  items = [] :: [dynamic()],
                   handler = fun (_) -> ok end :: handler_fun()}).
 
 -opaque state() :: #?MODULE{}.
@@ -43,7 +43,7 @@ new(MaxSize, Handler) ->
              max_size = MaxSize}.
 
 -spec fetch(term(), state()) ->
-    {ok, term(), state()} | error.
+    {ok, dynamic(), state()} | error.
 fetch(Key, #?MODULE{items = [{Key, Value} | _]} = State) ->
     %% head optimisation
     {ok, Value, State};
@@ -55,7 +55,7 @@ fetch(Key, #?MODULE{items = Items0} = State0) ->
             error
     end.
 
--spec insert(term(), term(), state()) -> state().
+-spec insert(dynamic(), dynamic(), state()) -> state().
 insert(Key, Value, #?MODULE{items = Items,
                             max_size = M,
                             handler = Handler} = State)
@@ -69,7 +69,7 @@ insert(Key, Value, #?MODULE{items = Items} = State) ->
     %% else just append it
     State#?MODULE{items = [{Key, Value} | Items]}.
 
--spec evict(Key :: term(), state()) ->
+-spec evict(Key :: dynamic(), state()) ->
     {Evicted :: kv_item(), state()} | error.
 evict(Key, #?MODULE{items = Items0,
                     handler = Handler} = State) ->

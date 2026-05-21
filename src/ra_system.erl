@@ -179,11 +179,12 @@ store(#{name := Name} = Config) ->
 
 -spec fetch(atom()) -> config() | undefined.
 fetch(Name) when is_atom(Name) ->
+    % eqwalizer: ignore
     persistent_term:get({'$ra_system', Name}, undefined).
 
 -spec fetch(atom(), Node :: atom()) -> config() | undefined | {badrpc, term()}.
 fetch(Name, Node) when is_atom(Name) andalso is_atom(Node) ->
-    rpc:call(Node, persistent_term, get, [{'$ra_system', Name}, undefined]).
+    erpc:call(Node, persistent_term, get, [{'$ra_system', Name}, undefined]).
 
 -spec lookup_name(atom(), atom()) ->
     {ok, atom()} | {error, system_not_started}.

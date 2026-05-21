@@ -54,7 +54,7 @@
 -record(cfg, {uid :: ra_uid(),
               log_id = "" :: unicode:chardata(),
               counter :: undefined | counters:counters_ref(),
-              directory :: file:filename(),
+              directory :: file:filename_all(),
               access_pattern = random :: access_pattern(),
               compaction_conf :: compaction_conf()
              }).
@@ -428,7 +428,7 @@ read_plan(#?STATE{cfg = Cfg,
                      #{ra_index() => Command :: term()}) ->
     {#{ra_index() => Command :: term()}, ra_flru:state()}.
 exec_read_plan(Dir, Plan, undefined, TransformFun, Options, Acc0) ->
-    Open = ra_flru:new(1, fun({_, Seg}) -> ra_log_segment:close(Seg) end),
+    Open = ra_flru:new(1, fun({_, Seg}) -> _ = ra_log_segment:close(Seg), ok end),
     exec_read_plan(Dir, Plan, Open, TransformFun, Options, Acc0);
 exec_read_plan(Dir, Plan, Open0, TransformFun, Options, Acc0)
   when is_list(Plan) ->
@@ -822,7 +822,7 @@ major_compaction(#{dir := Dir} = CompConf, SegRefs, LiveIndexes) ->
          %% ignore the result as not supported on windows
          _ = ra_lib:sync_dir(Dir),
          %% return the new segref and additional segment keys
-         {ra_log_segment:segref(FirstSegmentFn),
+         {ra_lib:unwrap(ra_log_segment:segref(FirstSegmentFn)),
           [A || {_, _, {A, _}} <- Additional]}
      end || [{_Info, _, {CompGroupLeaderFn, _}} | Additional] = All
             <- CompactionGroups],
@@ -1003,7 +1003,10 @@ recover_compaction(Dir) ->
                             %% - handles none/some/all symlinks already created)
                             ok = make_symlinks(Dir, Target, LinkTargets),
                             ok = prim_file:delete(CompactionGroupFn),
-                            Compacted = [ra_log_segment:segref(Target)],
+                            Compacted = case ra_log_segment:segref(Target) of
+                                            undefined -> [];
+                                            SR -> [SR]
+                                        end,
                             #compaction_result{type = major,
                                                compacted_segrefs = Compacted,
                                                linked = LinkTargets}

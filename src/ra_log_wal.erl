@@ -735,6 +735,7 @@ prepare_file(File, Modes) ->
     end.
 
 make_tmp(File) when is_list(File) ->
+    % eqwalizer:ignore
     Tmp = filename:rootname(File) ++ ".tmp",
     ok = ra_lib:write_file(Tmp, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>),
     Tmp.

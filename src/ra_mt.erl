@@ -326,8 +326,6 @@ delete({indexes, _Tid, []}) ->
     0;
 delete({indexes, Tid, Seq}) ->
     NumToDelete = ra_seq:length(Seq),
-    % Start = ra_seq:first(Seq),
-    % End = ra_seq:last(Seq),
     {Start, End} = ra_seq:range(Seq),
     Limit = ets:info(Tid, size) div 2,
     %% check if there is an entry below the start of the deletion range,

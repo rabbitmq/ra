@@ -78,7 +78,7 @@
       cluster_index_term := ra_idxterm(),
       previous_cluster => {ra_index(), ra_term(), ra_cluster()},
       current_term := ra_term(),
-      log := term(),
+      log := ra_log:state(),
       voted_for => option(ra_server_id()), % persistent
       votes => non_neg_integer(),
       membership => ra_membership(),
@@ -142,6 +142,7 @@
                     CurrentMachineVersion :: ra_machine:version()}.
 
 -type ra_msg() :: #append_entries_rpc{} |
+                  #append_entries_reply{} |
                   {ra_server_id(), #append_entries_reply{}} |
                   {ra_server_id(), #install_snapshot_result{}} |
                   #request_vote_rpc{} |
@@ -153,20 +154,26 @@
                   await_condition_timeout |
                   {command, command()} |
                   {commands, [command()]} |
+                  {aux_command, term(), term()} |
                   ra_log:event() |
-                  {consistent_query, from(), ra:query_fun()} |
-                  {consistent_aux, from(), AuxCmd :: term()} |
+                  {consistent_query, gen_statem:from(), ra:query_fun()} |
+                  {consistent_aux, gen_statem:from(), AuxCmd :: term()} |
                   #heartbeat_rpc{} |
                   #info_rpc{} |
                   #info_reply{} |
                   {ra_server_id, #heartbeat_reply{}} |
                   pipeline_rpcs |
-                  {snapshot_retry_timeout, ra_server_id()}.
+                  {snapshot_retry_timeout, ra_server_id()} |
+                  {transfer_leadership, ra_server_id()} |
+                  force_member_change |
+                  try_become_leader.
 
 -type ra_reply_body() :: #append_entries_reply{} |
                          #request_vote_result{} |
                          #install_snapshot_result{} |
-                         #pre_vote_result{}.
+                         #pre_vote_result{} |
+                         term() |
+                         {error, term()}.
 
 -type effect() ::
     ra_machine:effect() |
@@ -185,10 +192,11 @@
      #heartbeat_rpc{} |
      #info_rpc{}} |
     {send_snapshot, To :: ra_server_id(),
-     {Module :: module(), Ref :: term(),
+     {SnapState :: ra_snapshot:state(),
       LeaderId :: ra_server_id(), Term :: ra_term()}} |
     {next_event, ra_msg()} |
-    {next_event, cast, ra_msg()} |
+    {next_event, dynamic()} |
+    {next_event, info | cast, ra_msg()} |
     {notify, #{pid() => [term()]}} |
     %% used for tracking valid leader messages
     {record_leader_msg, ra_server_id()} |
@@ -317,10 +325,11 @@
               machine_upgrade_strategy/0
              ]).
 
--spec name(ClusterName :: ra_cluster_name(), UniqueSuffix::string()) -> atom().
-name(ClusterName, UniqueSuffix) ->
+-spec name(ClusterName :: string(), UniqueSuffix::string()) -> atom().
+name(ClusterName, UniqueSuffix) when is_list(ClusterName) ->
+    Name = "ra_" ++ ClusterName ++ "_server_" ++ UniqueSuffix,
     % elp:ignore W0023 (atoms_exhaustion)
-    list_to_atom("ra_" ++ ClusterName ++ "_server_" ++ UniqueSuffix).
+    list_to_atom(Name).
 
 -spec init(ra_server_config()) -> ra_server_state().
 init(#{id := Id,
@@ -1596,7 +1605,7 @@ handle_follower(#request_vote_result{}, State) ->
 handle_follower(#pre_vote_result{}, State) ->
     %% handle to avoid logging as unhandled
     {follower, State, []};
-handle_follower(#append_entries_reply{}, State) ->
+handle_follower({_, #append_entries_reply{}}, State) ->
     %% handle to avoid logging as unhandled
     %% could receive a lot of these shortly after standing down as leader
     {follower, State, []};
@@ -1614,7 +1623,7 @@ handle_follower(force_member_change,
                 #{cfg := #cfg{id = Id,
                               uid = Uid,
                               log_id = LogId}} = State0) ->
-    Cluster = #{Id => new_peer_with(#{voter_status => #{uid => Uid, 
+    Cluster = #{Id => new_peer_with(#{voter_status => #{uid => Uid,
                                                         membership => voter}})},
     ?WARN("~ts: Forcing cluster change. New cluster ~tw",
           [LogId, Cluster]),
@@ -2602,7 +2611,7 @@ peer_snapshot_process_exited_with_backoff(SnapshotPid, #{cluster := Peers} = Sta
     end.
 
 -spec handle_down(ra_state(),
-                  machine | snapshot_sender | snapshot_writer | aux,
+                  ra_monitors:component() | snapshot_writer | log,
                   pid(), term(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_down(leader, machine, Pid, Info, State)
@@ -3944,7 +3953,7 @@ get_membership(#{cfg := #cfg{id = Id, uid = UId}, cluster := Cluster} = State) -
     Default = maps:get(membership, State, voter),
     get_membership(Cluster, Id, UId, Default).
 
--spec maybe_promote_peer(ra_server_id(), ra_server_state(), effects()) -> 
+-spec maybe_promote_peer(ra_server_id(), ra_server_state(), effects()) ->
     effects().
 maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
     case Cluster of

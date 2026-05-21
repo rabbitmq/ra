@@ -648,7 +648,7 @@ trigger_election(ServerId, Timeout) ->
 %% @end
 -spec leave_and_terminate(atom(),
                           ra_server_id() | [ra_server_id()], ra_server_id()) ->
-    ok | timeout | {error, noproc | system_not_started}.
+    ok | timeout | {error, noproc | system_not_started | nodedown}.
 leave_and_terminate(System, ServerRef, ServerId) ->
     leave_and_terminate(System, ServerRef, ServerId, ?DEFAULT_TIMEOUT).
 
@@ -661,7 +661,7 @@ leave_and_terminate(System, ServerRef, ServerId) ->
 -spec leave_and_terminate(atom(),
                           ra_server_id() | [ra_server_id()],
                           ra_server_id(), timeout()) ->
-    ok | timeout | {error, noproc | system_not_started}.
+    ok | timeout | {error, nodedown | noproc | system_not_started}.
 leave_and_terminate(System, ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
@@ -700,7 +700,7 @@ leave_and_delete_server(System, ServerRef, ServerId) ->
 %% @end
 -spec leave_and_delete_server(atom(), ra_server_id() | [ra_server_id()],
                               ra_server_id(), timeout()) ->
-    ok | timeout | {error, noproc}.
+    ok | timeout | {error, noproc | nodedown}.
 leave_and_delete_server(System, ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
