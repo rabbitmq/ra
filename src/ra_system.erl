@@ -184,7 +184,12 @@ fetch(Name) when is_atom(Name) ->
 
 -spec fetch(atom(), Node :: atom()) -> config() | undefined | {badrpc, term()}.
 fetch(Name, Node) when is_atom(Name) andalso is_atom(Node) ->
-    erpc:call(Node, persistent_term, get, [{'$ra_system', Name}, undefined]).
+    try
+        erpc:call(Node, persistent_term, get, [{'$ra_system', Name}, undefined])
+    catch
+        _:Reason ->
+            {badrpc, Reason}
+    end.
 
 -spec lookup_name(atom(), atom()) ->
     {ok, atom()} | {error, system_not_started}.
