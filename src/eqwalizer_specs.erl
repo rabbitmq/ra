@@ -64,7 +64,7 @@
 
 % elp:ignore W0048 (no_dialyzer_attribute)
 -dialyzer({nowarn_function, 'lists:splitwith'/2}).
--spec 'lists:splitwith'(fun((T) -> boolean()), [T]) -> [T].
+-spec 'lists:splitwith'(fun((T) -> boolean()), [T]) -> {[T], [T]}.
 'lists:splitwith'(_, _) -> error(eqwalizer_specs).
 
 % elp:ignore W0048 (no_dialyzer_attribute)
