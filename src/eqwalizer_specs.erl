@@ -34,7 +34,7 @@
 
  % elp:ignore W0048 (no_dialyzer_attribute)
  -dialyzer({nowarn_function, 'lists:append'/1}).
- -spec 'lists:append'([T | [T]]) -> [T].
+ -spec 'lists:append'([[T]]) -> [T].
 'lists:append'(_) -> error(eqwalizer_specs).
 
  % elp:ignore W0048 (no_dialyzer_attribute)
