@@ -99,7 +99,7 @@
 
 % elp:ignore W0048 (no_dialyzer_attribute)
 -dialyzer({nowarn_function, 'erlang:system_time'/0}).
--spec 'erlang:system_time'() -> pos_integer().
+-spec 'erlang:system_time'() -> integer().
 'erlang:system_time'() -> error(eqwalizer_specs).
 
 % elp:ignore W0048 (no_dialyzer_attribute)
