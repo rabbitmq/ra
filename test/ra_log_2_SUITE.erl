@@ -951,10 +951,9 @@ fold_after_sparse_mem_table(Config) ->
     {ok, Log3} = ra_log:write_sparse({7, 1, hi}, undefined, Log2b),
     {ok, Log4} = ra_log:write_sparse({17, 1, hi}, 7, Log3),
     Log = deliver_all_log_events(Log4, 500),
-    {Res, _Log} = ra_log:fold(1, 17,
-                              fun ({I, _, _}, Is) ->
+    {Res, _Log} = ra_log:fold(fun ({I, _, _}, Is) ->
                                       [I | Is]
-                              end, [], Log, return),
+                              end, 1, 17, [], Log, return),
     ct:pal("Res ~p", [Res]),
     ?assertMatch([5,4,3,2,1], Res),
     ok.
@@ -975,7 +974,7 @@ fold_after_sparse_segments(Config) ->
     {ok, Log4} = ra_log:write_sparse({17, 1, hi}, 7, Log3),
     ok = ra_log_wal:force_roll_over(ra_log_wal),
     Log = deliver_all_log_events(Log4, 500),
-    ra_log:fold(1, 17, fun (_, _) -> ok end, undefined, Log, return),
+    ra_log:fold(fun (_, _) -> ok end, 1, 17, undefined, Log, return),
     ok.
 
 write_sparse_re_init(Config) ->
@@ -2623,7 +2622,7 @@ dual_flush_does_not_delete_needed_segments(Config) ->
 
 %% INTERNAL
 validate_fold(From, To, Term, Log0) ->
-    {Entries0, Log} = ra_log:fold(From, To, fun ra_lib:cons/2, [], Log0),
+    {Entries0, Log} = ra_log:fold(fun ra_lib:cons/2, From, To, [], Log0),
     ?assertEqual(To - From + 1, length(Entries0)),
     % validate entries are correctly read
     Expected = [{I, Term, <<I:64/integer>>} ||
@@ -2917,7 +2916,7 @@ ra_log_init(Config, Cfg0) ->
     ra_log:init(Cfg#{system_config => ra_system:default_config()}).
 
 ra_log_take(From, To, Log0) ->
-    {Acc, Log} = ra_log:fold(From, To, fun (E, Acc) -> [E | Acc] end, [], Log0),
+    {Acc, Log} = ra_log:fold(fun (E, Acc) -> [E | Acc] end, From, To, [], Log0),
     {lists:reverse(Acc), Log}.
 
 restart_wal() ->

@@ -149,7 +149,7 @@
 -export_type([wal_conf/0]).
 
 -type wal_command() ::
-    {append, writer_id(), PrevIndex :: ra:index() | -1,
+    {append, writer_id(), ets:tid(), PrevIndex :: ra:index() | -1,
      Index :: ra:index(), Term :: ra_term(), wal_cmd()}.
 
 -type wal_op() :: {cast, wal_command()} |
@@ -281,6 +281,7 @@ start_link(#{dir := _,
                {max_batch_size, WalMaxBatchSize}
                | Opts0],
 
+    % eqwalizer:ignore
     gen_batch_server:start_link({local, Name}, ?MODULE, Config, Options).
 
 %%% Callbacks
@@ -323,11 +324,12 @@ init(#{system := System,
                  recovery_chunk_size = RecoveryChunkSize,
                  sync_method = SyncMethod,
                  counter = CRef,
-                 mem_tables_tid = ets:whereis(MemTablesName),
+                 mem_tables_tid = ra_lib:unwrap(ets:whereis(MemTablesName)),
                  names = Names,
                  explicit_gc = Gc,
                  pre_allocate = PreAllocate,
-                 ra_log_snapshot_state_tid = ets:whereis(ra_log_snapshot_state)},
+                 ra_log_snapshot_state_tid = ra_lib:unwrap(
+                                               ets:whereis(ra_log_snapshot_state))},
     try recover_wal(Dir, Conf) of
         Result ->
             % wait for the segment writer to process any flush requests
@@ -407,7 +409,7 @@ recover_wal(Dir, #conf{system = System,
                    ok = ra_log_segment_writer:await(SegWriter),
                    post_boot
            end,
-    {ok, Files0} = file:list_dir(Dir),
+    {ok, Files0} = prim_file:list_dir(Dir),
     Files = [begin
                  ra_lib:zpad_upgrade(Dir, File, ".wal")
              end || File <- Files0,
@@ -732,12 +734,10 @@ prepare_file(File, Modes) ->
             Err
     end.
 
-make_tmp(File) ->
+make_tmp(File) when is_list(File) ->
+    % eqwalizer:ignore
     Tmp = filename:rootname(File) ++ ".tmp",
-    {ok, Fd} = file:open(Tmp, [write, binary, raw]),
-    ok = file:write(Fd, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>),
-    ok = ra_file:sync(Fd),
-    ok = file:close(Fd),
+    ok = ra_lib:write_file(Tmp, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>),
     Tmp.
 
 maybe_pre_allocate(#conf{system = System,

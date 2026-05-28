@@ -1390,7 +1390,7 @@ start_peer(N, PrivDir) ->
 
 start_peer(N, PrivDir, SysCfg) ->
     Dir0 = filename:join(PrivDir, N),
-    Dir = "'" ++ Dir0 ++ "'",
+    Dir = "\"" ++ Dir0 ++ "\"",
     %Host = get_current_host(),
     Pa = [filename:dirname(code:which(App))
           || App <- [aten, gen_batch_server, seshat, ra]],

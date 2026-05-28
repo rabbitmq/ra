@@ -1623,7 +1623,7 @@ start_remote_cluster(Num, PrivDir, ClusterName, Machine) ->
     Nodes.
 
 start_peer(Name, PrivDir) ->
-    Dir = "'" ++ filename:join(PrivDir, Name) ++ "'",
+    Dir = "\"" ++ filename:join(PrivDir, Name) ++ "\"",
     Pa = [filename:dirname(code:which(App))
           || App <- [aten, gen_batch_server, seshat, ra]],
     ct:pal("starting peer node ~ts for node ~ts with -pa ~ts and data_dir ~ts",

@@ -9,15 +9,19 @@
 -export([
          data_dir/0,
          server_data_dir/2,
-         configure_logger/1
+         configure_logger/1,
+         logger_mod/0,
+         log/1
          ]).
 
 -export_type([
               ]).
 
+-spec data_dir() -> file:filename_all().
 data_dir() ->
     DataDir = case application:get_env(ra, data_dir) of
-                  {ok, Dir} ->
+                  {ok, Dir} when is_list(Dir) orelse
+                                 is_binary(Dir) ->
                       Dir;
                   undefined ->
                       {ok, Cwd} = file:get_cwd(),
@@ -32,5 +36,17 @@ server_data_dir(System, UId) when is_atom(System) ->
     filename:join(Dir, Me).
 
 %% use this when interacting with Ra from a node without Ra running on it
-configure_logger(Module) ->
+configure_logger(Module) when is_atom(Module) ->
     persistent_term:put('$ra_logger', Module).
+
+-spec logger_mod() -> module().
+logger_mod() ->
+    case persistent_term:get('$ra_logger', undefined) of
+        M when is_atom(M) ->
+            M;
+        undefined ->
+            ?MODULE
+    end.
+
+%% dummy log function
+log(_) -> ok.

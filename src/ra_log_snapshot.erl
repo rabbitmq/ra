@@ -118,6 +118,7 @@ complete_accept(Chunk, St0) ->
     ok = file:pwrite(Fd, 5, <<CrcToWrite:32/integer>>),
     ok = ra_file:sync(Fd),
     ok = file:close(Fd),
+    % elp:ignore W0060 (bound_var_in_lhs)
     CalculatedCrc = CrcToWrite,
     {ok, Bytes}.
 

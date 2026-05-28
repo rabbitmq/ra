@@ -26,6 +26,7 @@
          partial_read/3,
          execute_read_plan/4,
          read_plan_info/1,
+         check_read_plan_type/1,
          previous_wal_index/1,
          last_index_term/1,
          set_last_index/2,
@@ -71,30 +72,31 @@
 -type ra_meta_key() :: atom().
 -type segment_ref() :: {File :: binary(), ra_range:range()}.
 -type event_body() :: {written, ra_term(), ra_seq:state()} |
-                      {segments, [{ets:tid(), ra:range()}], [segment_ref()]} |
+                      {segments, [{ets:tid(), ra_seq:state()}], [segment_ref()]} |
                       {resend_write, ra_index()} |
                       {snapshot_written, ra_idxterm(),
                        LiveIndexes :: ra_seq:state(),
                        ra_snapshot:kind(),
                        SnapshotSize :: non_neg_integer() | undefined,
                        Duration :: non_neg_integer()} |
-                      {compaction_result, term()} |
+                      {compaction_result, ra_log_segments:compaction_result()} |
                       major_compaction |
                       {down, pid(), term()}.
 
 -type event() :: {ra_log_event, event_body()}.
--type transform_fun() :: fun ((ra_index(), ra_term(), ra_server:command()) -> term()).
+-type transform_fun() :: fun ((ra:index(), ra_term(), ra_server:command()) -> term()).
 
 -type effect() ::
     {delete_snapshot, Dir :: file:filename_all(), ra_idxterm()} |
-    {monitor, process, log, pid()} |
-    ra_snapshot:effect() |
-    ra_server:effect().
+    {monitor, process, log | snapshot_writer, pid()}.
+
 %% logs can have effects too so that they can be coordinated with other state
 %% such as avoiding to delete old snapshots whilst they are still being
 %% replicated
 
--type effects() :: [effect()].
+-type effects() :: [effect() |
+                    ra_snapshot:effect() |
+                    ra_server:effect()].
 
 -record(cfg, {uid :: ra_uid(),
               log_id :: unicode:chardata(),
@@ -117,7 +119,7 @@
          snapshot_state :: ra_snapshot:state(),
          current_snapshot :: option(ra_idxterm()),
          last_resend_time :: option({integer(), WalPid :: pid() | undefined}),
-         last_wal_write :: {pid(), Ms :: integer(), ra:index() | -1},
+         last_wal_write :: {option(pid()), Ms :: milliseconds(), ra:index() | -1},
          reader :: ra_log_segments:state(),
          mem_table :: ra_mt:state(),
          tx = false :: false | {true, ra:range()},
@@ -126,11 +128,12 @@
         }).
 
 -record(read_plan, {dir :: file:filename_all(),
-                    read :: #{ra_index() := log_entry()},
+                    read :: #{ra_index() => log_entry()},
                     plan :: ra_log_segments:read_plan()}).
 
 -opaque read_plan() :: #read_plan{}.
--opaque state() :: #?MODULE{}.
+%-opaque state() :: #?MODULE{}.
+-type state() :: #?MODULE{}.
 
 -type ra_log_init_args() :: #{uid := ra_uid(),
                               system_config => ra_system:config(),
@@ -145,7 +148,7 @@
                               max_open_segments => non_neg_integer(),
                               snapshot_module => module(),
                               machine => ra_machine:machine(),
-                              counter => counters:counters_ref(),
+                              counter => option(counters:counters_ref()),
                               initial_access_pattern => sequential | random,
                               max_checkpoints => non_neg_integer(),
                               major_compaction_strategy =>
@@ -312,7 +315,8 @@ init(#{uid := UId,
     LastWalIdx = case ra_log_wal:last_writer_seq(Wal, UId) of
                      {ok, undefined} ->
                          -1;
-                     {ok, Idx} ->
+                     {ok, Idx}
+                       when is_integer(Idx)->
                          Idx;
                      {error, wal_down} ->
                          %% TODO: we could enter a condition loop here to
@@ -325,7 +329,8 @@ init(#{uid := UId,
 
     %% recover the pending seq
     MaxConfirmedWrittenIdx = case TruncSegmentRange of
-                                 {_, LastSegIdx} ->
+                                 {_, LastSegIdx}
+                                   when is_integer(LastSegIdx) ->
                                      max(LastWalIdx, LastSegIdx);
                                  _ ->
                                      max(LastWalIdx, 0)
@@ -351,7 +356,7 @@ init(#{uid := UId,
                       mem_table = Mt,
                       snapshot_state = SnapshotState,
                       current_snapshot = ra_snapshot:current(SnapshotState),
-                      last_wal_write = {whereis(Wal), now_ms(), LastWalIdx},
+                      last_wal_write = {ra_lib:whereis(Wal), now_ms(), LastWalIdx},
                       live_indexes = LiveIndexes,
                       pending = Pending
                      },
@@ -383,7 +388,8 @@ init(#{uid := UId,
     LastSegRefIdx = case TruncSegmentRange of
                         undefined ->
                             -1;
-                        {_, L} ->
+                        {_, L}
+                          when is_integer(L) ->
                             L
                     end,
     LastWrittenIdx = lists:max([LastWalIdx, SnapIdx, LastSegRefIdx]),
@@ -397,7 +403,8 @@ init(#{uid := UId,
     LastTerm = ra_lib:default(LastTerm0, -1),
     State4 = State3#?MODULE{last_term = LastTerm,
                             last_written_index_term =
-                                {LastWrittenIdx, LastWrittenTerm}},
+                                {LastWrittenIdx,
+                                 ra_lib:unwrap(LastWrittenTerm)}},
 
     % initialized with a default 0 index 0 term dummy value
     % and an empty meta data map
@@ -452,7 +459,7 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
                                last_wal_write = {Pid, now_ms(), LastIdx},
                                mem_table = Mt}};
         {error, wal_down} ->
-            {Idx, _, _} = hd(Entries),
+            [{Idx, _, _} | _] = Entries,
             Mt = ra_mt:abort(Mt1),
             %% TODO: review this -  still need to return the state here
             {error, wal_down,
@@ -461,7 +468,7 @@ commit_tx(#?MODULE{cfg = #cfg{uid = UId,
                            mem_table = Mt}}
     end;
 commit_tx(#?MODULE{tx = false} = State) ->
-    State.
+    {ok, State}.
 
 -define(IS_NEXT_IDX(Idx, Range),
         Range == undefined orelse
@@ -601,22 +608,26 @@ write_sparse({Idx, Term, Cmd} = Entry, PrevIdx0,
             Err
     end.
 
--spec fold(FromIdx :: ra_index(), ToIdx :: ra_index(),
-           fun((log_entry(), Acc) -> Acc), Acc, state()) ->
-    {Acc, state()} when Acc :: term().
-fold(From0, To0, Fun, Acc0, State) ->
-    fold(From0, To0, Fun, Acc0, State, error).
+-spec fold(fun((log_entry(), Acc) -> Acc),
+           FromIdx :: ra_index(), ToIdx :: ra_index(),
+           Acc, state()) ->
+    {Acc, state()}.
+fold(Fun, From0, To0, Acc0, State) ->
+    fold(Fun, From0, To0, Acc0, State, error).
 
--spec fold(FromIdx :: ra_index(), ToIdx :: ra_index(),
-           fun((log_entry(), Acc) -> Acc), Acc, state(),
-            MissingKeyStrategy :: error | return) ->
-    {Acc, state()} when Acc :: term().
-fold(From0, To0, Fun, Acc0,
+-spec fold(fun((log_entry(), Acc) -> Acc),
+           FromIdx :: ra_index(), ToIdx :: ra_index(),
+           Acc, state(),
+           MissingKeyStrategy :: error | return) ->
+    {Acc, state()}.
+fold(Fun, From0, To0, Acc0,
      #?MODULE{cfg = Cfg,
               mem_table = Mt,
               range = {StartIdx, EndIdx},
               reader = Reader0} = State, MissingKeyStrat)
-  when To0 >= From0 andalso
+  when is_integer(From0) andalso
+       is_integer(To0) andalso
+       To0 >= From0 andalso
        To0 >= StartIdx ->
 
     %% TODO: move to ra_range function
@@ -773,8 +784,15 @@ read_plan_info(#read_plan{read = Read,
       num_in_segments => NumInSegments,
       num_segments => NumSegments}.
 
+-spec check_read_plan_type(term()) ->
+    {ok, read_plan()} | error.
+check_read_plan_type(#read_plan{} = Plan) ->
+    {ok, Plan};
+check_read_plan_type(_Term) ->
+    error.
 
--spec previous_wal_index(state()) -> ra_idxterm() | -1.
+
+-spec previous_wal_index(state()) -> ra:index() | -1.
 previous_wal_index(#?MODULE{range = Range}) ->
     case Range of
         undefined ->
@@ -845,7 +863,7 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
     end.
 
 -spec handle_event(event_body(), state()) ->
-    {state(), [effect()]}.
+    {state(), effects()}.
 handle_event({written, Term, WrittenSeq},
              #?MODULE{cfg = Cfg,
                       last_written_index_term = {PrevIdx, _},
@@ -945,7 +963,7 @@ handle_event({segments, TidSeqs, NewSegs},
                 {_, LastSegIdx} = SegRange,
                 {LWTerm, Reader2} = ra_log_segments:fetch_term(LastSegIdx,
                                                                Reader1),
-                {{LastSegIdx, LWTerm}, Reader2};
+                {{LastSegIdx, ra_lib:unwrap(LWTerm)}, Reader2};
             _ ->
                 {LWIT0, Reader1}
         end,
@@ -1748,6 +1766,7 @@ maps_with_values(Keys, Map) ->
               end
       end, [], Keys).
 
+-spec now_ms() -> milliseconds().
 now_ms() ->
     erlang:system_time(millisecond).
 

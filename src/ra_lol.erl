@@ -28,7 +28,7 @@
 %% Threshold at or above which we use tuple, below we use simple list
 -define(TUPLE_THRESHOLD, 65).
 
--type gt_fun() :: fun((Item, Item) -> boolean()).
+-type gt_fun() :: fun((term(), term()) -> boolean()).
 
 %% State is either:
 %% - {list, GtFun, List} where List is stored in descending order (newest first)
@@ -78,9 +78,9 @@ append(Item, {tuple, GtFun, Len, Data}) ->
             out_of_order
     end.
 
--spec search(fun((term()) -> higher | lower | equal),
+-spec search(fun((T) -> higher | lower | equal),
              state() | cont()) ->
-    {term(), cont()} | undefined.
+    {T, cont()} | undefined.
 search(_SearchFun, {list, _GtFun, []}) ->
     undefined;
 search(SearchFun, {list, _GtFun, List}) ->
@@ -212,8 +212,7 @@ tuple_foldl(Fun, Acc, Data, Pos, Len) ->
 %% @doc Fold right-to-left (from oldest/smallest to newest/largest).
 %% Since the structure stores items in descending order (newest first),
 %% this iterates from the end to the beginning.
--spec foldr(fun((Item, Acc) -> Acc), Acc, state()) -> Acc
-      when Item :: term(), Acc :: term().
+-spec foldr(fun((_, Acc) -> Acc), Acc, state()) -> Acc.
 foldr(Fun, Acc, {list, _GtFun, List}) ->
     lists:foldr(Fun, Acc, List);
 foldr(Fun, Acc, {tuple, _GtFun, Len, Data}) ->

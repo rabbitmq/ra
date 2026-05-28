@@ -53,13 +53,17 @@
          is_any_file/1,
          ensure_dir/1,
          consult/1,
-         cons/2
+         cons/2,
+         unwrap/1,
+         whereis/1,
+         rootname/1
         ]).
 
 -type file_err() :: file:posix() | badarg | terminated | system_limit.
 
 -export_type([file_err/0]).
 
+-include("ra.hrl").
 -include_lib("kernel/include/file.hrl").
 
 ceiling(X) when X < 0 ->
@@ -75,6 +79,86 @@ default(undefined, Def) ->
     Def;
 default(Value, _Def) ->
     Value.
+
+-spec unwrap(option(T)) -> T.
+unwrap(undefined) ->
+    error(?FUNCTION_NAME);
+unwrap(Value) ->
+    Value.
+
+-spec rootname(binary()) -> binary().
+rootname(Bin) when is_binary(Bin) ->
+    case os:type() of
+        {win32, _} ->
+            rootname_win32(Bin, byte_size(Bin) - 1, -1);
+        _ ->
+            rootname(Bin, byte_size(Bin) - 1, -1)
+    end.
+
+rootname(Bin, -1, -1) ->
+    Bin;
+rootname(Bin, -1, DotPos) ->
+    if DotPos == 0 ->
+            <<>>;
+       true ->
+            binary:part(Bin, 0, DotPos)
+    end;
+rootname(Bin, Pos, DotPos) ->
+    case binary:at(Bin, Pos) of
+        $/ ->
+            if DotPos == -1 ->
+                    Bin;
+               DotPos == Pos + 1 ->
+                    Bin;
+               true ->
+                    binary:part(Bin, 0, DotPos)
+            end;
+        $. when DotPos == -1 ->
+            rootname(Bin, Pos - 1, Pos);
+        _ ->
+            rootname(Bin, Pos - 1, DotPos)
+    end.
+
+rootname_win32(Bin, -1, -1) ->
+    Bin;
+rootname_win32(Bin, -1, DotPos) ->
+    if DotPos == 0 ->
+            <<>>;
+       true ->
+            binary:part(Bin, 0, DotPos)
+    end;
+rootname_win32(Bin, Pos, DotPos) ->
+    case binary:at(Bin, Pos) of
+        $/ ->
+            if DotPos == -1 ->
+                    Bin;
+               DotPos == Pos + 1 ->
+                    Bin;
+               true ->
+                    binary:part(Bin, 0, DotPos)
+            end;
+        $\\ ->
+            if DotPos == -1 ->
+                    Bin;
+               DotPos == Pos + 1 ->
+                    Bin;
+               true ->
+                    binary:part(Bin, 0, DotPos)
+            end;
+        $. when DotPos == -1 ->
+            rootname_win32(Bin, Pos - 1, Pos);
+        _ ->
+            rootname_win32(Bin, Pos - 1, DotPos)
+    end.
+
+-spec whereis(atom()) -> option(pid()).
+whereis(Name) when is_atom(Name) ->
+    case erlang:whereis(Name) of
+        undefined ->
+            undefined;
+        Pid when is_pid(Pid) ->
+                 Pid
+    end.
 
 -spec lazy_default(undefined | term(), fun (() -> term())) -> term().
 lazy_default(undefined, DefGen) ->
@@ -189,7 +273,7 @@ zpad_upgrade(Dir, File, Ext) ->
             F = "00000000" ++ B ++ Ext,
             New = filename:join(Dir, F),
             Old = filename:join(Dir, File),
-            ok = file:rename(Old, New),
+            ok = prim_file:rename(Old, New),
             F;
         16 ->
             File
@@ -319,13 +403,13 @@ derive_safe_string(S, Num) ->
          end,
      string:slice(F(string:next_grapheme(S), []), 0, Num).
 
--spec partition_parallel(fun((any()) -> boolean()), [any()]) ->
-    {ok, [any()], [any()]} | {error, any()}.
+-spec partition_parallel(fun((T) -> boolean()), [T]) ->
+    {ok, [T], [T]} | {error, term()}.
 partition_parallel(F, Es) ->
     partition_parallel(F, Es, 60000).
 
--spec partition_parallel(fun((any()) -> boolean()), [any()], timeout()) ->
-    {ok, [any()], [any()]} | {error, any()}.
+-spec partition_parallel(fun((T) -> boolean()), [T], timeout()) ->
+    {ok, [T], [T]} | {error, term()}.
 partition_parallel(F, Es, Timeout) ->
     Parent = self(),
     Running = [{spawn_monitor(fun() ->
@@ -333,8 +417,10 @@ partition_parallel(F, Es, Timeout) ->
                               end), E}
                || E <- Es],
     case collect(Running, {[], []}, Timeout) of
-        {error, _} = E -> E;
-        {Successes, Failures} -> {ok, Successes, Failures}
+        {error, _} = E ->
+            E;
+        {Successes, Failures} ->
+            {ok, Successes, Failures}
     end.
 
 collect([], Acc, _Timeout) ->
@@ -527,7 +613,7 @@ consult(Path) ->
             Err
     end.
 
--spec cons(term(), list()) -> list().
+-spec cons(T, list(T)) -> list(T).
 cons(Item, List)
   when is_list(List) ->
     [Item | List].
@@ -642,8 +728,41 @@ lists_detect_sort_test() ->
 partition_parallel_test() ->
     ?assertMatch({error, {partition_parallel_timeout, [], []}},
                  partition_parallel(fun(_) ->
-                                        timer:sleep(infinity)
+                                        timer:sleep(infinity),
+                                        true
                                     end, [1, 2, 3], 1000)),
+    ok.
+
+rootname_test() ->
+    Cases = [
+             <<".hidden">>,
+             <<"/path/.hidden">>,
+             <<"/path/a.b">>,
+             <<"/path/..hidden">>,
+             <<"..hidden">>,
+             <<"foo">>,
+             <<"foo.erl">>,
+             <<"/a/b/c.d/e">>,
+             <<"/a/b/c.d/e.f">>
+            ],
+    lists:foreach(fun(C) ->
+                          ?assertEqual(filename:rootname(C), rootname(C))
+                  end, Cases),
+
+    Win32Cases = [
+                  {<<"C:\\path\\.hidden">>, <<"C:\\path\\.hidden">>},
+                  {<<"C:\\path\\a.b">>, <<"C:\\path\\a">>},
+                  {<<"C:\\path\\..hidden">>, <<"C:\\path\\.">>},
+                  {<<"C:\\path.dir\\a">>, <<"C:\\path.dir\\a">>}
+                 ],
+    lists:foreach(
+      fun({C, Expected}) ->
+              %% Note: We don't use filename:rootname(C) as the expected value here
+              %% because on Windows, filename:rootname/1 replaces all $\\ with $/.
+              %% Our optimized version intentionally preserves the original separators
+              %% to avoid allocating a new binary.
+              ?assertEqual(Expected, rootname_win32(C, byte_size(C) - 1, -1))
+      end, Win32Cases),
     ok.
 
 -endif.

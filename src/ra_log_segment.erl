@@ -375,8 +375,7 @@ is_modified(#state{cfg = #cfg{fd = Fd},
 -spec read_sparse(state(), [ra_index()],
                   fun((ra:index(), ra_term(), binary(), Acc) -> Acc),
                   Acc) ->
-    {ok, NumRead :: non_neg_integer(), Acc} | {error, modified}
-      when Acc :: term().
+    {ok, NumRead :: non_neg_integer(), Acc} | {error, modified}.
 read_sparse(#state{} = State, Indexes, AccFun, Acc) ->
     case is_modified(State) of
         true ->
@@ -388,8 +387,7 @@ read_sparse(#state{} = State, Indexes, AccFun, Acc) ->
 -spec read_sparse_no_checks(state(), [ra_index()],
                             fun((ra:index(), ra_term(), binary(), Acc) -> Acc),
                                 Acc) ->
-    {ok, NumRead :: non_neg_integer(), Acc}
-      when Acc :: term().
+    {ok, NumRead :: non_neg_integer(), Acc}.
 read_sparse_no_checks(#state{index = Index,
                              num_entries = NumEntries,
                              cfg = #cfg{fd = Fd,
@@ -702,7 +700,7 @@ data_size(#state{data_offset = DataOffset, data_start = DataStart}) ->
 max_count(#state{cfg = #cfg{max_count = Max}}) ->
     Max.
 
--spec filename(state()) -> file:filename().
+-spec filename(state()) -> file:filename_all().
 filename(#state{cfg = #cfg{filename = Fn}}) ->
     Fn.
 

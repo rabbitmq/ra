@@ -6,12 +6,12 @@
 %%
 -module(ra_log_meta_SUITE).
 
+% elp:ignore W0054 (no_nowarn_suppressions)
 -compile(nowarn_export_all).
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
--define(SYS, default).
 
 %% common ra_log tests to ensure behaviour is equivalent across
 %% ra_log backends
@@ -54,8 +54,8 @@ roundtrip(Config) ->
     ok = ra_log_meta:store_sync(ra_log_meta, Id, current_term, 5),
     5 = ra_log_meta:fetch(ra_log_meta, Id, current_term),
     ok = ra_log_meta:store(ra_log_meta, Id, voted_for, 'cream'),
-    ok = ra_log_meta:store_sync(ra_log_meta, Id, voted_for, 'cøstard'),
-    'cøstard' = ra_log_meta:fetch(ra_log_meta, Id, voted_for),
+    ok = ra_log_meta:store_sync(ra_log_meta, Id, voted_for, {'cøstard', cream}),
+    {'cøstard', cream} = ra_log_meta:fetch(ra_log_meta, Id, voted_for),
     ok = ra_log_meta:store_sync(ra_log_meta, Id, voted_for, undefined),
     undefined = ra_log_meta:fetch(ra_log_meta, Id, voted_for),
     ok = ra_log_meta:store_sync(ra_log_meta, Id, voted_for, {custard, cream}),

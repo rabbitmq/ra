@@ -105,8 +105,6 @@
 %% Machine configuration.
 %% the `module()' should implement the {@link ra_machine} behaviour.
 
--type milliseconds() :: non_neg_integer().
-
 -type builtin_command() :: {down, pid(), term()} |
                            {nodeup | nodedown, node()} |
                            {machine_version, From :: version(), To :: version()} |
@@ -438,10 +436,10 @@ handle_aux(Mod, RaftState, Type, Cmd, Aux, State) ->
     Mod:handle_aux(RaftState, Type, Cmd, Aux, State).
 
 -spec which_aux_fun(module()) ->
-    undefined | {atom(), arity()}.
+    undefined | {handle_aux, arity()}.
 which_aux_fun(Mod) when is_atom(Mod) ->
     case lists:sort([E || {handle_aux, _Arity} = E
-                          <- erlang:apply(Mod,module_info, [exports])]) of
+                          <- Mod:module_info(exports)]) of
         [] ->
             undefined;
         [AuxFun | _] ->

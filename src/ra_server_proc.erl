@@ -385,8 +385,9 @@ do_init(#{id := Id,
     LogId = ra_server:log_id(ServerState),
     %% TODO: full error handling
     WorkerPid = case ra_server_sup:start_ra_worker(ParentPid, Config) of
-                    {ok, P} -> P;
-                    {error, {already_started, P}} ->
+                    {ok, P} when is_pid(P) -> P;
+                    {error, {already_started, P}}
+                      when is_pid(P) ->
                         P
                 end,
     ra_env:configure_logger(logger),

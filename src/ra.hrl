@@ -6,15 +6,13 @@
 %%
 -type option(T) :: undefined | T.
 
-%%
 %% Most of the records here are covered on Figure 2
 %% in the Raft paper (extended version):
 %% https://raft.github.io/raft.pdf.
-%%
 
-%% taken from gen_statem as this type isn't exported for some reason.
--type from() ::
-	{To :: pid(), Tag :: term()}.
+%% the second element should be a gen:reply_tag() but this is opaque which means
+%% we can't create them for unit tests etc so have to do with term for now
+-type from() :: {pid(), ReplyTag :: term()}.
 
 %% Sections 5.1 in the paper.
 -type ra_index() :: non_neg_integer().
@@ -87,8 +85,10 @@
 -type chunk_flag() :: init | pre | next | last.
 
 -type consistent_query_ref() ::
-    {query, From :: from(), Query :: ra:query_fun(), CommitIndex :: ra_index()} |
-    {aux, From :: from(), AuxCmd :: term(), CommitIndex :: ra_index()}.
+    {query, From :: gen_statem:from(),
+     Query :: ra:query_fun(), CommitIndex :: ra_index()} |
+    {aux, From :: gen_statem:from(), AuxCmd :: term(),
+     CommitIndex :: ra_index()}.
 
 -type safe_call_ret(T) :: timeout | {error, noproc | nodedown | shutdown} | T.
 
@@ -104,6 +104,7 @@
 
 -type mfargs() :: {M :: module(), F :: atom(), A :: [term()]}.
 
+-type milliseconds() :: non_neg_integer().
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
 %% done to the core protocol records (below). It is only ever exchanged by the
@@ -232,6 +233,7 @@
             true -> ?DISPATCH_LOG(debug, Fmt, Args);
             false -> ok
         end).
+
 -define(DEBUG(Fmt, Args), ?DISPATCH_LOG(debug, Fmt, Args)).
 -define(INFO(Fmt, Args), ?DISPATCH_LOG(info, Fmt, Args)).
 -define(NOTICE(Fmt, Args), ?DISPATCH_LOG(notice, Fmt, Args)).
@@ -243,13 +245,13 @@
 -define(DISPATCH_LOG(Level, Fmt, Args),
         %% same as OTP logger does when using the macro
         try
-            (persistent_term:get('$ra_logger')):log(Level, Fmt, Args,
-                                                    #{mfa => {?MODULE,
-                                                              ?FUNCTION_NAME,
-                                                              ?FUNCTION_ARITY},
-                                                      file => ?FILE,
-                                                      line => ?LINE,
-                                                      domain => [ra]})
+            (ra_env:logger_mod()):log(Level, Fmt, Args,
+                                      #{mfa => {?MODULE,
+                                                ?FUNCTION_NAME,
+                                                ?FUNCTION_ARITY},
+                                        file => ?FILE,
+                                        line => ?LINE,
+                                        domain => [ra]})
         catch
             _:_ -> ok
         end,

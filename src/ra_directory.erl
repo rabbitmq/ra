@@ -40,7 +40,7 @@ init(System) when is_atom(System) ->
             init(Dir, Names)
     end.
 
--spec init(file:filename(), ra_system:names()) -> ok.
+-spec init(file:filename_all(), ra_system:names()) -> ok.
 init(Dir, #{directory := Name,
             directory_rev := NameRev}) ->
     _ = ets:new(Name, [named_table,
@@ -185,11 +185,8 @@ uid_of(SystemOrNames, {ServerName, _}) when is_atom(ServerName) ->
 overview(System) when is_atom(System) ->
     #{directory := Tbl,
       directory_rev := _TblRev} = get_names(System),
-    Dir = ets:tab2list(Tbl),
-    Rows = lists:map(fun({K, S, V}) ->
-                             {K, {S, V}}
-                     end,
-                     ets:tab2list(ra_state)),
+
+    Rows = [{K, {S, V}} || {K, S, V} <- ets:tab2list(ra_state)],
     States = maps:from_list(Rows),
     Snaps = lists:foldl(
               fun (T, Acc) ->
@@ -206,7 +203,7 @@ overview(System) when is_atom(System) ->
                                cluster_name => ClusterName,
                                snapshot_state => maps:get(UId, Snaps,
                                                           undefined)}}
-                end, #{}, Dir).
+                end, #{}, ets:tab2list(Tbl)).
 
 -spec list_registered(atom() | ra_system:names()) ->
     [{atom(), ra_uid()}].
