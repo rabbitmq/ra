@@ -69,7 +69,7 @@
 
 % elp:ignore W0048 (no_dialyzer_attribute)
 -dialyzer({nowarn_function, 'lists:foreach'/2}).
--spec 'lists:foreach'(fun((T) -> ok), [T]) -> [T].
+-spec 'lists:foreach'(fun((T) -> term()), [T]) -> ok.
 'lists:foreach'(_, _) -> error(eqwalizer_specs).
 
  % elp:ignore W0048 (no_dialyzer_attribute)
