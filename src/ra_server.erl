@@ -4230,6 +4230,20 @@ agreed_commit_test() ->
     4 = agreed_commit([3, 4, 4]),
     % 3 servers - only leader has seen new commit
     3 = agreed_commit([4, 2, 3]),
+
+    %% Nth
+    4 = agreed_commit([4], 1),
+    % 2 servers - only leader has seen new commit
+    4 = agreed_commit([4, 3], 1),
+    % 2 servers - all servers have seen new commit
+    4 = agreed_commit([4, 4, 4], 2),
+    % 3 servers - only leader has seen new commit
+    4 = agreed_commit([4, 3, 3], 1),
+    % only other servers have seen new commit
+    4 = agreed_commit([3, 4, 4], 1),
+    % 3 servers - only leader has seen new commit
+    4 = agreed_commit([4, 2, 3], 1),
+
     ok.
 
 -endif.
