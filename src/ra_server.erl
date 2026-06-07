@@ -3674,8 +3674,12 @@ match_indexes(#{cfg := #cfg{id = Id},
 
 -spec agreed_commit(list()) -> ra_index().
 agreed_commit(Indexes) ->
+    Nth = trunc(length(Indexes) / 2) + 1,
+    agreed_commit(Indexes, Nth).
+
+-spec agreed_commit(list(), integer()) -> ra_index().
+agreed_commit(Indexes, Nth) -> %% return Mth highest
     SortedIdxs = lists:sort(fun erlang:'>'/2, Indexes),
-    Nth = trunc(length(SortedIdxs) / 2) + 1,
     lists:nth(Nth, SortedIdxs).
 
 log_unhandled_msg(RaState, Msg, #{cfg := #cfg{log_id = LogId}}) ->
