@@ -108,7 +108,8 @@
                                  [ra_machine:release_cursor_condition()]},
       %% temporary state for handle_receive_snapshot
       current_event_type => term(),
-      snapshot_has_live_indexes => boolean()
+      snapshot_has_live_indexes => boolean(),
+      data_commit_static_quorum_size => non_neg_integer()
      }.
 
 -type state() :: ra_server_state().
@@ -231,7 +232,6 @@
 %% version, it switches to that new version. This was the default and only
 %% possible behavior in Ra up to 2.15.</li>
 %% </ul>
-
 -type ra_server_config() :: #{id := ra_server_id(),
                               uid := ra_uid(),
                               %% a friendly name to refer to a particular
@@ -263,8 +263,10 @@
                               %% minimum number of log entries since last
                               %% snapshot/checkpoint before writing a recovery
                               %% checkpoint on shutdown. 0 disables (default).
-                              min_recovery_checkpoint_interval => non_neg_integer()
-                             }.
+                              min_recovery_checkpoint_interval => non_neg_integer(),
+			      %% default 0 implies not using static_quorum
+			      data_commit_static_quorum_size => non_neg_integer()          
+			     }.
 
 -type ra_server_info_key() :: machine_version | atom().
 %% Key one can get in `ra_server_info()'.
@@ -369,7 +371,7 @@ init(#{id := Id,
 
     SnapModule = ra_machine:snapshot_module(Machine),
     Counter = maps:get(counter, Config, undefined),
-
+    DataCommitQuorumSize = maps:get(data_commit_static_quorum_size, Config, 0),
     Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule,
                                     machine => Machine,
                                     system_config => SystemConfig,
@@ -464,7 +466,8 @@ init(#{id := Id,
       aux_state => ra_machine:init_aux(MacMod, Name),
       query_index => 0,
       queries_waiting_heartbeats => queue:new(),
-      pending_consistent_queries => []}.
+      pending_consistent_queries => [],
+      data_commit_static_quorum_size => DataCommitQuorumSize}.
 
 recover(#{cfg := #cfg{log_id = LogId,
                       machine_version = MacVer},
@@ -1050,9 +1053,10 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                    votes := Votes,
                    cluster := Nodes} = State0) ->
     NewVotes = Votes + 1,
-    ?DEBUG("~ts: vote granted for term ~b votes ~b",
-          [LogId, Term, NewVotes]),
-    case required_quorum(Nodes) of
+    ?DEBUG("~ts: vote granted for term ~b votes ~b --- ~p",
+          [LogId, Term, NewVotes, Nodes]),
+    DataCommitQuorumSize = maps:get(data_commit_static_quorum_size, State0, 0),
+    case required_quorum(Nodes, DataCommitQuorumSize) of
         NewVotes ->
             State = initialise_peers(State0#{leader_id => Id}),
             Effects = post_election_effects(State),
@@ -1239,7 +1243,8 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
           [LogId, Token, Term, Votes + 1]),
     NewVotes = Votes + 1,
     State = update_term(Term, State0),
-    case required_quorum(Nodes) of
+    DataCommitQuorumSize = maps:get(data_commit_static_quorum_size, State, 0),
+    case required_quorum(Nodes, DataCommitQuorumSize) of
         NewVotes ->
             call_for_election(candidate, State);
         _ ->
@@ -3636,8 +3641,13 @@ evaluate_quorum(#{cfg := Cfg,
     {State1, Effects1} = apply_to(CI, State, Effects),
     maybe_emit_pending_release_cursor(State1, Effects1).
 
-increment_commit_index(State0 = #{current_term := CurrentTerm}) ->
-    PotentialNewCommitIndex = agreed_commit(match_indexes(State0)),
+increment_commit_index(State0 = #{current_term := CurrentTerm, data_commit_static_quorum_size := DataQuorumSize}) ->
+    PotentialNewCommitIndex = case DataQuorumSize of
+				  0 ->
+				      agreed_commit(match_indexes(State0));
+				  M ->
+				      agreed_commit(match_indexes(State0), M)
+			      end,
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
     case fetch_term(PotentialNewCommitIndex, State0) of
@@ -3677,7 +3687,7 @@ agreed_commit(Indexes) ->
     Nth = trunc(length(Indexes) / 2) + 1,
     agreed_commit(Indexes, Nth).
 
--spec agreed_commit(list(), integer()) -> ra_index().
+-spec agreed_commit(list(), pos_integer()) -> ra_index().
 agreed_commit(Indexes, Nth) -> %% return Mth highest
     SortedIdxs = lists:sort(fun erlang:'>'/2, Indexes),
     lists:nth(Nth, SortedIdxs).
@@ -3988,9 +3998,13 @@ maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
             Effects
     end.
 
--spec required_quorum(ra_cluster()) -> pos_integer().
-required_quorum(Cluster) ->
-    Voters = count_voters(Cluster),
+-spec required_quorum(ra_cluster(), pos_integer()) -> pos_integer().
+required_quorum(Cluster, DataCommitQuorumSize) ->
+    required_quorum_count(count_voters(Cluster), DataCommitQuorumSize).
+
+required_quorum_count(Voters, 0) ->
+    trunc(Voters / 2) + 1;
+required_quorum_count(Voters, DataCommitQuorumSize)  ->
     trunc(Voters / 2) + 1.
 
 count_voters(Cluster) ->
@@ -4245,5 +4259,14 @@ agreed_commit_test() ->
     4 = agreed_commit([4, 2, 3], 1),
 
     ok.
+
+required_quorum_test() ->
+    %% 3 voters, no election quorum messing
+    2 = required_quorum_count(3, 0),
+    %% 4 voters, no election quorum messing
+    3 = required_quorum_count(4, 0),
+
+    ok.
+
 
 -endif.
