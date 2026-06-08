@@ -321,7 +321,7 @@ Aten monitors Erlang nodes. When it suspects an Erlang node is down
 it notifies local `ra` servers of this. If this Erlang node hosts the currently
 known `ra` leader the follower will start an election.
 
-Ra implements a ["pre-vote" member state](https://raft.github.io/raft.pdf)
+Ra implements a ["pre-vote" member state](https://ongardie.net/var/blurbs/pubs/dissertation.pdf#section.9.6)
 that sits between the "follower" and "candidate" states.
 This avoids cluster disruptions due to leader failure false positives.
 
