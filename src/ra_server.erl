@@ -4005,7 +4005,7 @@ required_quorum(Cluster, DataCommitQuorumSize) ->
 required_quorum_count(Voters, 0) ->
     trunc(Voters / 2) + 1;
 required_quorum_count(Voters, DataCommitQuorumSize)  ->
-    trunc(Voters / 2) + 1.
+    max(trunc(Voters / 2) + 1, Voters - DataCommitQuorumSize + 1).
 
 count_voters(Cluster) ->
     maps:fold(
@@ -4265,6 +4265,18 @@ required_quorum_test() ->
     2 = required_quorum_count(3, 0),
     %% 4 voters, no election quorum messing
     3 = required_quorum_count(4, 0),
+    %% 5 voters, no election quorum messing
+    3 = required_quorum_count(5, 0),
+
+    %% 5 voters, data commit quorum is 1
+    5 = required_quorum_count(5, 1),
+    %% 5 voters, data commit quorum is 2
+    4 = required_quorum_count(5, 2),
+    %% 5 voters, data commit quorum is 3
+    3 = required_quorum_count(5, 3),
+    %% 5 voters, data commit quorum is 4
+    %% degenerate, useless case, but sanity check
+    3 = required_quorum_count(5, 4),
 
     ok.
 
