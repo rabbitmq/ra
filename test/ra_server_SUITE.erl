@@ -102,6 +102,7 @@ all() ->
      wal_down_condition_follower,
      wal_down_condition_leader,
      wal_down_condition_leader_commands,
+     transfer_leadership,
      update_release_cursor,
      update_release_cursor_with_written_condition,
      update_release_cursor_with_no_snapshot_sends_condition,
@@ -1088,6 +1089,46 @@ wal_down_condition_leader_commands(_Config) ->
                                                 {transfer_leadership, _}}],
                                    transition_to := leader}}} = _State1, _}
         = ra_server:handle_leader({command, Cmd}, State0),
+    ok.
+
+transfer_leadership(_Config) ->
+    State0 = base_state(3, ?FUNCTION_NAME),
+    N1 = ?N1,
+    N2 = ?N2,
+    N3 = ?N3,
+    Unknown = {unknown, node()},
+
+    %% transfer to self
+    {leader, State0, [{reply, already_leader}]} =
+        ra_server:handle_leader({transfer_leadership, N1}, State0),
+
+    %% transfer to unknown member
+    {leader, State0, [{reply, {error, unknown_member}}]} =
+        ra_server:handle_leader({transfer_leadership, Unknown}, State0),
+
+    %% transfer to non-voter
+    Cluster0 = maps:get(cluster, State0),
+    #{N2 := Peer2} = Cluster0,
+    Peer2NonVoter = Peer2#{voter_status => #{membership => non_voter}},
+    StateNonVoter = State0#{cluster => Cluster0#{N2 => Peer2NonVoter}},
+    {leader, StateNonVoter, [{reply, {error, non_voter}}]} =
+        ra_server:handle_leader({transfer_leadership, N2}, StateNonVoter),
+
+    %% transfer to member that is not up to date
+    #{N3 := Peer3} = Cluster0,
+    Peer3Behind = Peer3#{next_index => 2},
+    StateBehind = State0#{cluster => Cluster0#{N3 => Peer3Behind}},
+    {leader, StateBehind, [{reply, {error, not_up_to_date}}]} =
+        ra_server:handle_leader({transfer_leadership, N3}, StateBehind),
+
+    %% transfer to valid voter
+    {await_condition,
+     #{condition := #{predicate_fun := _,
+                      timeout := #{effects := [],
+                                   transition_to := leader}}} = _State1,
+     [{reply, ok}, {send_msg, N2, election_timeout, cast}]} =
+        ra_server:handle_leader({transfer_leadership, N2}, State0),
+
     ok.
 
 update_release_cursor(_Config) ->

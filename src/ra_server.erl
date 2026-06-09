@@ -1008,6 +1008,7 @@ handle_leader({transfer_leadership, Member},
     {leader, State, [{reply, {error, unknown_member}}]};
 handle_leader({transfer_leadership, ServerId},
               #{cfg := #cfg{log_id = LogId},
+                log := Log,
                 cluster := Cluster} = State) ->
     case Cluster of
         #{ServerId := #{voter_status := #{membership := Membership}}}
@@ -1015,16 +1016,23 @@ handle_leader({transfer_leadership, ServerId},
             ?INFO("~ts: transfer leadership requested but non-voter member ~tw",
                   [LogId, ServerId]),
             {leader, State, [{reply, {error, non_voter}}]};
-        _ ->
-            ?DEBUG("~ts: transfer leadership to ~tw requested",
-                   [LogId, ServerId]),
-            %% TODO find a timeout
-            {await_condition,
-             State#{condition =>
-                        #{predicate_fun => fun transfer_leadership_condition/2,
-                          timeout => #{effects => [],
-                                       transition_to => leader}}},
-             [{reply, ok}, {send_msg, ServerId, election_timeout, cast}]}
+        #{ServerId := #{next_index := PeerNextIdx}} ->
+            LeaderNextIdx = ra_log:next_index(Log),
+            if PeerNextIdx =:= LeaderNextIdx ->
+                    ?DEBUG("~ts: transfer leadership to ~tw requested",
+                           [LogId, ServerId]),
+                    %% TODO find a timeout
+                    {await_condition,
+                     State#{condition =>
+                                #{predicate_fun => fun transfer_leadership_condition/2,
+                                  timeout => #{effects => [],
+                                               transition_to => leader}}},
+                     [{reply, ok}, {send_msg, ServerId, election_timeout, cast}]};
+               true ->
+                    ?INFO("~ts: transfer leadership requested but member ~tw is not up to date",
+                          [LogId, ServerId]),
+                    {leader, State, [{reply, {error, not_up_to_date}}]}
+            end
     end;
 handle_leader(force_member_change, State0) ->
     {follower, State0#{votes => 0}, [{next_event, force_member_change}]};
@@ -1913,9 +1921,11 @@ handle_await_condition(#request_vote_rpc{} = Msg, State) ->
 handle_await_condition(#pre_vote_rpc{} = PreVote, State) ->
     process_pre_vote(await_condition, PreVote, State);
 handle_await_condition(election_timeout,
-                #{cfg := #cfg{log_id = LogId},
-                  membership := Membership} = State) when Membership =/= voter ->
-    ?DEBUG("~s: await_condition ignored election_timeout, replicate membership state: ~p",
+                       #{cfg := #cfg{log_id = LogId},
+                         membership := Membership} = State)
+  when Membership =/= voter ->
+    ?DEBUG("~s: await_condition ignored election_timeout, "
+           "replicate membership state: ~p",
            [LogId, Membership]),
     {await_condition, State, []};
 handle_await_condition(election_timeout, State) ->
