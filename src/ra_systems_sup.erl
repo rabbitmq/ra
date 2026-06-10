@@ -30,7 +30,9 @@ start_system(#{name := Name,
                data_dir := Dir} = Config) when is_atom(Name) ->
     ?INFO("starting Ra system: ~ts in directory: ~ts", [Name, Dir]),
     %% TODO: validate configuration
-    ok = ra_system:store(Config),
+    %% NB: the {'$ra_system', Name} registration is performed by
+    %% ra_system_sup:init/1 so that it happens for both this dynamic path and
+    %% the embedded ra_system_sup:child_spec/1 path.
     RaSystemsSup = #{id => Name,
                      type => supervisor,
                      start => {ra_system_sup, start_link, [Config]}},
@@ -56,7 +58,9 @@ stop_system(Name) when is_atom(Name) ->
 
 cleanup(Name) when is_atom(Name) ->
     ?CATCH(supervisor:delete_child(?MODULE, Name)),
-    _ = persistent_term:erase({'$ra_system', Name}),
+    %% NB: the {'$ra_system', Name} persistent_term is erased by
+    %% ra_system_registration:terminate/2 when the system supervisor stops, so
+    %% that it is cleaned up regardless of who stops the system.
     ok.
 
 init([]) ->
