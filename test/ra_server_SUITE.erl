@@ -1116,7 +1116,7 @@ transfer_leadership(_Config) ->
 
     %% transfer to member that is not up to date
     #{N3 := Peer3} = Cluster0,
-    Peer3Behind = Peer3#{next_index => 2},
+    Peer3Behind = Peer3#{match_index => 2, next_index => 3},
     StateBehind = State0#{cluster => Cluster0#{N3 => Peer3Behind}},
     {leader, StateBehind, [{reply, {error, not_up_to_date}}]} =
         ra_server:handle_leader({transfer_leadership, N3}, StateBehind),
