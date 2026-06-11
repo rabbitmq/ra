@@ -1161,6 +1161,8 @@ transfer_leadership(ServerId, TargetServerId) ->
 %% @doc Transfers leadership from the leader to a voter follower.
 %% Returns `already_leader' if the transfer target is already the leader.
 %% Leadership cannot be transferred to non-voters.
+%% Leadership can only be transferred to followers that are up to date
+%% with the leader's log, otherwise `{error, not_up_to_date}' is returned.
 %%
 %% @param ServerId the Ra server to send the command to
 %% @param TargetServerId the desired server to become the new leader
