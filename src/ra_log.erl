@@ -551,15 +551,41 @@ write([{FstIdx, _, _} | _Rest] = Entries,
       #?MODULE{cfg = Cfg,
                range = Range,
                pending = Pend0,
+               snapshot_state = SnapState,
+               last_written_index_term = {LWIdx0, LWTerm0},
                mem_table = Mt0} = State0)
   when Range == undefined orelse
        (FstIdx =< element(2, Range) + 1 andalso
         FstIdx >= 0) ->
+    %% If the new entries overwrite existing uncommitted entries,
+    %% we must immediately adjust `last_written_index_term` downwards.
+    %% Otherwise, we might report a stale, higher `last_written` index in
+    %% `append_entries_reply`, causing the leader to mistakenly advance its
+    %% `match_index` and commit unpersisted entries.
+    LWIdx = min(FstIdx - 1, LWIdx0),
+    {LWTerm, State1} =
+        if LWIdx == LWIdx0 ->
+               {LWTerm0, State0};
+           true ->
+               case ra_snapshot:current(SnapState) of
+                   {LWIdx, SnapTerm} ->
+                       {SnapTerm, State0};
+                   _ when LWIdx =< 0 ->
+                       {0, State0};
+                   _ ->
+                       {Term2, S} = fetch_term(LWIdx, State0),
+                       true = Term2 =/= undefined,
+                       {Term2, S}
+               end
+        end,
     case stage_entries(Cfg, Entries, Mt0) of
         {ok, Mt} ->
             Pend = ra_seq:limit(FstIdx - 1, Pend0),
-            wal_write_batch(State0#?MODULE{mem_table = Mt,
-                                           pending = Pend}, Entries);
+            put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_WRITTEN_INDEX, LWIdx),
+            State = State1#?MODULE{mem_table = Mt,
+                                   pending = Pend,
+                                   last_written_index_term = {LWIdx, LWTerm}},
+            wal_write_batch(State, Entries);
         Error ->
             Error
     end;
