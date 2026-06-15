@@ -1053,10 +1053,11 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                    votes := Votes,
                    cluster := Nodes} = State0) ->
     NewVotes = Votes + 1,
-    ?DEBUG("~ts: vote granted for term ~b votes ~b --- ~p",
-          [LogId, Term, NewVotes, Nodes]),
     DataCommitQuorumSize = maps:get(data_commit_static_quorum_size, State0, 0),
-    case required_quorum(Nodes, DataCommitQuorumSize) of
+    RequiredQuorum = required_quorum(Nodes, DataCommitQuorumSize),
+    ?DEBUG("~ts: vote granted for term ~b votes ~b --- ~b req ~b ~p",
+          [LogId, Term, NewVotes, Nodes, DataCommitQuorumSize, RequiredQuorum]),
+    case RequiredQuorum of
         NewVotes ->
             State = initialise_peers(State0#{leader_id => Id}),
             Effects = post_election_effects(State),
