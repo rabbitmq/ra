@@ -52,6 +52,7 @@ all() ->
      leader_receives_pre_vote,
      leader_pre_vote_sends_snapshot_to_backoff_peer,
      candidate_election,
+     candidate_election_quorum,
      is_new,
      command,
      command_notify,
@@ -2469,6 +2470,29 @@ candidate_election(_Config) ->
       {send_rpc, N2, _}
      ]} = ra_server:handle_leader(Noop, State2),
     ok.
+
+candidate_election_quorum(_config) ->
+    N2 = ?N2, N3 = ?N3, N4 = ?N4, N5 = ?N5,
+    State = (base_state(5, ?FUNCTION_NAME))#{current_term => 6, votes => 1, data_commit_static_quorum_size => 2},
+    Reply = #request_vote_result{term = 6, vote_granted = true},
+    {candidate, #{votes := 2} = State1, []}
+        = ra_server:handle_candidate(Reply, State),
+    {candidate, #{votes := 3} = State2, []}
+        = ra_server:handle_candidate(Reply, State1),
+    {leader, State3, _}
+        = ra_server:handle_candidate(Reply, State2),
+
+    PeerState = new_peer_with(#{next_index => 3+1, % leaders last log index + 1
+                                match_index => 0}), % initd to 0
+    #{cluster := #{N2 := PeerState,
+    		   N3 := PeerState,
+     		   N4 := PeerState,
+     		   N5 := PeerState}} = State3,
+    ok.
+
+
+
+
 
 pre_vote_election(_Config) ->
     Token = make_ref(),
