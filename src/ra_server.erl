@@ -3641,7 +3641,8 @@ evaluate_quorum(#{cfg := Cfg,
     {State1, Effects1} = apply_to(CI, State, Effects),
     maybe_emit_pending_release_cursor(State1, Effects1).
 
-increment_commit_index(State0 = #{current_term := CurrentTerm, data_commit_static_quorum_size := DataQuorumSize}) ->
+increment_commit_index(State0 = #{current_term := CurrentTerm}) ->
+    DataQuorumSize = maps:get(data_commit_static_quorum_size, State0, 0),
     PotentialNewCommitIndex = case DataQuorumSize of
 				  0 ->
 				      agreed_commit(match_indexes(State0));
