@@ -1431,6 +1431,7 @@ append_entries_reply_success_quorum(_Config) ->
      State,
      _} = ra_server:handle_leader(Msg, State0),
     ?INFO("state ~p", [State]),
+    %% With data_commit_static_quorum_size 2, we only need one ack to commit
     #{cluster := #{N2 := #{next_index := 4, match_index := 3}}, 
      commit_index := 3} = State,
     ok.
