@@ -4260,6 +4260,13 @@ agreed_commit_test() ->
     % 3 servers - only leader has seen new commit
     4 = agreed_commit([4, 2, 3], 1),
 
+    % 2 of the 3 have seen commit 3
+    3 = agreed_commit([3, 3, 2], 2),
+    % 2 ahead, 2 behind
+    3 = agreed_commit([5, 5, 3, 2, 1], 3),
+    % one way ahead of the rest
+    1 = agreed_commit([5, 2, 1, 1, 1], 4),
+
     ok.
 
 required_quorum_test() ->
@@ -4281,6 +4288,5 @@ required_quorum_test() ->
     3 = required_quorum_count(5, 4),
 
     ok.
-
 
 -endif.
