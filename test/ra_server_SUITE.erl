@@ -35,6 +35,7 @@ all() ->
      follower_aer_dupe,
      follower_leader_change_before_written,
      append_entries_reply_success,
+     append_entries_reply_success_quorum,
      append_entries_reply_no_success,
      append_entries_reply_no_success_from_unknown_peer,
      follower_request_vote,
@@ -1413,6 +1414,25 @@ append_entries_reply_success(_Config) ->
                current_term := 7,
                machine_state := <<"hi1">>}, _} =
         ra_server:handle_leader(Msg1, State0#{current_term := 7}),
+    ok.
+
+append_entries_reply_success_quorum(_Config) ->
+    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4, N5 = ?N5,
+    Cluster = #{N1 => new_peer_with(#{next_index => 1, match_index => 0}),
+		N2 => new_peer_with(#{next_index => 1, match_index => 0}),
+                N3 => new_peer_with(#{next_index => 1, match_index => 0}),
+                N4 => new_peer_with(#{next_index => 1, match_index => 0}),
+                N5 => new_peer_with(#{next_index => 1, match_index => 0})},
+    State0 = (base_state(5, ?FUNCTION_NAME))#{commit_index => 0, data_commit_static_quorum_size => 2, cluster => Cluster},
+    Msg = {N2, #append_entries_reply{success = true, term = 5,
+				     next_index = 4,
+                                     last_index = 3}},
+    {leader, 
+     State,
+     _} = ra_server:handle_leader(Msg, State0),
+    ?INFO("state ~p", [State]),
+    #{cluster := #{N2 := #{next_index := 4, match_index := 3}}, 
+     commit_index := 3} = State,
     ok.
 
 append_entries_reply_no_success(_Config) ->
