@@ -1418,7 +1418,7 @@ append_entries_reply_success(_Config) ->
 append_entries_reply_success_quorum(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4, N5 = ?N5,
     Cluster = #{N1 => new_peer_with(#{next_index => 1, match_index => 0}),
-		N2 => new_peer_with(#{next_index => 1, match_index => 0}),
+                N2 => new_peer_with(#{next_index => 1, match_index => 0}),
                 N3 => new_peer_with(#{next_index => 1, match_index => 0}),
                 N4 => new_peer_with(#{next_index => 1, match_index => 0}),
                 N5 => new_peer_with(#{next_index => 1, match_index => 0})},
@@ -1428,7 +1428,7 @@ append_entries_reply_success_quorum(_Config) ->
     State1 = State0#{cfg => Cfg0#cfg{flexiraft_config = Flexi}},
 
     Msg = {N2, #append_entries_reply{success = true, term = 5,
-				     next_index = 4,
+                                     next_index = 4,
                                      last_index = 3}},
     {leader,
      State,
@@ -2502,8 +2502,8 @@ candidate_election_quorum(_config) ->
     State0 = (base_state(5, ?FUNCTION_NAME))#{current_term => 6, votes => 1},
     Cfg0 = maps:get(cfg, State0),
     State = State0#{cfg => Cfg0#cfg{flexiraft_config = Flexi},
-		    current_term => 6,
-		    votes => 1},
+                    current_term => 6,
+                    votes => 1},
     Reply = #request_vote_result{term = 6, vote_granted = true},
     {candidate, #{votes := 2} = State1, []}
         = ra_server:handle_candidate(Reply, State),
@@ -2515,9 +2515,9 @@ candidate_election_quorum(_config) ->
     PeerState = new_peer_with(#{next_index => 3+1, % leaders last log index + 1
                                 match_index => 0}), % initd to 0
     #{cluster := #{N2 := PeerState,
-    		   N3 := PeerState,
-     		   N4 := PeerState,
-     		   N5 := PeerState}} = State3,
+                   N3 := PeerState,
+                   N4 := PeerState,
+                   N5 := PeerState}} = State3,
     ok.
 
 pre_vote_election(_Config) ->
