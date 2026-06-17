@@ -1370,7 +1370,6 @@ follower_leader_change_before_written(_Config) ->
     ok.
 
 append_entries_reply_success(_Config) ->
-
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
     Cluster = #{N1 => new_peer_with(#{next_index => 5, match_index => 4}),
                 N2 => new_peer_with(#{next_index => 1, match_index => 0,
@@ -1425,17 +1424,22 @@ append_entries_reply_success_quorum(_Config) ->
                 N3 => new_peer_with(#{next_index => 1, match_index => 0}),
                 N4 => new_peer_with(#{next_index => 1, match_index => 0}),
                 N5 => new_peer_with(#{next_index => 1, match_index => 0})},
-    State0 = (base_state(5, ?FUNCTION_NAME))#{commit_index => 0, data_commit_static_quorum_size => 2, cluster => Cluster},
+    Flexi = #flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = 2},
+    State0 = (base_state(5, ?FUNCTION_NAME))#{commit_index => 0, cluster => Cluster},
+    Cfg0 = maps:get(cfg, State0),
+    State1 = State0#{cfg => Cfg0#cfg{flexiraft_config = Flexi}},
+
     Msg = {N2, #append_entries_reply{success = true, term = 5,
 				     next_index = 4,
                                      last_index = 3}},
-    {leader, 
+    {leader,
      State,
-     _} = ra_server:handle_leader(Msg, State0),
+     _} = ra_server:handle_leader(Msg, State1),
     ?INFO("state ~p", [State]),
     %% With data_commit_static_quorum_size 2, we only need one ack to commit
-    #{cluster := #{N2 := #{next_index := 4, match_index := 3}}, 
-     commit_index := 3} = State,
+    #{cluster := #{N2 := #{next_index := 4, match_index := 3}},
+      commit_index := 3
+     } = State,
     ok.
 
 append_entries_reply_no_success(_Config) ->
@@ -2571,7 +2575,12 @@ candidate_election(_Config) ->
 
 candidate_election_quorum(_config) ->
     N2 = ?N2, N3 = ?N3, N4 = ?N4, N5 = ?N5,
-    State = (base_state(5, ?FUNCTION_NAME))#{current_term => 6, votes => 1, data_commit_static_quorum_size => 2},
+    Flexi = #flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = 2},
+    State0 = (base_state(5, ?FUNCTION_NAME))#{current_term => 6, votes => 1},
+    Cfg0 = maps:get(cfg, State0),
+    State = State0#{cfg => Cfg0#cfg{flexiraft_config = Flexi},
+		    current_term => 6,
+		    votes => 1},
     Reply = #request_vote_result{term = 6, vote_granted = true},
     {candidate, #{votes := 2} = State1, []}
         = ra_server:handle_candidate(Reply, State),
@@ -2587,10 +2596,6 @@ candidate_election_quorum(_config) ->
      		   N4 := PeerState,
      		   N5 := PeerState}} = State3,
     ok.
-
-
-
-
 
 pre_vote_election(_Config) ->
     Token = make_ref(),
