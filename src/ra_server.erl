@@ -263,7 +263,7 @@
                               %% snapshot/checkpoint before writing a recovery
                               %% checkpoint on shutdown. 0 disables (default).
                               min_recovery_checkpoint_interval => non_neg_integer()
-			     }.
+                             }.
 
 -type ra_server_info_key() :: machine_version | atom().
 %% Key one can get in `ra_server_info()'.
@@ -432,8 +432,8 @@ init(#{id := Id,
                counter = maps:get(counter, Config, undefined),
                system_config = SystemConfig,
                min_recovery_checkpoint_interval = MinRecoveryCheckpointInterval,
-	       flexiraft_config = Flexi
-	      },
+               flexiraft_config = Flexi
+              },
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX, CommitIndex),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapshotIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_TERM, CurrentTerm),
@@ -549,7 +549,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             Effects00 = maybe_promote_peer(PeerId, State1, []),
             {State2, Effects0} = evaluate_quorum(State1, Effects00),
             {State3, Effects1} = process_pending_consistent_queries(State2,
-								    Effects0),
+                                                                    Effects0),
             Effects2 = [{next_event, info, pipeline_rpcs} | Effects1],
             case State3 of
                 #{cluster := #{Id := _}} ->
@@ -1047,7 +1047,7 @@ handle_leader(Msg, State) ->
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  #{cfg := #cfg{id = Id,
                                log_id = LogId,
-			       flexiraft_config = Flexi},
+                               flexiraft_config = Flexi},
                    current_term := Term,
                    votes := Votes,
                    cluster := Nodes} = State0) ->
@@ -3650,11 +3650,11 @@ data_commit_quorum_size(#flexiraft_cfg{quorum_type = static_quorum, data_commit_
 increment_commit_index(State0 = #{current_term := CurrentTerm, cfg := #cfg{flexiraft_config = Flexi}}) ->
     DataQuorumSize = data_commit_quorum_size(Flexi),
     PotentialNewCommitIndex = case DataQuorumSize of
-				  0 ->
-				      agreed_commit(match_indexes(State0));
-				  M ->
-				      agreed_commit(match_indexes(State0), M)
-			      end,
+                                  0 ->
+                                      agreed_commit(match_indexes(State0));
+                                  M ->
+                                      agreed_commit(match_indexes(State0), M)
+                              end,
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
     case fetch_term(PotentialNewCommitIndex, State0) of
