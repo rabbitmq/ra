@@ -108,8 +108,7 @@
                                  [ra_machine:release_cursor_condition()]},
       %% temporary state for handle_receive_snapshot
       current_event_type => term(),
-      snapshot_has_live_indexes => boolean(),
-      data_commit_static_quorum_size => non_neg_integer()
+      snapshot_has_live_indexes => boolean()
      }.
 
 -type state() :: ra_server_state().
@@ -263,9 +262,7 @@
                               %% minimum number of log entries since last
                               %% snapshot/checkpoint before writing a recovery
                               %% checkpoint on shutdown. 0 disables (default).
-                              min_recovery_checkpoint_interval => non_neg_integer(),
-			      %% default 0 implies not using static_quorum
-			      data_commit_static_quorum_size => non_neg_integer()          
+                              min_recovery_checkpoint_interval => non_neg_integer()
 			     }.
 
 -type ra_server_info_key() :: machine_version | atom().
@@ -371,7 +368,7 @@ init(#{id := Id,
 
     SnapModule = ra_machine:snapshot_module(Machine),
     Counter = maps:get(counter, Config, undefined),
-    DataCommitQuorumSize = maps:get(data_commit_static_quorum_size, Config, 0),
+    Flexi = maps:get(flexiraft_config, Config, #flexiraft_cfg{}),
     Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule,
                                     machine => Machine,
                                     system_config => SystemConfig,
@@ -434,7 +431,9 @@ init(#{id := Id,
                max_append_entries_rpc_batch_size = MaxAERBatchSize,
                counter = maps:get(counter, Config, undefined),
                system_config = SystemConfig,
-               min_recovery_checkpoint_interval = MinRecoveryCheckpointInterval},
+               min_recovery_checkpoint_interval = MinRecoveryCheckpointInterval,
+	       flexiraft_config = Flexi
+	      },
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX, CommitIndex),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapshotIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_TERM, CurrentTerm),
@@ -466,8 +465,7 @@ init(#{id := Id,
       aux_state => ra_machine:init_aux(MacMod, Name),
       query_index => 0,
       queries_waiting_heartbeats => queue:new(),
-      pending_consistent_queries => [],
-      data_commit_static_quorum_size => DataCommitQuorumSize}.
+      pending_consistent_queries => []}.
 
 recover(#{cfg := #cfg{log_id = LogId,
                       machine_version = MacVer},
@@ -551,7 +549,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             Effects00 = maybe_promote_peer(PeerId, State1, []),
             {State2, Effects0} = evaluate_quorum(State1, Effects00),
             {State3, Effects1} = process_pending_consistent_queries(State2,
-                                                                   Effects0),
+								    Effects0),
             Effects2 = [{next_event, info, pipeline_rpcs} | Effects1],
             case State3 of
                 #{cluster := #{Id := _}} ->
@@ -1048,12 +1046,13 @@ handle_leader(Msg, State) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  #{cfg := #cfg{id = Id,
-                               log_id = LogId},
+                               log_id = LogId,
+			       flexiraft_config = Flexi},
                    current_term := Term,
                    votes := Votes,
                    cluster := Nodes} = State0) ->
     NewVotes = Votes + 1,
-    DataCommitQuorumSize = maps:get(data_commit_static_quorum_size, State0, 0),
+    DataCommitQuorumSize = data_commit_quorum_size(Flexi),
     RequiredQuorum = required_quorum(Nodes, DataCommitQuorumSize),
     ?DEBUG("~ts: vote granted for term ~b votes ~b --- ~b req ~b ~p",
           [LogId, Term, NewVotes, Nodes, DataCommitQuorumSize, RequiredQuorum]),
@@ -1236,7 +1235,7 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
                                  token = Token},
                 #{current_term := Term,
                   votes := Votes,
-                  cfg := #cfg{log_id = LogId},
+                  cfg := #cfg{log_id = LogId, flexiraft_config = Flexi},
                   pre_vote_token := Token,
                   cluster := Nodes,
                   membership := voter} = State0) ->
@@ -1244,7 +1243,7 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
           [LogId, Token, Term, Votes + 1]),
     NewVotes = Votes + 1,
     State = update_term(Term, State0),
-    DataCommitQuorumSize = maps:get(data_commit_static_quorum_size, State, 0),
+    DataCommitQuorumSize = data_commit_quorum_size(Flexi),
     case required_quorum(Nodes, DataCommitQuorumSize) of
         NewVotes ->
             call_for_election(candidate, State);
@@ -3630,6 +3629,7 @@ append_entries_reply(Term, Success, #{log := Log} = State) ->
 evaluate_quorum(#{cfg := Cfg,
                   commit_index := CI0} = State0, Effects0) ->
     % TODO: shortcut function if commit index was not incremented
+    %%?INFO("CONFIG In evaluate_quorum ~p    ~p", [State0, Cfg]),
     State = #{commit_index := CI} = increment_commit_index(State0),
 
     Effects = case CI > CI0 of
@@ -3642,8 +3642,13 @@ evaluate_quorum(#{cfg := Cfg,
     {State1, Effects1} = apply_to(CI, State, Effects),
     maybe_emit_pending_release_cursor(State1, Effects1).
 
-increment_commit_index(State0 = #{current_term := CurrentTerm}) ->
-    DataQuorumSize = maps:get(data_commit_static_quorum_size, State0, 0),
+data_commit_quorum_size(#flexiraft_cfg{quorum_type = classic_majority}) ->
+    0;
+data_commit_quorum_size(#flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = N}) ->
+    N.
+
+increment_commit_index(State0 = #{current_term := CurrentTerm, cfg := #cfg{flexiraft_config = Flexi}}) ->
+    DataQuorumSize = data_commit_quorum_size(Flexi),
     PotentialNewCommitIndex = case DataQuorumSize of
 				  0 ->
 				      agreed_commit(match_indexes(State0));
@@ -3655,7 +3660,8 @@ increment_commit_index(State0 = #{current_term := CurrentTerm}) ->
     case fetch_term(PotentialNewCommitIndex, State0) of
         {CurrentTerm, State} ->
             State#{commit_index => PotentialNewCommitIndex};
-        {_, State} ->
+        {Bad, State} ->
+?INFO("Oops, term mismatch ~p for term ~p (need ~p(", [PotentialNewCommitIndex, Bad, CurrentTerm]),
             State
     end.
 
@@ -3673,7 +3679,7 @@ query_indexes(#{cfg := #cfg{id = Id},
 
 match_indexes(#{cfg := #cfg{id = Id},
                 cluster := Cluster,
-                log := Log}) ->
+                log := Log}) ->  %% commit indices of the cluster
     {LWIdx, _} = ra_log:last_written(Log),
     maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
                       Acc;
@@ -3685,7 +3691,7 @@ match_indexes(#{cfg := #cfg{id = Id},
               end, [LWIdx], Cluster).
 
 -spec agreed_commit(list()) -> ra_index().
-agreed_commit(Indexes) ->
+agreed_commit(Indexes) ->  %% highest commit index agreed by a majority
     Nth = trunc(length(Indexes) / 2) + 1,
     agreed_commit(Indexes, Nth).
 
@@ -3836,7 +3842,7 @@ update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster} = State0) ->
     end.
 
 get_current_query_quorum(State) ->
-    agreed_commit(query_indexes(State)).
+    agreed_commit(query_indexes(State)).  %% TODO Change me for flexiraft quorum
 
 -spec take_from_queue_while(fun((El) -> {true, Res} | false),
                                 queue:queue(El)) ->
@@ -4000,7 +4006,7 @@ maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
             Effects
     end.
 
--spec required_quorum(ra_cluster(), pos_integer()) -> pos_integer().
+-spec required_quorum(ra_cluster(), non_neg_integer()) -> pos_integer().
 required_quorum(Cluster, DataCommitQuorumSize) ->
     required_quorum_count(count_voters(Cluster), DataCommitQuorumSize).
 
