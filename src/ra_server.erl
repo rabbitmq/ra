@@ -1055,8 +1055,8 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
     NewVotes = Votes + 1,
     DataCommitQuorumSize = data_commit_quorum_size(Flexi),
     RequiredQuorum = required_quorum(Nodes, DataCommitQuorumSize),
-    ?DEBUG("~ts: vote granted for term ~b votes ~b --- ~b req ~b ~p",
-          [LogId, Term, NewVotes, Nodes, DataCommitQuorumSize, RequiredQuorum]),
+    ?DEBUG("~ts: vote granted for term ~b votes ~b  required quorum ~b ~p",
+          [LogId, Term, NewVotes, Nodes, RequiredQuorum]),
     case RequiredQuorum of
         NewVotes ->
             State = initialise_peers(State0#{leader_id => Id}),
@@ -3640,7 +3640,6 @@ append_entries_reply(Term, Success, #{log := Log} = State) ->
 evaluate_quorum(#{cfg := Cfg,
                   commit_index := CI0} = State0, Effects0) ->
     % TODO: shortcut function if commit index was not incremented
-    %%?INFO("CONFIG In evaluate_quorum ~p    ~p", [State0, Cfg]),
     State = #{commit_index := CI} = increment_commit_index(State0),
 
     Effects = case CI > CI0 of
@@ -3671,8 +3670,7 @@ increment_commit_index(State0 = #{current_term := CurrentTerm, cfg := #cfg{flexi
     case fetch_term(PotentialNewCommitIndex, State0) of
         {CurrentTerm, State} ->
             State#{commit_index => PotentialNewCommitIndex};
-        {Bad, State} ->
-?INFO("Oops, term mismatch ~p for term ~p (need ~p(", [PotentialNewCommitIndex, Bad, CurrentTerm]),
+        {_, State} ->
             State
     end.
 
@@ -3690,7 +3688,7 @@ query_indexes(#{cfg := #cfg{id = Id},
 
 match_indexes(#{cfg := #cfg{id = Id},
                 cluster := Cluster,
-                log := Log}) ->  %% commit indices of the cluster
+                log := Log}) ->
     {LWIdx, _} = ra_log:last_written(Log),
     maps:fold(fun (PeerId, _, Acc) when PeerId == Id ->
                       Acc;
@@ -3707,7 +3705,7 @@ agreed_commit(Indexes) ->  %% highest commit index agreed by a majority
     agreed_commit(Indexes, Nth).
 
 -spec agreed_commit(list(), pos_integer()) -> ra_index().
-agreed_commit(Indexes, Nth) -> %% return Mth highest
+agreed_commit(Indexes, Nth) ->  %% return Mth highest
     SortedIdxs = lists:sort(fun erlang:'>'/2, Indexes),
     lists:nth(Nth, SortedIdxs).
 
@@ -3853,7 +3851,8 @@ update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster} = State0) ->
     end.
 
 get_current_query_quorum(State) ->
-    agreed_commit(query_indexes(State)).  %% TODO Change me for flexiraft quorum
+    %% Explicitly not implemented for Flexiraft
+    agreed_commit(query_indexes(State)).
 
 -spec take_from_queue_while(fun((El) -> {true, Res} | false),
                                 queue:queue(El)) ->
