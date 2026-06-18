@@ -1056,8 +1056,8 @@ handle_candidate(#request_vote_result{term = Term, vote_granted = true},
     NewVotes = Votes + 1,
     DataCommitQuorumSize = data_commit_quorum_size(Flexi),
     RequiredQuorum = required_quorum(Nodes, DataCommitQuorumSize),
-    ?DEBUG("~ts: vote granted for term ~b votes ~b  required quorum ~b ~p",
-          [LogId, Term, NewVotes, Nodes, RequiredQuorum]),
+    ?DEBUG("~ts: vote granted for term ~b votes ~b required quorum ~b",
+           [LogId, Term, NewVotes, RequiredQuorum]),
     case RequiredQuorum of
         NewVotes ->
             State = initialise_peers(State0#{leader_id => Id}),
