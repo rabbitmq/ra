@@ -2493,7 +2493,7 @@ candidate_election(_Config) ->
      ]} = ra_server:handle_leader(Noop, State2),
     ok.
 
-candidate_election_quorum(_config) ->
+candidate_election_quorum(_Config) ->
     N2 = ?N2, N3 = ?N3, N4 = ?N4, N5 = ?N5,
     Flexi = #flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = 2},
     State0 = (base_state(5, ?FUNCTION_NAME))#{current_term => 6, votes => 1},
