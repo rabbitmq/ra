@@ -1428,7 +1428,7 @@ append_entries_reply_success_quorum(_Config) ->
     State1 = State0#{cfg => Cfg0#cfg{flexiraft_config = Flexi}},
 
     Msg = {N2, #append_entries_reply{success = true, term = 5,
-                                     next_index = 4,
+                                     next_index = 4, last_term = 5,
                                      last_index = 3}},
     {leader,
      State,
