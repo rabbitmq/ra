@@ -36,5 +36,5 @@
          %% minimum number of log entries since last snapshot/checkpoint
          %% before writing a recovery checkpoint on shutdown. 0 disables (default).
          min_recovery_checkpoint_interval = 0 :: non_neg_integer(),
-	 flexiraft_config = #flexiraft_cfg{} :: #flexiraft_cfg{}
+         flexiraft_config = #flexiraft_cfg{} :: #flexiraft_cfg{}
         }).
