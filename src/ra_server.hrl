@@ -13,9 +13,9 @@
 
 -type flexiraft_quorum_type() :: classic_majority | static_quorum.
 -record(flexiraft_cfg, 
-	{quorum_type = classic_majority :: flexiraft_quorum_type(),
-	 %% default 0 implies not using static_quorum
-	 data_commit_static_quorum_size = 0 :: non_neg_integer()}).
+    {quorum_type = classic_majority :: flexiraft_quorum_type(),
+     %% default 0 implies not using static_quorum
+     data_commit_static_quorum_size = 0 :: non_neg_integer()}).
 
 -record(cfg,
         {id :: ra_server_id(),
