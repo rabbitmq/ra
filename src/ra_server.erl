@@ -231,6 +231,7 @@
 %% version, it switches to that new version. This was the default and only
 %% possible behavior in Ra up to 2.15.</li>
 %% </ul>
+
 -type ra_server_config() :: #{id := ra_server_id(),
                               uid := ra_uid(),
                               %% a friendly name to refer to a particular
@@ -4027,7 +4028,7 @@ required_quorum(Cluster, DataCommitQuorumSize) ->
 
 required_quorum_count(Voters, 0) ->
     trunc(Voters / 2) + 1;
-required_quorum_count(Voters, DataCommitQuorumSize)  ->
+required_quorum_count(Voters, DataCommitQuorumSize) ->
     max(trunc(Voters / 2) + 1, Voters - DataCommitQuorumSize + 1).
 
 count_voters(Cluster) ->
