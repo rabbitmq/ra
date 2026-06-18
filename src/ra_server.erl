@@ -3645,10 +3645,12 @@ evaluate_quorum(#{cfg := Cfg,
 
 data_commit_quorum_size(#flexiraft_cfg{quorum_type = classic_majority}) ->
     0;
-data_commit_quorum_size(#flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = N}) ->
+data_commit_quorum_size(#flexiraft_cfg{quorum_type = static_quorum,
+                                       data_commit_static_quorum_size = N}) ->
     N.
 
-increment_commit_index(State0 = #{current_term := CurrentTerm, cfg := #cfg{flexiraft_config = Flexi}}) ->
+increment_commit_index(State0 = #{current_term := CurrentTerm,
+                                  cfg := #cfg{flexiraft_config = Flexi}}) ->
     DataQuorumSize = data_commit_quorum_size(Flexi),
     PotentialNewCommitIndex = case DataQuorumSize of
                                   0 ->
@@ -4011,7 +4013,8 @@ maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
 validate_flexiraft_config(#flexiraft_cfg{quorum_type = classic_majority}, _N) ->
     ok;
 validate_flexiraft_config(#flexiraft_cfg{quorum_type = static_quorum,
-                                         data_commit_static_quorum_size = M}, N) when M >= 1, M =< N ->
+                                         data_commit_static_quorum_size = M}, N)
+  when M >= 1, M =< N ->
     %% n.b. we do not validate that the M is _sane_, e.g. smaller than a classic majority
     ok;
 validate_flexiraft_config(#flexiraft_cfg{data_commit_static_quorum_size = M}, N) ->
