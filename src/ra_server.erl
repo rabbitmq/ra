@@ -369,6 +369,8 @@ init(#{id := Id,
     SnapModule = ra_machine:snapshot_module(Machine),
     Counter = maps:get(counter, Config, undefined),
     Flexi = maps:get(flexiraft_config, Config, #flexiraft_cfg{}),
+    ok = validate_flexiraft_config(Flexi, length(InitialNodes)),
+
     Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule,
                                     machine => Machine,
                                     system_config => SystemConfig,
@@ -4006,6 +4008,16 @@ maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
             Effects
     end.
 
+-spec validate_flexiraft_config(#flexiraft_cfg{}, pos_integer()) -> pos_integer().
+validate_flexiraft_config(#flexiraft_cfg{quorum_type = classic_majority}, _N) ->
+    ok;
+validate_flexiraft_config(#flexiraft_cfg{quorum_type = static_quorum,
+                                         data_commit_static_quorum_size = M}, N) when M >= 1, M =< N ->
+    ok;
+validate_flexiraft_config(#flexiraft_cfg{data_commit_static_quorum_size = M}, N) ->
+    exit({invalid_flexiraft_config, {data_commit_static_quorum_size, M,
+                                     cluster_size, N}}).
+
 -spec required_quorum(ra_cluster(), non_neg_integer()) -> pos_integer().
 required_quorum(Cluster, DataCommitQuorumSize) ->
     required_quorum_count(count_voters(Cluster), DataCommitQuorumSize).
@@ -4293,6 +4305,25 @@ required_quorum_test() ->
     %% degenerate, useless case, but sanity check
     3 = required_quorum_count(5, 4),
 
+    ok.
+
+validate_flexiraft_config_test() ->
+    ok = validate_flexiraft_config(
+           #flexiraft_cfg{quorum_type = classic_majority}, 5),
+    ok = validate_flexiraft_config(
+           #flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = 3}, 5),
+    ok = validate_flexiraft_config(
+           #flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = 1}, 5),
+    ok = validate_flexiraft_config(
+           #flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = 5}, 5),
+    ?assertExit({invalid_flexiraft_config, _},
+                validate_flexiraft_config(
+                  #flexiraft_cfg{quorum_type = static_quorum,
+                                 data_commit_static_quorum_size = 0}, 5)),
+    ?assertExit({invalid_flexiraft_config, _},
+                validate_flexiraft_config(
+                  #flexiraft_cfg{quorum_type = static_quorum,
+                                 data_commit_static_quorum_size = 6}, 5)),
     ok.
 
 -endif.
