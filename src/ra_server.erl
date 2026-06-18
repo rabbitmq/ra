@@ -4008,11 +4008,12 @@ maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
             Effects
     end.
 
--spec validate_flexiraft_config(#flexiraft_cfg{}, pos_integer()) -> pos_integer().
+-spec validate_flexiraft_config(#flexiraft_cfg{}, non_neg_integer()) -> ok.
 validate_flexiraft_config(#flexiraft_cfg{quorum_type = classic_majority}, _N) ->
     ok;
 validate_flexiraft_config(#flexiraft_cfg{quorum_type = static_quorum,
                                          data_commit_static_quorum_size = M}, N) when M >= 1, M =< N ->
+    %% n.b. we do not validate that the M is _sane_, e.g. smaller than a classic majority
     ok;
 validate_flexiraft_config(#flexiraft_cfg{data_commit_static_quorum_size = M}, N) ->
     exit({invalid_flexiraft_config, {data_commit_static_quorum_size, M,
