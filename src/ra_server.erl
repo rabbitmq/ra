@@ -3699,9 +3699,9 @@ agreed_commit(Indexes) ->  %% highest commit index agreed by a majority
     agreed_commit(Indexes, Nth).
 
 -spec agreed_commit(list(), pos_integer()) -> ra_index().
-agreed_commit(Indexes, Nth) ->  %% return Mth highest
+agreed_commit(Indexes, Nth) ->  %% return Nth highest
     SortedIdxs = lists:sort(fun erlang:'>'/2, Indexes),
-    lists:nth(Nth, SortedIdxs).
+    lists:nth(min(Nth, length(SortedIdxs)), SortedIdxs).
 
 log_unhandled_msg(RaState, Msg, #{cfg := #cfg{log_id = LogId}}) ->
     ?DEBUG("~ts: ~w received unhandled msg: ~W", [LogId, RaState, Msg, 6]).
