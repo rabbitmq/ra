@@ -1439,7 +1439,7 @@ append_entries_reply_success_quorum(_Config) ->
     ok.
 
 append_entries_reply_cluster_smaller_than_quorum(_Config) ->
-    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
+    N1 = ?N1, N2 = ?N2,
     Cluster0 = #{N1 => new_peer_with(#{next_index => 1, match_index => 0}),
                  N2 => new_peer_with(#{next_index => 1, match_index => 0})},
     Flexi = #flexiraft_cfg{quorum_type = static_quorum,
@@ -2517,9 +2517,7 @@ candidate_election_quorum(_Config) ->
     Flexi = #flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = 2},
     State0 = (base_state(5, ?FUNCTION_NAME))#{current_term => 6, votes => 1},
     Cfg0 = maps:get(cfg, State0),
-    State = State0#{cfg => Cfg0#cfg{flexiraft_config = Flexi},
-                    current_term => 6,
-                    votes => 1},
+    State = State0#{cfg => Cfg0#cfg{flexiraft_config = Flexi}},
     Reply = #request_vote_result{term = 6, vote_granted = true},
     {candidate, #{votes := 2} = State1, []}
         = ra_server:handle_candidate(Reply, State),
