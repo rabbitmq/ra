@@ -263,7 +263,8 @@
                               %% minimum number of log entries since last
                               %% snapshot/checkpoint before writing a recovery
                               %% checkpoint on shutdown. 0 disables (default).
-                              min_recovery_checkpoint_interval => non_neg_integer()
+                              min_recovery_checkpoint_interval => non_neg_integer(),
+                              flexiraft_config => #flexiraft_cfg{}
                              }.
 
 -type ra_server_info_key() :: machine_version | atom().
@@ -4288,6 +4289,9 @@ agreed_commit_test() ->
     3 = agreed_commit([5, 5, 3, 2, 1], 3),
     % one way ahead of the rest
     1 = agreed_commit([5, 2, 1, 1, 1], 4),
+
+    % degenerate clamping
+    2 = agreed_commit([3, 3, 2], 15),
 
     ok.
 
