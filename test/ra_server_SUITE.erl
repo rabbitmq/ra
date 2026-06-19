@@ -1435,18 +1435,17 @@ append_entries_reply_success_quorum(_Config) ->
     {leader, State, _} = ra_server:handle_leader(Msg, State1),
     %% With data_commit_static_quorum_size 2, we only need one ack to commit
     #{cluster := #{N2 := #{next_index := 4, match_index := 3}},
-      commit_index := 3
-     } = State,
+      commit_index := 3} = State,
     ok.
 
 append_entries_reply_cluster_smaller_than_quorum(_Config) ->
-    N1 = ?N1, N2 = ?N2, N3 = ?N3,
-    Cluster = #{N1 => new_peer_with(#{next_index => 1, match_index => 0}),
-                N2 => new_peer_with(#{next_index => 1, match_index => 0})},
+    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
+    Cluster0 = #{N1 => new_peer_with(#{next_index => 1, match_index => 0}),
+                 N2 => new_peer_with(#{next_index => 1, match_index => 0})},
     Flexi = #flexiraft_cfg{quorum_type = static_quorum,
                            data_commit_static_quorum_size = 3},  %% clamped
     State0 = (base_state(2, ?FUNCTION_NAME))#{commit_index => 0,
-                                              cluster => Cluster},
+                                              cluster => Cluster0},
     Cfg0 = maps:get(cfg, State0),
     State1 = State0#{cfg => Cfg0#cfg{flexiraft_config = Flexi}},
     Msg = {N2, #append_entries_reply{success = true, term = 5,
@@ -1454,12 +1453,8 @@ append_entries_reply_cluster_smaller_than_quorum(_Config) ->
                                      last_index = 3}},
     {leader, State2, _} = ra_server:handle_leader(Msg, State1),
     #{cluster := #{N2 := #{next_index := 4, match_index := 3}},
-      commit_index := 3
-     } = State2,
-
+      commit_index := 3} = State2,
     ok.
-    
-
 
 append_entries_reply_no_success(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3,
