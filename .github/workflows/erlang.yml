@@ -23,9 +23,9 @@ jobs:
       env:
         # windows-latest now reports ImageOS=win25-vs2026, which the pinned
         # setup-beam does not recognize (it keys on the exact string "win25").
-        # Override so the OS lookup resolves to windows-2025. Remove once
-        # https://github.com/erlef/setup-beam/pull/461 ships.
-        ImageOS: win25
+        # Override to "win25" on Windows
+        # Remove once https://github.com/erlef/setup-beam/pull/461 ships.
+        ImageOS: ${{ matrix.os == 'windows-latest' && 'win25' || env.ImageOS }}
       with:
         otp-version: ${{ matrix.otp_version }}
         rebar3-version: '3.25.1'
