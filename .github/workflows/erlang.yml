@@ -13,6 +13,13 @@ jobs:
       matrix:
         otp_version: [26, 27, 28]
         os: [ubuntu-latest, windows-latest]
+        # Pin ImageOS per OS: windows-latest reports win25-vs2026, which the
+        # pinned setup-beam can't map. Drop once erlef/setup-beam#461 ships.
+        include:
+          - os: ubuntu-latest
+            image_os: ubuntu24
+          - os: windows-latest
+            image_os: win25
     steps:
     - name: Checkout
       uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
@@ -20,6 +27,8 @@ jobs:
       # Pin setup-beam to a version that works with Windows (not released at
       # the time of commit).
       uses: erlef/setup-beam@566deebc640988a494af16ecdf6f820fe0d3fea4
+      env:
+        ImageOS: ${{ matrix.image_os }}
       with:
         otp-version: ${{ matrix.otp_version }}
         rebar3-version: '3.25.1'
