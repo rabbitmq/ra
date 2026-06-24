@@ -11,12 +11,6 @@
 -define(DEFAULT_MACHINE_UPGRADE_STRATEGY, all).
 -define(FLUSH_COMMANDS_SIZE, 16).
 
--type flexiraft_quorum_type() :: classic_majority | static_quorum.
--record(flexiraft_cfg,
-    {quorum_type = classic_majority :: flexiraft_quorum_type(),
-     %% default 0 implies not using static_quorum
-     data_commit_static_quorum_size = 0 :: non_neg_integer()}).
-
 -record(cfg,
         {id :: ra_server_id(),
          uid :: ra_uid(),
@@ -35,6 +29,5 @@
          system_config :: ra_system:config(),
          %% minimum number of log entries since last snapshot/checkpoint
          %% before writing a recovery checkpoint on shutdown. 0 disables (default).
-         min_recovery_checkpoint_interval = 0 :: non_neg_integer(),
-         flexiraft_config = #flexiraft_cfg{} :: #flexiraft_cfg{}
+         min_recovery_checkpoint_interval = 0 :: non_neg_integer()
         }).

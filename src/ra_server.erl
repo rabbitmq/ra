@@ -263,8 +263,7 @@
                               %% minimum number of log entries since last
                               %% snapshot/checkpoint before writing a recovery
                               %% checkpoint on shutdown. 0 disables (default).
-                              min_recovery_checkpoint_interval => non_neg_integer(),
-                              flexiraft_config => #flexiraft_cfg{}
+                              min_recovery_checkpoint_interval => non_neg_integer()
                              }.
 
 -type ra_server_info_key() :: machine_version | atom().
@@ -370,8 +369,6 @@ init(#{id := Id,
 
     SnapModule = ra_machine:snapshot_module(Machine),
     Counter = maps:get(counter, Config, undefined),
-    Flexi = maps:get(flexiraft_config, Config, #flexiraft_cfg{}),
-    ok = validate_flexiraft_config(Flexi, length(InitialNodes)),
 
     Log0 = ra_log:init(LogInitArgs#{snapshot_module => SnapModule,
                                     machine => Machine,
@@ -435,8 +432,7 @@ init(#{id := Id,
                max_append_entries_rpc_batch_size = MaxAERBatchSize,
                counter = maps:get(counter, Config, undefined),
                system_config = SystemConfig,
-               min_recovery_checkpoint_interval = MinRecoveryCheckpointInterval,
-               flexiraft_config = Flexi
+               min_recovery_checkpoint_interval = MinRecoveryCheckpointInterval
               },
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX, CommitIndex),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapshotIdx),
@@ -1050,17 +1046,14 @@ handle_leader(Msg, State) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_candidate(#request_vote_result{term = Term, vote_granted = true},
                  #{cfg := #cfg{id = Id,
-                               log_id = LogId,
-                               flexiraft_config = Flexi},
+                               log_id = LogId},
                    current_term := Term,
                    votes := Votes,
                    cluster := Nodes} = State0) ->
     NewVotes = Votes + 1,
-    DataCommitQuorumSize = data_commit_quorum_size(Flexi),
-    RequiredQuorum = required_quorum(Nodes, DataCommitQuorumSize),
-    ?DEBUG("~ts: vote granted for term ~b votes ~b required quorum ~b",
-           [LogId, Term, NewVotes, RequiredQuorum]),
-    case RequiredQuorum of
+    ?DEBUG("~ts: vote granted for term ~b votes ~b",
+          [LogId, Term, NewVotes]),
+    case required_quorum(Nodes) of
         NewVotes ->
             State = initialise_peers(State0#{leader_id => Id}),
             Effects = post_election_effects(State),
@@ -1239,7 +1232,7 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
                                  token = Token},
                 #{current_term := Term,
                   votes := Votes,
-                  cfg := #cfg{log_id = LogId, flexiraft_config = Flexi},
+                  cfg := #cfg{log_id = LogId},
                   pre_vote_token := Token,
                   cluster := Nodes,
                   membership := voter} = State0) ->
@@ -1247,8 +1240,7 @@ handle_pre_vote(#pre_vote_result{term = Term, vote_granted = true,
           [LogId, Token, Term, Votes + 1]),
     NewVotes = Votes + 1,
     State = update_term(Term, State0),
-    DataCommitQuorumSize = data_commit_quorum_size(Flexi),
-    case required_quorum(Nodes, DataCommitQuorumSize) of
+    case required_quorum(Nodes) of
         NewVotes ->
             call_for_election(candidate, State);
         _ ->
@@ -3645,21 +3637,14 @@ evaluate_quorum(#{cfg := Cfg,
     {State1, Effects1} = apply_to(CI, State, Effects),
     maybe_emit_pending_release_cursor(State1, Effects1).
 
-data_commit_quorum_size(#flexiraft_cfg{quorum_type = classic_majority}) ->
-    0;
-data_commit_quorum_size(#flexiraft_cfg{quorum_type = static_quorum,
-                                       data_commit_static_quorum_size = N}) ->
-    N.
+data_commit_quorum_size(N) when N rem 2 =:= 0 ->
+    N div 2;
+data_commit_quorum_size(N) when N rem 2 =/= 0 ->
+    N div 2 + 1.
 
-increment_commit_index(State0 = #{current_term := CurrentTerm,
-                                  cfg := #cfg{flexiraft_config = Flexi}}) ->
-    DataQuorumSize = data_commit_quorum_size(Flexi),
-    PotentialNewCommitIndex = case DataQuorumSize of
-                                  0 ->
-                                      agreed_commit(match_indexes(State0));
-                                  M ->
-                                      agreed_commit(match_indexes(State0), M)
-                              end,
+increment_commit_index(State0 = #{current_term := CurrentTerm, cluster := Cluster}) ->
+    DataQuorumSize = data_commit_quorum_size(count_voters(Cluster)),
+    PotentialNewCommitIndex = agreed_commit(match_indexes(State0), DataQuorumSize),
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
     case fetch_term(PotentialNewCommitIndex, State0) of
@@ -3700,9 +3685,9 @@ agreed_commit(Indexes) ->  %% highest commit index agreed by a majority
     agreed_commit(Indexes, Nth).
 
 -spec agreed_commit(list(), pos_integer()) -> ra_index().
-agreed_commit(Indexes, Nth) ->  %% return Nth highest
+agreed_commit(Indexes, CommitQuorumSize) ->  %% return Nth highest
     SortedIdxs = lists:sort(fun erlang:'>'/2, Indexes),
-    lists:nth(min(Nth, length(SortedIdxs)), SortedIdxs).
+    lists:nth(min(CommitQuorumSize, length(SortedIdxs)), SortedIdxs).
 
 log_unhandled_msg(RaState, Msg, #{cfg := #cfg{log_id = LogId}}) ->
     ?DEBUG("~ts: ~w received unhandled msg: ~W", [LogId, RaState, Msg, 6]).
@@ -4011,26 +3996,13 @@ maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
             Effects
     end.
 
--spec validate_flexiraft_config(#flexiraft_cfg{}, non_neg_integer()) -> ok.
-validate_flexiraft_config(#flexiraft_cfg{quorum_type = classic_majority}, _N) ->
-    ok;
-validate_flexiraft_config(#flexiraft_cfg{quorum_type = static_quorum,
-                                         data_commit_static_quorum_size = M}, N)
-  when M >= 1, M =< N ->
-    %% n.b. we do not validate that the M is _sane_, e.g. smaller than a classic majority
-    ok;
-validate_flexiraft_config(#flexiraft_cfg{data_commit_static_quorum_size = M}, N) ->
-    exit({invalid_flexiraft_config, {data_commit_static_quorum_size, M,
-                                     cluster_size, N}}).
+-spec required_quorum(ra_cluster()) -> pos_integer().
+required_quorum(Cluster) ->
+    Voters = count_voters(Cluster),
+    required_quorum_count(Voters).
 
--spec required_quorum(ra_cluster(), non_neg_integer()) -> pos_integer().
-required_quorum(Cluster, DataCommitQuorumSize) ->
-    required_quorum_count(count_voters(Cluster), DataCommitQuorumSize).
-
-required_quorum_count(Voters, 0) ->
-    trunc(Voters / 2) + 1;
-required_quorum_count(Voters, DataCommitQuorumSize) ->
-    max(trunc(Voters / 2) + 1, Voters - DataCommitQuorumSize + 1).
+required_quorum_count(Voters) ->
+    trunc(Voters / 2) + 1.
 
 count_voters(Cluster) ->
     maps:fold(
@@ -4295,43 +4267,24 @@ agreed_commit_test() ->
 
     ok.
 
-required_quorum_test() ->
-    %% 3 voters, no election quorum messing
-    2 = required_quorum_count(3, 0),
-    %% 4 voters, no election quorum messing
-    3 = required_quorum_count(4, 0),
-    %% 5 voters, no election quorum messing
-    3 = required_quorum_count(5, 0),
-
-    %% 5 voters, data commit quorum is 1
-    5 = required_quorum_count(5, 1),
-    %% 5 voters, data commit quorum is 2
-    4 = required_quorum_count(5, 2),
-    %% 5 voters, data commit quorum is 3
-    3 = required_quorum_count(5, 3),
-    %% 5 voters, data commit quorum is 4
-    %% degenerate, useless case, but sanity check
-    3 = required_quorum_count(5, 4),
+required_quorum_count_test() ->
+    %% 3 voters, 2 needed for quorum
+    2 = required_quorum_count(3),
+    %% 4 voters
+    3 = required_quorum_count(4),
+    %% 5 voters
+    3 = required_quorum_count(5),
 
     ok.
 
-validate_flexiraft_config_test() ->
-    ok = validate_flexiraft_config(
-           #flexiraft_cfg{quorum_type = classic_majority}, 5),
-    ok = validate_flexiraft_config(
-           #flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = 3}, 5),
-    ok = validate_flexiraft_config(
-           #flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = 1}, 5),
-    ok = validate_flexiraft_config(
-           #flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = 5}, 5),
-    ?assertExit({invalid_flexiraft_config, _},
-                validate_flexiraft_config(
-                  #flexiraft_cfg{quorum_type = static_quorum,
-                                 data_commit_static_quorum_size = 0}, 5)),
-    ?assertExit({invalid_flexiraft_config, _},
-                validate_flexiraft_config(
-                  #flexiraft_cfg{quorum_type = static_quorum,
-                                 data_commit_static_quorum_size = 6}, 5)),
+data_commit_quorum_size_test() ->
+    1 = data_commit_quorum_size(1),
+    1 = data_commit_quorum_size(2),
+    2 = data_commit_quorum_size(3),
+    2 = data_commit_quorum_size(4),
+    3 = data_commit_quorum_size(5),
+    3 = data_commit_quorum_size(6),
+    4 = data_commit_quorum_size(7),
     ok.
 
 -endif.

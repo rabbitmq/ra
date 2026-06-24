@@ -35,8 +35,7 @@ all() ->
      follower_aer_dupe,
      follower_leader_change_before_written,
      append_entries_reply_success,
-     append_entries_reply_success_quorum,
-     append_entries_reply_cluster_smaller_than_quorum,
+     append_entries_reply_success_even_quorum,
      append_entries_reply_no_success,
      append_entries_reply_no_success_from_unknown_peer,
      follower_request_vote,
@@ -54,7 +53,7 @@ all() ->
      leader_receives_pre_vote,
      leader_pre_vote_sends_snapshot_to_backoff_peer,
      candidate_election,
-     candidate_election_quorum,
+     candidate_election_even_quorum,
      is_new,
      command,
      command_notify,
@@ -1416,44 +1415,20 @@ append_entries_reply_success(_Config) ->
         ra_server:handle_leader(Msg1, State0#{current_term := 7}),
     ok.
 
-append_entries_reply_success_quorum(_Config) ->
+append_entries_reply_success_even_quorum(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4, N5 = ?N5,
     Cluster = #{N1 => new_peer_with(#{next_index => 1, match_index => 0}),
                 N2 => new_peer_with(#{next_index => 1, match_index => 0}),
                 N3 => new_peer_with(#{next_index => 1, match_index => 0}),
-                N4 => new_peer_with(#{next_index => 1, match_index => 0}),
-                N5 => new_peer_with(#{next_index => 1, match_index => 0})},
-    Flexi = #flexiraft_cfg{quorum_type = static_quorum,
-                           data_commit_static_quorum_size = 2},
-    State0 = (base_state(5, ?FUNCTION_NAME))#{commit_index => 0, cluster => Cluster},
-    Cfg0 = maps:get(cfg, State0),
-    State1 = State0#{cfg => Cfg0#cfg{flexiraft_config = Flexi}},
-
+                N4 => new_peer_with(#{next_index => 1, match_index => 0})},
+    State0 = (base_state(4, ?FUNCTION_NAME))#{commit_index => 0, cluster => Cluster},
     Msg = {N2, #append_entries_reply{success = true, term = 5,
                                      next_index = 4, last_term = 5,
                                      last_index = 3}},
-    {leader, State, _} = ra_server:handle_leader(Msg, State1),
+    {leader, State, _} = ra_server:handle_leader(Msg, State0),
     %% With data_commit_static_quorum_size 2, we only need one ack to commit
     #{cluster := #{N2 := #{next_index := 4, match_index := 3}},
       commit_index := 3} = State,
-    ok.
-
-append_entries_reply_cluster_smaller_than_quorum(_Config) ->
-    N1 = ?N1, N2 = ?N2,
-    Cluster0 = #{N1 => new_peer_with(#{next_index => 1, match_index => 0}),
-                 N2 => new_peer_with(#{next_index => 1, match_index => 0})},
-    Flexi = #flexiraft_cfg{quorum_type = static_quorum,
-                           data_commit_static_quorum_size = 3},  %% clamped
-    State0 = (base_state(2, ?FUNCTION_NAME))#{commit_index => 0,
-                                              cluster => Cluster0},
-    Cfg0 = maps:get(cfg, State0),
-    State1 = State0#{cfg => Cfg0#cfg{flexiraft_config = Flexi}},
-    Msg = {N2, #append_entries_reply{success = true, term = 5,
-                                     next_index = 4, last_term = 5,
-                                     last_index = 3}},
-    {leader, State2, _} = ra_server:handle_leader(Msg, State1),
-    #{cluster := #{N2 := #{next_index := 4, match_index := 3}},
-      commit_index := 3} = State2,
     ok.
 
 append_entries_reply_no_success(_Config) ->
@@ -2514,13 +2489,11 @@ candidate_election(_Config) ->
 
 candidate_election_quorum(_Config) ->
     N2 = ?N2, N3 = ?N3, N4 = ?N4, N5 = ?N5,
-    Flexi = #flexiraft_cfg{quorum_type = static_quorum, data_commit_static_quorum_size = 2},
     State0 = (base_state(5, ?FUNCTION_NAME))#{current_term => 6, votes => 1},
     Cfg0 = maps:get(cfg, State0),
-    State = State0#{cfg => Cfg0#cfg{flexiraft_config = Flexi}},
     Reply = #request_vote_result{term = 6, vote_granted = true},
     {candidate, #{votes := 2} = State1, []}
-        = ra_server:handle_candidate(Reply, State),
+        = ra_server:handle_candidate(Reply, State0),
     {candidate, #{votes := 3} = State2, []}
         = ra_server:handle_candidate(Reply, State1),
     {leader, State3, _}
