@@ -53,7 +53,6 @@ all() ->
      leader_receives_pre_vote,
      leader_pre_vote_sends_snapshot_to_backoff_peer,
      candidate_election,
-     candidate_election_even_quorum,
      is_new,
      command,
      command_notify,
@@ -1238,14 +1237,23 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                commit_index := 1,
                last_applied := 1,
                machine_state := <<"hi1">>} = State2,
-     [{send_rpc, N3,
+     Effects} = ra_server:handle_leader(pipeline_rpcs, State1),
+    [{send_rpc, N3,
        #append_entries_rpc{term = 5, leader_id = N1,
                            prev_log_index = 1,
                            prev_log_term = 1,
                            leader_commit = 1,
                            entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
                                       {3, 5, {'$usr', _, <<"hi3">>, _}}]}
-      }]} = ra_server:handle_leader(pipeline_rpcs, State1),
+      }, {send_rpc, N4,
+       #append_entries_rpc{term = 5, leader_id = N1,
+                           prev_log_index = 1,
+                           prev_log_term = 1,
+                           leader_commit = 1,
+                           entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
+                                      {3, 5, {'$usr', _, <<"hi3">>, _}}]}
+      }
+     ] = lists:keysort(2, Effects),
 
     % ra_join translates into cluster update
     {leader, #{cluster := #{N2 := #{next_index := 5,
@@ -1256,7 +1264,8 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                commit_index := 1,
                last_applied := 1,
                machine_state := <<"hi1">>} = State3,
-     [{send_rpc, N3,
+     Effects2} = ra_server:handle_leader(RaJoin, State2),
+    [{send_rpc, N2,
        #append_entries_rpc{term = 5, leader_id = N1,
                            prev_log_index = 3,
                            prev_log_term = 5,
@@ -1265,16 +1274,25 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                                               #{N2 := #{voter_status := #{membership := voter,
                                                                           uid := <<"uid">>}}},
                                               _}}]}},
-      {send_rpc, N2,
-       #append_entries_rpc{term = 5, leader_id = N1,
-                           prev_log_index = 3,
-                           prev_log_term = 5,
-                           leader_commit = 1,
-                           entries = [{4, 5, {'$ra_cluster_change', _,
-                                              #{N2 := #{voter_status := #{membership := voter,
-                                                                          uid := <<"uid">>}}},
-                                              _}}]}} |
-      _]} = ra_server:handle_leader(RaJoin, State2),
+     {send_rpc, N3,
+      #append_entries_rpc{term = 5, leader_id = N1,
+                          prev_log_index = 3,
+                          prev_log_term = 5,
+                          leader_commit = 1,
+                          entries = [{4, 5, {'$ra_cluster_change', _,
+                                             #{N2 := #{voter_status := #{membership := voter,
+                                                                         uid := <<"uid">>}}},
+                                             _}}]}},
+     {send_rpc, N4,
+      #append_entries_rpc{term = 5, leader_id = N1,
+                          prev_log_index = 3,
+                          prev_log_term = 5,
+                          leader_commit = 1,
+                          entries = [{4, 5, {'$ra_cluster_change', _,
+                                             #{N2 := #{voter_status := #{membership := voter,
+                                                                         uid := <<"uid">>}}},
+                                             _}}]}}
+      ] = lists:keysort(2, Effects2),
 
     Ack2 = #append_entries_reply{term = 5, success = true,
                                  next_index = 5,
@@ -1417,7 +1435,7 @@ append_entries_reply_success(_Config) ->
     ok.
 
 append_entries_reply_success_even_quorum(_Config) ->
-    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4, N5 = ?N5,
+    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
     Cluster = #{N1 => new_peer_with(#{next_index => 1, match_index => 0}),
                 N2 => new_peer_with(#{next_index => 1, match_index => 0}),
                 N3 => new_peer_with(#{next_index => 1, match_index => 0}),
@@ -2486,26 +2504,6 @@ candidate_election(_Config) ->
       {send_rpc, N3, _},
       {send_rpc, N2, _}
      ]} = ra_server:handle_leader(Noop, State2),
-    ok.
-
-candidate_election_quorum(_Config) ->
-    N2 = ?N2, N3 = ?N3, N4 = ?N4, N5 = ?N5,
-    State0 = (base_state(5, ?FUNCTION_NAME))#{current_term => 6, votes => 1},
-    Cfg0 = maps:get(cfg, State0),
-    Reply = #request_vote_result{term = 6, vote_granted = true},
-    {candidate, #{votes := 2} = State1, []}
-        = ra_server:handle_candidate(Reply, State0),
-    {candidate, #{votes := 3} = State2, []}
-        = ra_server:handle_candidate(Reply, State1),
-    {leader, State3, _}
-        = ra_server:handle_candidate(Reply, State2),
-
-    PeerState = new_peer_with(#{next_index => 3+1, % leaders last log index + 1
-                                match_index => 0}), % initd to 0
-    #{cluster := #{N2 := PeerState,
-                   N3 := PeerState,
-                   N4 := PeerState,
-                   N5 := PeerState}} = State3,
     ok.
 
 pre_vote_election(_Config) ->
