@@ -1201,13 +1201,14 @@ candidate_handles_append_entries_rpc(_Config) ->
     ok.
 
 append_entries_reply_success_promotes_nonvoter(_Config) ->
-    N1 = ?N1, N2 = ?N2, N3 = ?N3,
+    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
     NonVoter = #{membership => promotable, target => 3, uid => <<"uid">>},
     Cluster = #{N1 => new_peer_with(#{next_index => 5, match_index => 4}),
                 N2 => new_peer_with(#{next_index => 1, match_index => 0,
                                       commit_index_sent => 3,
                                       voter_status => NonVoter}),
-                N3 => new_peer_with(#{next_index => 2, match_index => 1})},
+                N3 => new_peer_with(#{next_index => 2, match_index => 1}),
+                N4 => new_peer_with(#{next_index => 2, match_index => 1})},
     State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1,
                                               last_applied => 1,
                                               cluster => Cluster,
