@@ -3638,8 +3638,10 @@ evaluate_quorum(#{cfg := Cfg,
     maybe_emit_pending_release_cursor(State1, Effects1).
 
 data_commit_quorum_size(N, true) when N rem 2 =:= 0 ->
+    % Even and cluster change permitted: Flexiraft quorum allows us to get away with one less committer
     N div 2;
 data_commit_quorum_size(N, _ClusterChange) ->
+    % Odd or cluster change not permitted: classic majority holds
     N div 2 + 1.
 
 increment_commit_index(State0 = #{current_term := CurrentTerm, cluster_change_permitted := ClusterChangePerm}) ->
