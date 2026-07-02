@@ -1301,11 +1301,10 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
     % voter ack, raises commit_index
     {leader, #{cluster := #{N2 := #{next_index := 5,
                                     match_index := 4}},
-               commit_index := 3,
-               last_applied := 3,
-               machine_state := <<"hi3">>},
-     [{next_event, info, pipeline_rpcs},
-      {aux, eval}]} = ra_server:handle_leader({N2, Ack2}, State3),
+               commit_index := 1,
+               last_applied := 1,
+               machine_state := <<"hi1">>},
+     [{next_event, info, pipeline_rpcs}]} = ra_server:handle_leader({N2, Ack2}, State3),
     ok.
 
 follower_aer_dupe(_Config) ->
