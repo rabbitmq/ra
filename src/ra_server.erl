@@ -3637,13 +3637,13 @@ evaluate_quorum(#{cfg := Cfg,
     {State1, Effects1} = apply_to(CI, State, Effects),
     maybe_emit_pending_release_cursor(State1, Effects1).
 
-data_commit_quorum_size(N) when N rem 2 =:= 0 ->
+data_commit_quorum_size(N, true) when N rem 2 =:= 0 ->
     N div 2;
-data_commit_quorum_size(N) when N rem 2 =/= 0 ->
+data_commit_quorum_size(N, _ClusterChange) ->
     N div 2 + 1.
 
-increment_commit_index(State0 = #{current_term := CurrentTerm, cluster := Cluster}) ->
-    DataQuorumSize = data_commit_quorum_size(count_voters(Cluster)),
+increment_commit_index(State0 = #{current_term := CurrentTerm, cluster_change_permitted := ClusterChangePerm}) ->
+    DataQuorumSize = data_commit_quorum_size(length(match_indexes(State0)), ClusterChangePerm),
     PotentialNewCommitIndex = agreed_commit(match_indexes(State0), DataQuorumSize),
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
@@ -4278,13 +4278,13 @@ required_quorum_count_test() ->
     ok.
 
 data_commit_quorum_size_test() ->
-    1 = data_commit_quorum_size(1),
-    1 = data_commit_quorum_size(2),
-    2 = data_commit_quorum_size(3),
-    2 = data_commit_quorum_size(4),
-    3 = data_commit_quorum_size(5),
-    3 = data_commit_quorum_size(6),
-    4 = data_commit_quorum_size(7),
+    1 = data_commit_quorum_size(1, true),
+    1 = data_commit_quorum_size(2, true),
+    2 = data_commit_quorum_size(3, true),
+    2 = data_commit_quorum_size(4, true),
+    3 = data_commit_quorum_size(5, true),
+    3 = data_commit_quorum_size(6, true),
+    4 = data_commit_quorum_size(7, true),
     ok.
 
 -endif.
