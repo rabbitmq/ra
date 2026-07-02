@@ -4285,6 +4285,13 @@ data_commit_quorum_size_test() ->
     3 = data_commit_quorum_size(5, true),
     3 = data_commit_quorum_size(6, true),
     4 = data_commit_quorum_size(7, true),
+
+    2 = data_commit_quorum_size(3, false),
+    3 = data_commit_quorum_size(4, false),
+    3 = data_commit_quorum_size(5, false),
+    4 = data_commit_quorum_size(6, false),
+    4 = data_commit_quorum_size(7, false),
+
     ok.
 
 -endif.
