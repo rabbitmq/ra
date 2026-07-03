@@ -1439,14 +1439,20 @@ append_entries_reply_success_even_quorum(_Config) ->
                 N2 => new_peer_with(#{next_index => 1, match_index => 0}),
                 N3 => new_peer_with(#{next_index => 1, match_index => 0}),
                 N4 => new_peer_with(#{next_index => 1, match_index => 0})},
-    State0 = (base_state(4, ?FUNCTION_NAME))#{commit_index => 0, cluster => Cluster},
+    State0NoCh = (base_state(4, ?FUNCTION_NAME))#{commit_index => 0, cluster => Cluster, cluster_change_permitted => false},
     Msg = {N2, #append_entries_reply{success = true, term = 5,
                                      next_index = 4, last_term = 5,
                                      last_index = 3}},
-    {leader, State, _} = ra_server:handle_leader(Msg, State0),
+    {leader, State1NoCh, _} = ra_server:handle_leader(Msg, State0NoCh),
+    %% cluster_change_permitted blocks commit
+    #{cluster := #{N2 := #{next_index := 4, match_index := 3}},
+      commit_index := 0} = State1NoCh,
+
+    State0 = State0NoCh#{cluster_change_permitted => true},
+    {leader, State1, _} = ra_server:handle_leader(Msg, State0),
     %% 4 voters (even): flexiraft commit quorum is N/2, so leader + one ack commits
     #{cluster := #{N2 := #{next_index := 4, match_index := 3}},
-      commit_index := 3} = State,
+      commit_index := 3} = State1,
     ok.
 
 append_entries_reply_no_success(_Config) ->
