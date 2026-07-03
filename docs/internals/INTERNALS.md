@@ -286,6 +286,14 @@ than recommended in the Raft paper. This is done to ensure follower
 liveness. In an idle system where all followers are in sync no further
 messages will be sent to reduce network bandwidth usage.
 
+### Flexible Quorum
+Classic Raft commits an entry with N div 2 + 1 acks. FlexiRaft introduces the optimization that, for even N, the commit quorum can be lowered to N div 2.
+
+Safety is guaranteed by the fact that the election quorum still requires a full majority of N div 2 + 1, so that together the election quorum and the commit quorum must always intersect: (N div 2) + (N div 2 + 1) > N. Thus every commit must be present on at least one voter in an election.
+
+When cluster membership changes are in flight (`cluster_change_permitted = false`), Ra suppresses this optimization to ensure that the commit quorum intersects both the old and new membership configuration.
+
+The query quorum (consistent queries) is deliberately untouched. 
 
 ### Failure Detection
 
