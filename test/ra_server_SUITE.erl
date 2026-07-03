@@ -1252,8 +1252,7 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                            leader_commit = 1,
                            entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
                                       {3, 5, {'$usr', _, <<"hi3">>, _}}]}
-      }
-     ] = lists:keysort(2, Effects),
+      }] = lists:keysort(2, Effects),
 
     % ra_join translates into cluster update
     {leader, #{cluster := #{N2 := #{next_index := 5,
@@ -1291,8 +1290,7 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                           entries = [{4, 5, {'$ra_cluster_change', _,
                                              #{N2 := #{voter_status := #{membership := voter,
                                                                          uid := <<"uid">>}}},
-                                             _}}]}}
-      ] = lists:keysort(2, Effects2),
+                                             _}}]}}] = lists:keysort(2, Effects2),
 
     Ack2 = #append_entries_reply{term = 5, success = true,
                                  next_index = 5,
