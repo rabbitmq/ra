@@ -3636,7 +3636,7 @@ evaluate_quorum(#{cfg := Cfg,
     {State1, Effects1} = apply_to(CI, State, Effects),
     maybe_emit_pending_release_cursor(State1, Effects1).
 
-data_commit_quorum_size(N, true) when N rem 2 =:= 0 ->
+data_commit_quorum_size(N, true) when N rem 2 =:= 0, N >= 4 ->
     % Even and cluster change permitted: Flexiraft quorum allows us to get away with one less committer
     N div 2;
 data_commit_quorum_size(N, _ClusterChange) ->
@@ -4280,7 +4280,7 @@ required_quorum_count_test() ->
 
 data_commit_quorum_size_test() ->
     1 = data_commit_quorum_size(1, true),
-    1 = data_commit_quorum_size(2, true),
+    2 = data_commit_quorum_size(2, true),
     2 = data_commit_quorum_size(3, true),
     2 = data_commit_quorum_size(4, true),
     3 = data_commit_quorum_size(5, true),
