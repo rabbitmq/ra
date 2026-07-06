@@ -63,6 +63,7 @@ all_tests() ->
      server_catches_up,
      snapshot_installation,
      snapshot_installation_with_call_crash,
+     snapshot_installation_target_already_has_snapshot,
      add_member,
      queue_example,
      ramp_up_and_ramp_down,
@@ -1064,6 +1065,84 @@ snapshot_installation_with_call_crash(Config) ->
               end, 200)),
     ok.
 
+
+snapshot_installation_target_already_has_snapshot(Config) ->
+    %% Regression test: if a leader sends a snapshot to a follower whose
+    %% last_applied is already at or ahead of the snapshot index, the follower
+    %% rejects it with an append_entries_reply (rather than an
+    %% install_snapshot_result). The snapshot sender process must forward that
+    %% reply to the leader so it can correct next_index for the peer, instead
+    %% of crashing with unexpected_install_snapshot_result and entering a
+    %% pointless snapshot retry loop.
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
+    Name = ?config(test_name, Config),
+    Servers = [N1, N2, N3],
+    Mac = {module, ra_queue, #{}},
+    %% sentinel term that will never occur naturally so the forwarded reply
+    %% can be identified in the leader's call history
+    Sentinel = 424242,
+    {ok, [Leader0, _, Down], []} = ra:start_cluster(default, Name, Mac, Servers),
+    ok = ra:stop_server(?SYS, Down),
+    {ok, _, Leader} = ra:members(Leader0),
+    %% process enough commands to trigger a snapshot on the leader
+    [begin
+         ok = ra:pipeline_command(Leader, {enq, N}, no_correlation, normal),
+         ok = ra:pipeline_command(Leader, deq, no_correlation, normal)
+     end || N <- lists:seq(1, 2500)],
+    {ok, _, _} = ra:process_command(Leader, deq),
+
+    meck:new(ra_server, [passthrough]),
+    %% simulate the target already being at or ahead of the snapshot index:
+    %% it rejects the install_snapshot_rpc with an append_entries_reply
+    meck:expect(ra_server, handle_follower,
+                fun (#install_snapshot_rpc{term = T,
+                                           meta = #{index := Idx}}, State) ->
+                        Reply = #append_entries_reply{term = T,
+                                                      success = false,
+                                                      next_index = Idx + 1,
+                                                      last_index = Idx,
+                                                      last_term = Sentinel},
+                        {follower, State, [{reply, Reply}]};
+                    (A, B) ->
+                        meck:passthrough([A, B])
+                end),
+    %% wrap handle_leader so its calls are captured in the meck history
+    meck:expect(ra_server, handle_leader,
+                fun (A, B) -> meck:passthrough([A, B]) end),
+
+    %% catchup will attempt to send a snapshot which the target rejects
+    ok = ra:restart_server(?SYS, Down),
+
+    %% the rejecting reply must reach the leader's handle_leader (i.e. the
+    %% sender forwarded it rather than crashing)
+    ForwardedToLeader =
+        fun () ->
+                lists:any(
+                  fun ({_P, {ra_server, handle_leader,
+                             [{Peer, #append_entries_reply{last_term = LT}} | _]},
+                        _R})
+                        when Peer == Down andalso LT == Sentinel ->
+                          true;
+                      (_) ->
+                          false
+                  end, meck:history(ra_server))
+        end,
+    ?assert(try_n_times(ForwardedToLeader, 100)),
+
+    meck:unload(ra_server),
+
+    %% once the target stops rejecting it installs the snapshot for real and
+    %% the cluster converges - i.e. the leader recovered without getting stuck
+    ?assert(try_n_times(
+              fun () ->
+                      {ok, {N1Idx, _}, _} = ra:local_query(N1, fun ra_lib:id/1),
+                      {ok, {N2Idx, _}, _} = ra:local_query(N2, fun ra_lib:id/1),
+                      {ok, {N3Idx, _}, _} = ra:local_query(N3, fun ra_lib:id/1),
+                      (N1Idx == N2Idx) and (N1Idx == N3Idx)
+              end, 200)),
+    ok.
 
 try_n_times(_Fun, 0) ->
     false;

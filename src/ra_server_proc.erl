@@ -2152,6 +2152,20 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                                 {dirty_timeout, InstallTimeout}) of
                                 #install_snapshot_result{} ->
                                     ok;
+                                #append_entries_reply{} = AER ->
+                                    %% the target's last applied index is at or
+                                    %% ahead of the snapshot index so it rejected
+                                    %% the snapshot with an append_entries_reply.
+                                    %% Forward it to the leader so it can correct
+                                    %% next_index for this peer, then finish
+                                    %% normally rather than crashing and entering
+                                    %% a pointless snapshot retry loop.
+                                    ?DEBUG("~ts: ~tw is at or ahead of snapshot "
+                                           "index ~b, forwarding its "
+                                           "append_entries_reply to the leader",
+                                           [LogId, To, SnapIdx]),
+                                    ok = gen_statem:cast(Id, {To, AER}),
+                                    exit(normal);
                                 Unexp ->
                                     ?INFO("~ts: ~tw returned an unexpected"
                                           " install snapshot result ~w",
