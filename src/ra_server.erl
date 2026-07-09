@@ -3644,8 +3644,9 @@ data_commit_quorum_size(N, _ClusterChange) ->
     N div 2 + 1.
 
 increment_commit_index(State0 = #{current_term := CurrentTerm, cluster_change_permitted := ClusterChangePerm}) ->
-    DataQuorumSize = data_commit_quorum_size(length(match_indexes(State0)), ClusterChangePerm),
-    PotentialNewCommitIndex = agreed_commit(match_indexes(State0), DataQuorumSize),
+    MatchIdxs = match_indexes(State0),
+    DataQuorumSize = data_commit_quorum_size(length(MatchIdxs), ClusterChangePerm),
+    PotentialNewCommitIndex = agreed_commit(MatchIdxs, DataQuorumSize),
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
     case fetch_term(PotentialNewCommitIndex, State0) of
