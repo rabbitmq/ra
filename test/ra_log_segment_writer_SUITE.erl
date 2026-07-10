@@ -27,6 +27,7 @@ all_tests() ->
      accept_mem_tables_append,
      accept_mem_tables_overwrite,
      accept_mem_tables_overwrite_same_wal,
+     accept_mem_tables_live_overwrite_does_not_duplicate_index,
      accept_mem_tables_multi_segment,
      accept_mem_tables_multi_segment_max_size,
      accept_mem_tables_multi_segment_overwrite,
@@ -190,6 +191,61 @@ accept_mem_tables_overwrite(Config) ->
             [{1, 43, _}, {2, 43, _}] = read_sparse(Seg2, [1, 2]),
             [{3, 43, C2}] = read_sparse(Seg2, [3]),
             ?assertExit({missing_key, 4}, read_sparse(Seg2, [4]))
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    flush(),
+    ok = gen_server:stop(TblWriterPid),
+    ok.
+
+%% A follower's log gets overwritten by a new leader in two separate,
+%% ordinary accept_mem_tables/3 flushes (e.g. because the original range
+%% had already reached disk before the leader change was detected, and the
+%% corrected range is flushed afterwards). Both flushes land on the *same*
+%% still-open segment file (reopening an existing segment in append mode
+%% does not reconcile its previously tracked index range against the new
+%% one - see ra_log_segment_writer:maybe_open_new_segment/3 and
+%% ra_log_segment:append/4, neither of which check whether an index being
+%% appended already exists earlier in the same file). The result is a
+%% segment file holding two distinct, conflicting on-disk records for the
+%% same index, which breaks ra_log_segment's position/binary-search based
+%% lookup (ra_log_segment:lookup_index/2) on recovery.
+accept_mem_tables_live_overwrite_does_not_duplicate_index(Config) ->
+    Dir = ?config(wal_dir, Config),
+    {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
+                                                            name => ?SEGWR,
+                                                            data_dir => Dir}),
+    UId = ?config(uid, Config),
+    % original (uncommitted) tail written by the old leader, already
+    % flushed to a segment before the leader change is noticed
+    Entries = [{3, 42, c}, {4, 42, d}, {5, 42, e}],
+    Tid = ra_mt:tid(make_mem_table(UId, Entries)),
+    Ranges = #{UId => [{Tid, [{3, 5}]}]},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
+                                                 make_wal(Config, "w1.wal")),
+    receive
+        {ra_log_event, {segments, [{Tid, [{3, 5}]}], [{_Fn, {3, 5}}]}} ->
+            ok
+    after 3000 ->
+              flush(),
+              throw(ra_log_event_timeout)
+    end,
+    % the new leader's corrected entries, overlapping at index 3, flushed
+    % in a later, separate call - exactly what a live follower overwrite
+    % produces, without any intervening restart
+    Entries2 = [{1, 43, a}, {2, 43, b}, {3, 43, c2}],
+    Tid2 = ra_mt:tid(make_mem_table(UId, Entries2)),
+    Ranges2 = #{UId => [{Tid2, [{1, 3}]}]},
+    ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges2,
+                                                 make_wal(Config, "w2.wal")),
+    receive
+        {ra_log_event, {segments, [{Tid2, [{1, 3}]}], [{Fn2, {1, 3}}]}} ->
+            SegFile = filename:join(?config(server_dir, Config), Fn2),
+            Indexes = [I || {I, _T, _O} <- ra_log_segment:dump_index(SegFile),
+                            I > 0],
+            Duplicates = Indexes -- lists:usort(Indexes),
+            ?assertEqual([], Duplicates)
     after 3000 ->
               flush(),
               throw(ra_log_event_timeout)
