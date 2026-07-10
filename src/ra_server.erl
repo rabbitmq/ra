@@ -631,14 +631,13 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                           {Peer0#{match_index => PeerLastIdx,
                                   next_index => PeerLastIdx + 1}, Log1};
                       {EntryTerm, Log1} ->
-                          % last_index has a different term or entry does not
-                          % exist
+                          % last_index has a different term
                           % The peer must have uncommitted entries from a prior
                           % term that have now been overwritten by the current
                           % leader.
                           % Decrement next_index but don't go lower than
                           % match index.
-                          NextIndex = max(min(NI-1, PeerNextIdx), MI),
+                          NextIndex = max(min(NI-1, PeerLastIdx), MI + 1),
                           ?DEBUG("~ts: leader received last_index ~b"
                                  " from ~tw with term ~b "
                                  "- expected term ~b. Setting "

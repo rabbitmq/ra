@@ -27,6 +27,7 @@ all_tests() ->
      handle_overwrite,
      handle_overwrite_append,
      follower_aer_stale_last_written,
+     snapshot_install_then_overwrite_stale_last_written,
      receive_segment,
      delete_during_segment_flush,
      read_one,
@@ -206,6 +207,60 @@ follower_aer_stale_last_written(Config) ->
     %% verify last_written is truncated to 0 since index 1 is not yet written
     {0, 0} = ra_log:last_written(Log3),
 
+    ok.
+
+snapshot_install_then_overwrite_stale_last_written(Config) ->
+    %% Reproduces the metadata-store production incident.
+    %%
+    %% A follower installs a snapshot, then receives and writes an
+    %% *uncommitted* tail replicated by the leader. A new leader then
+    %% overwrites (truncates) that tail in a higher term. The follower must
+    %% pull last_written_index_term back to the truncation point. If it does
+    %% not, it reports a stale, higher last_written in its
+    %% append_entries_reply, the leader over-advances that peer's match_index
+    %% and prematurely commits entries that are not persisted on a durable
+    %% majority.
+    Log0 = ra_log_init(Config),
+
+    %% install a snapshot at index 10, term 1 (received from the leader)
+    SnapIdx = 10,
+    SnapTerm = 1,
+    Meta = meta(SnapIdx, SnapTerm, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, #{}),
+    SnapState0 = ra_log:snapshot_state(Log0),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} =
+        ra_snapshot:complete_accept(Chunk, 1, Machine, SnapState1),
+    run_effs(AEffs),
+    {ok, Log1, _} = ra_log:install_snapshot({SnapIdx, SnapTerm}, ?MODULE,
+                                            LiveIndexes,
+                                            ra_log:set_snapshot_state(SnapState,
+                                                                      Log0)),
+    ?assertEqual({SnapIdx, SnapTerm}, ra_log:last_written(Log1)),
+
+    %% leader replicates an uncommitted tail 11..15 in term 2
+    {ok, Log2} = ra_log:write([{11, 2, <<"e">>},
+                               {12, 2, <<"e">>},
+                               {13, 2, <<"e">>},
+                               {14, 2, <<"e">>},
+                               {15, 2, <<"e">>}], Log1),
+    %% process the WAL write completion so last_written advances to 15
+    Log3 = receive
+               {ra_log_event, {written, 2, _} = Evt} ->
+                   element(1, ra_log:handle_event(Evt, Log2))
+           after 2000 ->
+                     flush(),
+                     exit(written_timeout)
+           end,
+    ?assertEqual({15, 2}, ra_log:last_written(Log3)),
+
+    %% a new leader in term 3 overwrites from index 13 -> log truncation
+    {ok, Log4} = ra_log:write([{13, 3, <<"new">>}], Log3),
+
+    %% last_written must be pulled back to the last surviving entry (12, 2),
+    %% NOT left stale at (15, 2)
+    ?assertEqual({12, 2}, ra_log:last_written(Log4)),
     ok.
 
 handle_overwrite(Config) ->
