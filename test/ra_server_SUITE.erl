@@ -1296,7 +1296,7 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                                  next_index = 5,
                                  last_index = 4, last_term = 5},
 
-    % voter ack, raises commit_index
+    % voter ack does not raise commit_index while cluster change is in flight (classic majority required)
     {leader, #{cluster := #{N2 := #{next_index := 5,
                                     match_index := 4}},
                commit_index := 1,
