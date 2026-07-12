@@ -1231,7 +1231,7 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
         noreply}} = RaJoin}
      ]} = ra_server:handle_leader({N2, Ack}, State0),
 
-    % pipeline to N3
+    % pipeline to N3 and N4
     {leader, #{cluster := #{N3 := #{next_index := 4,
                                     match_index := 1}},
                commit_index := 1,
