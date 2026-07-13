@@ -845,6 +845,7 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
                              range = Range,
                              snapshot_state = SnapState,
                              mem_table = Mt0,
+                             pending = Pend0,
                              last_written_index_term = {LWIdx0, _}} = State0) ->
     Cur = ra_snapshot:current(SnapState),
     %% After set_last_index, recovery depends on the snapshot state.
@@ -864,6 +865,7 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
             {ok, State#?MODULE{range = ra_range:limit(Idx + 1, Range),
                                last_term = SnapTerm,
                                mem_table = Mt,
+                               pending = ra_seq:limit(Idx, Pend0),
                                last_written_index_term = Cur}};
         {Term, State1} ->
             LWIdx = min(Idx, LWIdx0),
@@ -886,6 +888,7 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
             {ok, State2#?MODULE{range = ra_range:limit(Idx + 1, Range),
                                 last_term = Term,
                                 mem_table = Mt,
+                                pending = ra_seq:limit(Idx, Pend0),
                                 last_written_index_term = {LWIdx, LWTerm}}}
     end.
 
