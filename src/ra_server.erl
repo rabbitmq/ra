@@ -633,7 +633,7 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                       {EntryTerm, Log1} ->
                           % last_index has a different term
                           % The peer must have uncommitted entries from a prior
-                          % term that have now been overwritten by the current
+                          % term that should now be overwritten by the current
                           % leader.
                           % Decrement next_index but don't go lower than
                           % match index.

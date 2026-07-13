@@ -2146,6 +2146,9 @@ send_snapshots(Id, Term, {_, ToNode} = To, ChunkSize,
                                    "ra_log_snapshot_state for ~tw",
                                    [LogId, To]),
                             ok;
+                        {UID, SnapIdx, _SmallestIdx, []} ->
+                            %% no live indexes, skip this phase
+                            ok;
                         {UID, SnapIdx, _SmallestIdx, LiveIndexes} ->
                             %% first send the init phase
                             try gen_statem:call(To, RPC,

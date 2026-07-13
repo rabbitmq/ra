@@ -853,7 +853,8 @@ set_last_index(Idx, #?MODULE{cfg = Cfg,
         {undefined, State} when element(1, Cur) =/= Idx ->
             %% not found and Idx isn't equal to latest snapshot index
             {not_found, State};
-        {_, State} when element(1, Cur) =:= Idx ->
+        {_, State} when is_tuple(Cur) andalso
+                        element(1, Cur) =:= Idx ->
             {_, SnapTerm} = Cur,
             %% Idx is equal to the current snapshot
             {ok, Mt} = ra_log_ets:new_mem_table_please(Cfg#cfg.names,
