@@ -267,7 +267,7 @@ trigger_election(ServerId, Timeout) ->
 transfer_leadership(ServerId, TargetServerId, Timeout) ->
     leader_call(ServerId, {transfer_leadership, TargetServerId}, Timeout).
 
--spec force_shrink_members_to_current_member(ra_server_id()) -> ok.
+-spec force_shrink_members_to_current_member(ra_server_id()) -> safe_call_ret(ok).
 force_shrink_members_to_current_member(ServerId) ->
     gen_statem_safe_call(ServerId, force_member_change, 5000).
 
