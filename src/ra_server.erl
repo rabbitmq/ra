@@ -4002,6 +4002,8 @@ append_error_reply(Cmd, Reason, Effects0) ->
     case Cmd of
         {_, #{from := From}, _, _} ->
             [{reply, From, {error, Reason}} | Effects0];
+        {_, _, _, {notify, Corr, Pid}} ->
+            [{notify, #{Pid => [{Corr, {error, Reason}}]}} | Effects0];
         _ ->
             Effects0
     end.
