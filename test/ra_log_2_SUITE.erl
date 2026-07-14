@@ -27,6 +27,7 @@ all_tests() ->
      handle_overwrite,
      handle_overwrite_append,
      follower_aer_stale_last_written,
+     snapshot_install_then_overwrite_stale_last_written,
      receive_segment,
      delete_during_segment_flush,
      read_one,
@@ -38,6 +39,7 @@ all_tests() ->
      last_written_overwrite_2,
      last_index_reset,
      set_last_index_with_pending,
+     set_last_index_limits_pending_before_new_write,
      fold_after_sparse_mem_table,
      fold_after_sparse_segments,
      write_sparse_re_init,
@@ -206,6 +208,60 @@ follower_aer_stale_last_written(Config) ->
     %% verify last_written is truncated to 0 since index 1 is not yet written
     {0, 0} = ra_log:last_written(Log3),
 
+    ok.
+
+snapshot_install_then_overwrite_stale_last_written(Config) ->
+    %% Reproduces the metadata-store production incident.
+    %%
+    %% A follower installs a snapshot, then receives and writes an
+    %% *uncommitted* tail replicated by the leader. A new leader then
+    %% overwrites (truncates) that tail in a higher term. The follower must
+    %% pull last_written_index_term back to the truncation point. If it does
+    %% not, it reports a stale, higher last_written in its
+    %% append_entries_reply, the leader over-advances that peer's match_index
+    %% and prematurely commits entries that are not persisted on a durable
+    %% majority.
+    Log0 = ra_log_init(Config),
+
+    %% install a snapshot at index 10, term 1 (received from the leader)
+    SnapIdx = 10,
+    SnapTerm = 1,
+    Meta = meta(SnapIdx, SnapTerm, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, #{}),
+    SnapState0 = ra_log:snapshot_state(Log0),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {SnapState, _, LiveIndexes, AEffs} =
+        ra_snapshot:complete_accept(Chunk, 1, Machine, SnapState1),
+    run_effs(AEffs),
+    {ok, Log1, _} = ra_log:install_snapshot({SnapIdx, SnapTerm}, ?MODULE,
+                                            LiveIndexes,
+                                            ra_log:set_snapshot_state(SnapState,
+                                                                      Log0)),
+    ?assertEqual({SnapIdx, SnapTerm}, ra_log:last_written(Log1)),
+
+    %% leader replicates an uncommitted tail 11..15 in term 2
+    {ok, Log2} = ra_log:write([{11, 2, <<"e">>},
+                               {12, 2, <<"e">>},
+                               {13, 2, <<"e">>},
+                               {14, 2, <<"e">>},
+                               {15, 2, <<"e">>}], Log1),
+    %% process the WAL write completion so last_written advances to 15
+    Log3 = receive
+               {ra_log_event, {written, 2, _} = Evt} ->
+                   element(1, ra_log:handle_event(Evt, Log2))
+           after 2000 ->
+                     flush(),
+                     exit(written_timeout)
+           end,
+    ?assertEqual({15, 2}, ra_log:last_written(Log3)),
+
+    %% a new leader in term 3 overwrites from index 13 -> log truncation
+    {ok, Log4} = ra_log:write([{13, 3, <<"new">>}], Log3),
+
+    %% last_written must be pulled back to the last surviving entry (12, 2),
+    %% NOT left stale at (15, 2)
+    ?assertEqual({12, 2}, ra_log:last_written(Log4)),
     ok.
 
 handle_overwrite(Config) ->
@@ -959,6 +1015,64 @@ set_last_index_with_pending(Config) ->
     6 = ra_log:next_index(Log5),
     {5, 1} = ra_log:last_index_term(Log5),
 
+    ok.
+
+%% set_last_index/2 rewinds the log without draining any writes that
+%% are still pending WAL confirmation, and without limiting `pending`
+%% to the new last index. The stale, higher indexes left behind in
+%% `pending` still point at real entries in the mem table (the old
+%% table is kept around as `prev` of the new one), so if the WAL later
+%% asks the log to resend from one of those indexes, ra_log:resend_from/2
+%% happily resends the *discarded, truncated* data back into the WAL -
+%% resurrecting log entries the reset was supposed to get rid of.
+%% This is delivered as a genuine {ra_log_event, {resend_write, _}} event,
+%% processed the same way ra_server_proc would process it - i.e. *after*
+%% set_last_index, not as part of a new write.
+set_last_index_limits_pending_before_new_write(Config) ->
+    Log0 = ra_log_init(Config),
+    %% write 1..10 without delivering any log events so 6..10 remain
+    %% in `pending`, unconfirmed by the WAL
+    Log1 = write_n(1, 11, 1, Log0),
+    10 = ra_log:next_index(Log1) - 1,
+    {10, 1} = ra_log:last_index_term(Log1),
+    %% reset last_index back to 5 while 6..10 are still pending
+    {ok, Log2} = ra_log:set_last_index(5, Log1),
+    6 = ra_log:next_index(Log2),
+    {5, 1} = ra_log:last_index_term(Log2),
+    %% drain the original batch's written confirmation(s) first - this
+    %% is unrelated to the bug under test and already resolves to {5, 1}
+    %% regardless of it, since fetch_term/2 is guarded by the (correctly
+    %% truncated) range
+    Log3 = assert_log_events(Log2, fun (L) ->
+                                            {5, 1} == ra_log:last_written(L)
+                                    end),
+    %% simulate the WAL asking the log to resend from 6, exactly as
+    %% ra_server_proc would process it after set_last_index and with no
+    %% new write in between
+    {Log4, []} = ra_log:handle_event({resend_write, 6}, Log3),
+    6 = ra_log:next_index(Log4),
+    {5, 1} = ra_log:last_index_term(Log4),
+    %% without limiting pending, indexes 6..10 (term 1) are still
+    %% considered pending and get resent to the WAL, which will confirm
+    %% them with a written event - even though they were truncated away
+    %% and should never have been written again. With pending correctly
+    %% limited there is nothing left to resend, so no such event arrives.
+    Resurrected = receive
+                      {ra_log_event, {written, _, _}} = Evt ->
+                          Evt
+                  after 200 ->
+                            no_event
+                  end,
+    ?assertEqual(no_event, Resurrected),
+    %% a genuinely new write at the reset point must still work
+    {ok, Log5} = ra_log:write([{6, 2, new6}], Log4),
+    Pred = fun (L) ->
+                   {6, 2} == ra_log:last_written(L)
+           end,
+    Log6 = assert_log_events(Log5, Pred),
+    {6, 2} = ra_log:last_written(Log6),
+    {6, 2} = ra_log:last_index_term(Log6),
+    7 = ra_log:next_index(Log6),
     ok.
 
 fold_after_sparse_mem_table(Config) ->
