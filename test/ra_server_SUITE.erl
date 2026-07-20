@@ -61,6 +61,8 @@ all() ->
      leader_noop_increments_machine_version,
      follower_machine_version,
      follower_install_snapshot_machine_version,
+     recovery_checkpoint_reinitialises_aux_state,
+     recovery_checkpoint_reinitialises_aux_state_same_version,
      leader_server_join,
      leader_server_join_nonvoter,
      leader_server_leave,
@@ -1927,6 +1929,81 @@ follower_install_snapshot_machine_version(_Config) ->
                  machine_state := SnapData, %% old machine state
                  commit_index := 4},
      _} = ra_server:handle_receive_snapshot(ISR, State0),
+    ok.
+
+recovery_checkpoint_reinitialises_aux_state(_Config) ->
+    %% aux_state is transient: it is only ever initialised once, by
+    %% ra_server:init/2, using the machine version found in the *regular*
+    %% snapshot - before recovery checkpoint recovery has had a chance to
+    %% run. If a recovery checkpoint is then used to skip log replay and
+    %% jump straight to a higher machine version, the effective machine
+    %% module changes but aux_state must not be carried over unconverted
+    %% from the old module - it needs to be re-initialised for the new
+    %% module.
+    Mod = ?FUNCTION_NAME,
+    ModV2 = recovery_checkpoint_reinitialises_aux_state_v2,
+    #{cfg := Cfg0} = State000 = base_state(3, Mod),
+    meck:new(ModV2, [non_strict]),
+    meck:expect(Mod, which_module, fun (1) -> Mod;
+                                       (2) -> ModV2
+                                   end),
+    meck:expect(Mod, init_aux, fun (_Name) -> stale_v1_aux_state end),
+    meck:expect(ModV2, init_aux, fun (_Name) -> fresh_v2_aux_state end),
+
+    State00 = State000#{cfg => Cfg0#cfg{machine_version = 2,
+                                        effective_machine_version = 1,
+                                        effective_machine_module = Mod,
+                                        machine_versions = [{0, 1}]},
+                        commit_index => 5,
+                        %% simulate the (now stale) aux state ra_server:init/2
+                        %% set for the older machine version found in the
+                        %% regular snapshot
+                        aux_state => stale_v1_aux_state},
+
+    RCMeta = #{index => 5,
+              term => 5,
+              cluster => #{},
+              machine_version => 2},
+    meck:expect(ra_snapshot, recovery_checkpoint, fun (_) -> {5, 5} end),
+    meck:expect(ra_snapshot, recover_recovery_checkpoint,
+                fun (_) -> {ok, RCMeta, recovered_machine_state} end),
+
+    #{cfg := #cfg{effective_machine_version = 2,
+                  effective_machine_module = ModV2},
+      machine_state := recovered_machine_state,
+      aux_state := fresh_v2_aux_state} = ra_server:recover(State00),
+    ok.
+
+recovery_checkpoint_reinitialises_aux_state_same_version(_Config) ->
+    %% even when the recovery checkpoint's machine version matches the
+    %% current effective version, aux_state is still re-initialised: it
+    %% is transient, never part of a snapshot/checkpoint, and was
+    %% initialised prior to (and thus without knowledge of) whatever log
+    %% entries the recovery checkpoint allows us to skip.
+    Mod = ?FUNCTION_NAME,
+    #{cfg := Cfg0} = State000 = base_state(3, Mod),
+    meck:expect(Mod, which_module, fun (1) -> Mod end),
+    meck:expect(Mod, init_aux, fun (_Name) -> fresh_aux_state end),
+
+    State00 = State000#{cfg => Cfg0#cfg{machine_version = 1,
+                                        effective_machine_version = 1,
+                                        effective_machine_module = Mod,
+                                        machine_versions = [{0, 1}]},
+                        commit_index => 5,
+                        aux_state => stale_aux_state},
+
+    RCMeta = #{index => 5,
+              term => 5,
+              cluster => #{},
+              machine_version => 1},
+    meck:expect(ra_snapshot, recovery_checkpoint, fun (_) -> {5, 5} end),
+    meck:expect(ra_snapshot, recover_recovery_checkpoint,
+                fun (_) -> {ok, RCMeta, recovered_machine_state} end),
+
+    #{cfg := #cfg{effective_machine_version = 1,
+                  effective_machine_module = Mod},
+      machine_state := recovered_machine_state,
+      aux_state := fresh_aux_state} = ra_server:recover(State00),
     ok.
 
 leader_server_join(_Config) ->
