@@ -548,7 +548,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             Effects00 = maybe_promote_peer(PeerId, State1, []),
             {State2, Effects0} = evaluate_quorum(State1, Effects00),
             {State3, Effects1} = process_pending_consistent_queries(State2,
-                                                                   Effects0),
+                                                                    Effects0),
             Effects2 = [{next_event, info, pipeline_rpcs} | Effects1],
             case State3 of
                 #{cluster := #{Id := _}} ->
@@ -3645,8 +3645,17 @@ evaluate_quorum(#{cfg := Cfg,
     {State1, Effects1} = apply_to(CI, State, Effects),
     maybe_emit_pending_release_cursor(State1, Effects1).
 
-increment_commit_index(State0 = #{current_term := CurrentTerm}) ->
-    PotentialNewCommitIndex = agreed_commit(match_indexes(State0)),
+data_commit_quorum_size(N, true) when N rem 2 =:= 0, N >= 4 ->
+    % Even and cluster change permitted: Flexiraft quorum allows us to get away with one less committer
+    N div 2;
+data_commit_quorum_size(N, _ClusterChange) ->
+    % Odd or cluster change not permitted: classic majority holds
+    N div 2 + 1.
+
+increment_commit_index(State0 = #{current_term := CurrentTerm, cluster_change_permitted := ClusterChangePerm}) ->
+    MatchIdxs = match_indexes(State0),
+    DataQuorumSize = data_commit_quorum_size(length(MatchIdxs), ClusterChangePerm),
+    PotentialNewCommitIndex = agreed_commit(MatchIdxs, DataQuorumSize),
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
     case fetch_term(PotentialNewCommitIndex, State0) of
@@ -3682,10 +3691,14 @@ match_indexes(#{cfg := #cfg{id = Id},
               end, [LWIdx], Cluster).
 
 -spec agreed_commit(list()) -> ra_index().
-agreed_commit(Indexes) ->
+agreed_commit(Indexes) ->  %% highest commit index agreed by a majority
+    Nth = trunc(length(Indexes) / 2) + 1,
+    agreed_commit(Indexes, Nth).
+
+-spec agreed_commit(list(), pos_integer()) -> ra_index().
+agreed_commit(Indexes, CommitQuorumSize) ->  %% return Nth highest
     SortedIdxs = lists:sort(fun erlang:'>'/2, Indexes),
-    Nth = trunc(length(SortedIdxs) / 2) + 1,
-    lists:nth(Nth, SortedIdxs).
+    lists:nth(min(CommitQuorumSize, length(SortedIdxs)), SortedIdxs).
 
 log_unhandled_msg(RaState, Msg, #{cfg := #cfg{log_id = LogId}}) ->
     ?DEBUG("~ts: ~w received unhandled msg: ~W", [LogId, RaState, Msg, 6]).
@@ -3829,6 +3842,7 @@ update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster} = State0) ->
     end.
 
 get_current_query_quorum(State) ->
+    %% Explicitly not implemented for Flexiraft
     agreed_commit(query_indexes(State)).
 
 -spec take_from_queue_while(fun((El) -> {true, Res} | false),
@@ -3996,6 +4010,9 @@ maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
 -spec required_quorum(ra_cluster()) -> pos_integer().
 required_quorum(Cluster) ->
     Voters = count_voters(Cluster),
+    required_quorum_count(Voters).
+
+required_quorum_count(Voters) ->
     trunc(Voters / 2) + 1.
 
 count_voters(Cluster) ->
@@ -4235,6 +4252,57 @@ agreed_commit_test() ->
     4 = agreed_commit([3, 4, 4]),
     % 3 servers - only leader has seen new commit
     3 = agreed_commit([4, 2, 3]),
+
+    %% Nth
+    4 = agreed_commit([4], 1),
+    % 2 servers - only leader has seen new commit
+    4 = agreed_commit([4, 3], 1),
+    % 2 servers - all servers have seen new commit
+    4 = agreed_commit([4, 4, 4], 2),
+    % 3 servers - only leader has seen new commit
+    4 = agreed_commit([4, 3, 3], 1),
+    % only other servers have seen new commit
+    4 = agreed_commit([3, 4, 4], 1),
+    % 3 servers - only leader has seen new commit
+    4 = agreed_commit([4, 2, 3], 1),
+
+    % 2 of the 3 have seen commit 3
+    3 = agreed_commit([3, 3, 2], 2),
+    % 2 ahead, 2 behind
+    3 = agreed_commit([5, 5, 3, 2, 1], 3),
+    % one way ahead of the rest
+    1 = agreed_commit([5, 2, 1, 1, 1], 4),
+
+    % degenerate clamping
+    2 = agreed_commit([3, 3, 2], 15),
+
+    ok.
+
+required_quorum_count_test() ->
+    %% 3 voters, 2 needed for quorum
+    2 = required_quorum_count(3),
+    %% 4 voters
+    3 = required_quorum_count(4),
+    %% 5 voters
+    3 = required_quorum_count(5),
+
+    ok.
+
+data_commit_quorum_size_test() ->
+    1 = data_commit_quorum_size(1, true),
+    2 = data_commit_quorum_size(2, true),
+    2 = data_commit_quorum_size(3, true),
+    2 = data_commit_quorum_size(4, true),
+    3 = data_commit_quorum_size(5, true),
+    3 = data_commit_quorum_size(6, true),
+    4 = data_commit_quorum_size(7, true),
+
+    2 = data_commit_quorum_size(3, false),
+    3 = data_commit_quorum_size(4, false),
+    3 = data_commit_quorum_size(5, false),
+    4 = data_commit_quorum_size(6, false),
+    4 = data_commit_quorum_size(7, false),
+
     ok.
 
 -endif.

@@ -1276,7 +1276,7 @@ follower_catchup(Config) ->
                  await_condition_timeout => 1000}
            end,
     ok = ra:start_server(?SYS, Conf(N1, [N2], <<"N1">>)),
-    % start second servern
+    % start second server
     ok = ra:start_server(?SYS, Conf(N2, [N1], <<"N2">>)),
     ok = ra:trigger_election(N1),
     _ = ra:members(N1),
