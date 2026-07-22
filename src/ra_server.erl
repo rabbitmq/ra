@@ -2767,7 +2767,8 @@ get_min_recovery_checkpoint_interval(#{cfg := #cfg{min_recovery_checkpoint_inter
 %% If a recovery checkpoint exists with an index higher than LastApplied,
 %% recover its machine state and update LastApplied to skip log replay.
 maybe_recover_from_recovery_checkpoint(LastApplied, CommitIndex, SnapState,
-                                       #{cfg := #cfg{log_id = LogId,
+                                       #{cfg := #cfg{id = Id,
+                                                     log_id = LogId,
                                                      machine = Machine,
                                                      machine_versions = MachineVersions,
                                                      effective_machine_version = CurEffMacVer
@@ -2800,9 +2801,18 @@ maybe_recover_from_recovery_checkpoint(LastApplied, CommitIndex, SnapState,
                               false ->
                                   Cfg0
                           end,
+                    %% aux state is transient and is never part of any
+                    %% snapshot or checkpoint, so it cannot be assumed to
+                    %% be compatible with the effective machine module -
+                    %% re-initialise it rather than risk handing a stale,
+                    %% potentially incompatible term to handle_aux/5
+                    Name = ra_lib:ra_server_id_to_local_name(Id),
+                    AuxState = ra_machine:init_aux(Cfg#cfg.effective_machine_module,
+                                                   Name),
                     %% Update state with recovery checkpoint's machine state
                     State1 = State#{cfg => Cfg,
                                     machine_state => RCMacState,
+                                    aux_state => AuxState,
                                     last_applied => RCIdx},
                     %% Update cluster if recovery checkpoint has it
                     State2 = case ClusterNodes of
