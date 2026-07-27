@@ -3646,7 +3646,7 @@ evaluate_quorum(#{cfg := Cfg,
     maybe_emit_pending_release_cursor(State1, Effects1).
 
 data_commit_quorum_size(N, true) when N rem 2 =:= 0, N >= 4 ->
-    % Even and cluster change permitted: Flexiraft quorum allows us to get away with one less committer
+    % Even and cluster change permitted: FlexiRaft quorum allows us to get away with one less committer
     N div 2;
 data_commit_quorum_size(N, _ClusterChange) ->
     % Odd or cluster change not permitted: classic majority holds
@@ -3842,7 +3842,7 @@ update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster} = State0) ->
     end.
 
 get_current_query_quorum(State) ->
-    %% Explicitly not implemented for Flexiraft
+    %% Explicitly not implemented for FlexiRaft
     agreed_commit(query_indexes(State)).
 
 -spec take_from_queue_while(fun((El) -> {true, Res} | false),
@@ -4244,7 +4244,7 @@ agreed_commit_test() ->
     4 = agreed_commit([4]),
     % 2 servers - only leader has seen new commit
     3 = agreed_commit([4, 3]),
-    % 2 servers - all servers have seen new commit
+    % 3 servers - all servers have seen new commit
     4 = agreed_commit([4, 4, 4]),
     % 3 servers - leader + 1 server has seen new commit
     4 = agreed_commit([4, 4, 3]),
@@ -4257,7 +4257,7 @@ agreed_commit_test() ->
     4 = agreed_commit([4], 1),
     % 2 servers - only leader has seen new commit
     4 = agreed_commit([4, 3], 1),
-    % 2 servers - all servers have seen new commit
+    % 3 servers - all servers have seen new commit
     4 = agreed_commit([4, 4, 4], 2),
     % 3 servers - only leader has seen new commit
     4 = agreed_commit([4, 3, 3], 1),

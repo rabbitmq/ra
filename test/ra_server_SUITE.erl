@@ -1450,7 +1450,7 @@ append_entries_reply_success_even_quorum(_Config) ->
 
     State0 = State0NoCh#{cluster_change_permitted => true},
     {leader, State1, _} = ra_server:handle_leader(Msg, State0),
-    %% 4 voters (even): flexiraft commit quorum is N/2, so leader + one ack commits
+    %% 4 voters (even): FlexiRaft commit quorum is N/2, so leader + one ack commits
     #{cluster := #{N2 := #{next_index := 4, match_index := 3}},
       commit_index := 3} = State1,
     ok.
