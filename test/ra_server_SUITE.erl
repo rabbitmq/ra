@@ -1434,25 +1434,35 @@ append_entries_reply_success(_Config) ->
     ok.
 
 append_entries_reply_success_even_quorum(_Config) ->
-    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
-    Cluster = #{N1 => new_peer_with(#{next_index => 1, match_index => 0}),
-                N2 => new_peer_with(#{next_index => 1, match_index => 0}),
-                N3 => new_peer_with(#{next_index => 1, match_index => 0}),
-                N4 => new_peer_with(#{next_index => 1, match_index => 0})},
-    State0NoCh = (base_state(4, ?FUNCTION_NAME))#{commit_index => 0, cluster => Cluster, cluster_change_permitted => false},
-    Msg = {N2, #append_entries_reply{success = true, term = 5,
-                                     next_index = 4, last_term = 5,
-                                     last_index = 3}},
-    {leader, State1NoCh, _} = ra_server:handle_leader(Msg, State0NoCh),
-    %% cluster_change_permitted blocks commit
-    #{cluster := #{N2 := #{next_index := 4, match_index := 3}},
-      commit_index := 0} = State1NoCh,
+    N2 = ?N2,
+    %% base_state has entries 1-3 replicated to, and applied by, all members
+    State0 = base_state(4, ?FUNCTION_NAME),
+    %% the leader appends and persists entry 4, so only it has that entry
+    {leader, State1, _} = ra_server:handle_leader(usr_cmd(<<"hi4">>), State0),
+    {leader, State2, _} = ra_server:handle_leader(written_evt(5, {4, 4}), State1),
+    %% the leader alone is never a quorum
+    #{commit_index := 3,
+      last_applied := 3,
+      machine_state := <<"hi3">>} = State2,
 
-    State0 = State0NoCh#{cluster_change_permitted => true},
-    {leader, State1, _} = ra_server:handle_leader(Msg, State0),
-    %% 4 voters (even): FlexiRaft commit quorum is N/2, so leader + one ack commits
-    #{cluster := #{N2 := #{next_index := 4, match_index := 3}},
-      commit_index := 3} = State1,
+    Msg = {N2, #append_entries_reply{success = true, term = 5,
+                                     next_index = 5, last_term = 5,
+                                     last_index = 4}},
+    %% cluster_change_permitted blocks FlexiRaft eager commit, classic majority required
+    {leader, State3, _} =
+        ra_server:handle_leader(Msg, State2#{cluster_change_permitted => false}),
+    #{cluster := #{N2 := #{next_index := 5, match_index := 4}},
+      commit_index := 3,
+      last_applied := 3,
+      machine_state := <<"hi3">>} = State3,
+
+    %% 4 voters (even): FlexiRaft commit quorum is N/2, so leader + one ack
+    %% commits, and the entry is applied
+    {leader, State4, _} = ra_server:handle_leader(Msg, State2),
+    #{cluster := #{N2 := #{next_index := 5, match_index := 4}},
+      commit_index := 4,
+      last_applied := 4,
+      machine_state := <<"hi4">>} = State4,
     ok.
 
 append_entries_reply_no_success(_Config) ->
