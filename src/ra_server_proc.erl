@@ -432,12 +432,17 @@ recover(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
 recover(internal, go, State = #state{server_state = ServerState0}) ->
-    ServerState = ra_server:recover(ServerState0),
-    incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),
-    %% we have to issue the next_event here so that the recovered state is
-    %% only passed through very briefly
-    next_state(recovered, State#state{server_state = ServerState},
-               [{next_event, internal, next}]);
+    case ra_server:recover(ServerState0) of
+        {delete_and_terminate, ServerState} ->
+            next_state(terminating_follower,
+                       State#state{server_state = ServerState}, []);
+        ServerState ->
+            incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),
+            %% we have to issue the next_event here so that the recovered
+            %% state is only passed through very briefly
+            next_state(recovered, State#state{server_state = ServerState},
+                       [{next_event, internal, next}])
+    end;
 recover(_, _, State) ->
     % all other events need to be postponed until we can return
     % `next_event` from init
