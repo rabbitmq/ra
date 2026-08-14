@@ -12,6 +12,7 @@
 -define(MUTABLE_CONFIG_KEYS,
         [cluster_name,
          metrics_key,
+         metrics_labels,
          broadcast_time,
          tick_timeout,
          install_snap_rpc_timeout,
