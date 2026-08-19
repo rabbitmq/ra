@@ -30,6 +30,8 @@ all_tests() ->
      server_config,
      start_stopped_server,
      server_is_force_deleted,
+     server_is_force_deleted_with_timeout,
+     force_delete_server_times_out,
      force_deleted_server_mem_tables_are_cleaned_up,
      leave_and_delete_server,
      cluster_is_deleted,
@@ -211,6 +213,61 @@ server_is_force_deleted(Config) ->
     end,
 
     ok = ra:force_delete_server(?SYS, ServerId),
+    ok.
+
+server_is_force_deleted_with_timeout(Config) ->
+    %% force_delete_server/3 with a finite timeout should behave exactly like
+    %% the /2 variant when the server responds within the timeout
+    ClusterName = ?config(cluster_name, Config),
+    PrivDir = ?config(priv_dir, Config),
+    ServerId = ?config(server_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(ClusterName, UId, ServerId, PrivDir, []),
+    _ = ra:start_server(?SYS, Conf),
+    ok = ra:trigger_election(ServerId),
+    ok = enqueue(ServerId, msg1),
+    Pid = ra_directory:where_is(?SYS, UId),
+    {Name, _} = ServerId,
+    ?assertEqual(ServerId, ra_leaderboard:lookup_leader(Name)),
+
+    ok = ra:force_delete_server(?SYS, ServerId, 60000),
+
+    validate_ets_table_deletes([UId], [Pid], [ServerId]),
+    ?assertEqual(undefined, ra_leaderboard:lookup_leader(Name)),
+    ok.
+
+force_delete_server_times_out(Config) ->
+    %% when the remote call to the server's node does not return within the
+    %% timeout the operation should fail with a badrpc timeout instead of
+    %% blocking indefinitely
+    ClusterName = ?config(cluster_name, Config),
+    PrivDir = ?config(priv_dir, Config),
+    ServerId = ?config(server_id, Config),
+    UId = ?config(uid, Config),
+    Conf = conf(ClusterName, UId, ServerId, PrivDir, []),
+    _ = ra:start_server(?SYS, Conf),
+    ok = ra:trigger_election(ServerId),
+    ok = enqueue(ServerId, msg1),
+    %% make the stop preparation rpc block for longer than the timeout so the
+    %% bounded call returns rather than hanging
+    meck:new(ra_server_sup_sup, [passthrough]),
+    meck:expect(ra_server_sup_sup, prepare_server_stop_rpc,
+                fun(_System, _RaName) ->
+                        timer:sleep(30000),
+                        error(should_have_timed_out)
+                end),
+    try
+        ?assertEqual({error, {badrpc, timeout}},
+                     ra:force_delete_server(?SYS, ServerId, 100))
+    after
+        meck:unload(ra_server_sup_sup)
+    end,
+    %% the timeout must not have taken the server down: it is still registered
+    %% and running
+    ?assert(is_pid(ra_directory:where_is(?SYS, UId))),
+    %% and can be deleted normally once the blocking behaviour is removed
+    ok = ra:force_delete_server(?SYS, ServerId),
+    ?assertEqual(undefined, ra_directory:where_is(?SYS, UId)),
     ok.
 
 force_deleted_server_mem_tables_are_cleaned_up(Config) ->
