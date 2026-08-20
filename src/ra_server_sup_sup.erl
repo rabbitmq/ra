@@ -26,7 +26,6 @@
          restart_server/3,
          stop_server/2,
          stop_server/3,
-         delete_server/2,
          delete_server/3,
          remove_all/1,
          start_link/1,
@@ -163,11 +162,6 @@ prepare_server_stop_rpc(System, RaName) ->
             Parent =  ra_directory:where_is_parent(Names, RaName),
             {ok, Parent, SrvSup}
     end.
-
--spec delete_server(atom(), ServerId :: ra_server_id()) ->
-    ok | {error, term()} | {badrpc, term()}.
-delete_server(System, ServerId) ->
-    delete_server(System, ServerId, infinity).
 
 -spec delete_server(atom(), ServerId :: ra_server_id(), Timeout :: timeout()) ->
     ok | {error, term()} | {badrpc, term()}.
