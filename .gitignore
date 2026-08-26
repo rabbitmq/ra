@@ -1,4 +1,5 @@
 erl_crash.dump
+rebar3.crashdump
 .sw?
 .*.sw?
 *.beam

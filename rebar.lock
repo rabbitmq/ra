@@ -3,8 +3,8 @@
  {<<"gen_batch_server">>,{pkg,<<"gen_batch_server">>,<<"0.10.0">>},0},
  {<<"seshat">>,{pkg,<<"seshat">>,<<"1.0.1">>},0},
  {<<"shu">>,
-  {git,"https://github.com/rabbitmq/shu.git",
-       {ref,"28adff94f0cc0e309b7be049cecc9d7107ef47c8"}},
+  {git,"https://github.com/lukebakken/rmq-shu.git",
+       {ref,"78260ba8045b37078623d0f6553cbecf713b2fba"}},
   0}]}.
 [
 {pkg_hash,[
