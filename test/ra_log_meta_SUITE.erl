@@ -28,6 +28,8 @@ all_tests() ->
      trigger_compaction,
      migrate_from_dets,
      migrate_failure_preserves_dets,
+     migrate_skipped_when_shu_exists,
+     oversized_batch_does_not_hang,
      atom_table_full_is_controlled
     ].
 
@@ -54,6 +56,9 @@ init_per_testcase(TestCase, Config) ->
             %% small WAL so the compaction path is reached with a modest
             %% number of writes
             ok = application:set_env(ra, ra_log_meta_wal_size, 64 * 1024);
+        oversized_batch_does_not_hang ->
+            %% tiny WAL so a coalesced batch of distinct uids exceeds it
+            ok = application:set_env(ra, ra_log_meta_wal_size, 128);
         _ ->
             ok = application:unset_env(ra, ra_log_meta_wal_size)
     end,
@@ -191,6 +196,12 @@ migrate_failure_preserves_dets(Config) ->
     timer:sleep(300),
     true = filelib:is_file(MetaDets),
     false = filelib:is_file(MetaDets ++ ".migrated"),
+    %% crash-atomicity: a failed migration must leave NO meta.shu (nor a
+    %% leftover .migrating temp), so the next start re-runs the migration from
+    %% the intact DETS rather than starting from empty/partial shu.
+    MetaShu = filename:join(meta_dir(DataDir), "meta.shu"),
+    false = filelib:is_file(MetaShu),
+    false = filelib:is_file(MetaShu ++ ".migrating"),
     ok.
 
 atom_table_full_is_controlled(Config) ->
@@ -218,6 +229,38 @@ atom_table_full_is_controlled(Config) ->
     after 10000 ->
               ct:fail(meta_process_did_not_exit)
     end,
+    ok.
+
+migrate_skipped_when_shu_exists(Config) ->
+    Id = ?config(key, Config),
+    DataDir = ?config(data_dir, Config),
+    %% ra started in init_per_testcase with a fresh meta.shu (no DETS). Advance
+    %% the metadata so shu holds a value newer than any DETS would.
+    ok = ra_log_meta:store_sync(ra_log_meta, Id, current_term, 9),
+    9 = ra_log_meta:fetch(ra_log_meta, Id, current_term),
+    %% stop, drop a STALE meta.dets alongside the existing meta.shu, restart.
+    %% Because meta.shu already exists it is authoritative; the stale DETS must
+    %% NOT be migrated over the newer value (regression guard).
+    application:stop(ra),
+    timer:sleep(100),
+    ok = write_dets(DataDir, {Id, 1, 'stale@node', 1}),
+    {ok, _} = ra:start_in(DataDir),
+    ok = ra_log_meta:await(ra_log_meta),
+    9 = ra_log_meta:fetch(ra_log_meta, Id, current_term),
+    ok.
+
+oversized_batch_does_not_hang(Config) ->
+    %% With the tiny WAL configured in init_per_testcase, a coalesced batch of
+    %% many distinct uids' last_applied writes exceeds wal_size. The write path
+    %% must fall back to per-op writes rather than livelocking; if it hung, the
+    %% await/1 call below would never return and the test would time out.
+    N = 200,
+    _ = [ra_log_meta:store(ra_log_meta,
+                           <<"batch_uid_", (integer_to_binary(I))/binary>>,
+                           last_applied, I) || I <- lists:seq(1, N)],
+    ok = ra_log_meta:await(ra_log_meta),
+    5 = ra_log_meta:fetch(ra_log_meta, <<"batch_uid_5">>, last_applied),
+    N = ra_log_meta:fetch(ra_log_meta, <<"batch_uid_200">>, last_applied),
     ok.
 
 %%% helpers

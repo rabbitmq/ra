@@ -65,32 +65,30 @@ init(#{name := System,
     ok = ra_lib:make_dir(Dir),
     MetaShu = filename:join(Dir, "meta.shu"),
     MetaDets = filename:join(Dir, "meta.dets"),
-
-    ShuState0 =
-        case shu:open(MetaShu, schema()) of
-            {ok, S} ->
-                S;
-            {error, OpenReason} ->
-                %% e.g. schema_mismatch (schema changed vs the on-disk file),
-                %% unsupported_version, or a corrupt/invalid header. There is no
-                %% safe automatic recovery for Raft metadata, so fail loudly and
-                %% leave the file untouched for operator intervention rather than
-                %% silently starting with empty metadata.
-                ?ERROR("ra_log_meta: cannot open shu store ~ts: ~p",
-                       [MetaShu, OpenReason]),
-                error({shu_open_failed, MetaShu, OpenReason})
-        end,
+    Schema = schema(),
 
     %% Create the ETS hot-cache table as today.
     _ = ets:new(TblName, [named_table, public, {read_concurrency, true}]),
 
-    %% Migrate from a legacy DETS file if one is present.
+    %% Open the shu store, migrating from a legacy DETS file only when the shu
+    %% store does not yet exist. An existing meta.shu is authoritative and may
+    %% hold metadata that has advanced past the DETS values, so a leftover
+    %% meta.dets (e.g. from a rename that failed after a previous successful
+    %% migration) is ignored rather than re-migrated over the newer data. The
+    %% migration itself is crash-atomic (see migrate_from_dets/3): meta.shu only
+    %% appears once fully populated, so an interrupted first migration re-runs
+    %% from the intact meta.dets on the next start.
     {RecoveredCount, ShuState1} =
-        case filelib:is_file(MetaDets) of
+        case filelib:is_file(MetaShu) of
             true ->
-                migrate_from_dets(MetaDets, ShuState0);
+                {0, open_shu(MetaShu, Schema)};
             false ->
-                {0, ShuState0}
+                case filelib:is_file(MetaDets) of
+                    true ->
+                        migrate_from_dets(MetaShu, MetaDets, Schema);
+                    false ->
+                        {0, open_shu(MetaShu, Schema)}
+                end
         end,
 
     %% Populate the ETS cache from shu.
@@ -140,7 +138,7 @@ handle_batch(Commands, #?MODULE{table_name = TblName} = State) ->
 
     State2 = write_ops(State1, WriteOps),
     State3 = case DoSync of
-                 true -> sync_shu(State2);
+                 true -> sync_shu_durable(State2);
                  false -> State2
              end,
     %% Only the periodic timer message reschedules itself; a store_sync that
@@ -175,6 +173,11 @@ handle_command({info, {'DOWN', MRef, process, _Pid, Reason}},
     %% The compaction worker exited. Apply its result (finish on success,
     %% abort on failure/crash) without ever crashing the meta store.
     {I, C, R, DoSync, apply_compaction_result(Reason, S)};
+handle_command({info, {'EXIT', _Pid, _Reason}}, Acc) ->
+    %% The compaction worker is linked (see start_compact/1); with trap_exit set
+    %% its exit is delivered here as well as via the monitor DOWN above. The DOWN
+    %% clause handles the result, so ignore the EXIT.
+    Acc;
 handle_command({info, Info}, Acc) ->
     ?ERROR("ra_log_meta: unexpected info message: ~p", [Info]),
     Acc;
@@ -434,30 +437,70 @@ populate_ets_from_shu(TblName, ShuState) ->
           ShuState),
     ok.
 
-%% Migrate a legacy DETS file into shu. The DETS file is only renamed (and
-%% thereby retired) once its contents have been durably written to shu. If the
-%% migration fails it raises and meta.dets is left untouched, so the migration
-%% is retried on the next start with no data loss. A corrupt or unexpectedly
-%% shaped DETS file fails loudly rather than silently discarding metadata.
-migrate_from_dets(MetaDets, ShuState0) ->
+%% Open the shu store, converting an open error into a clear, loud failure.
+%% There is no safe automatic recovery for Raft metadata (schema_mismatch,
+%% unsupported_version, corrupt header), so we crash rather than silently start
+%% with empty metadata; the file is left untouched for operator intervention.
+open_shu(MetaShu, Schema) ->
+    case shu:open(MetaShu, Schema) of
+        {ok, S} ->
+            S;
+        {error, Reason} ->
+            ?ERROR("ra_log_meta: cannot open shu store ~ts: ~p",
+                   [MetaShu, Reason]),
+            error({shu_open_failed, MetaShu, Reason})
+    end.
+
+%% Crash-atomically migrate a legacy DETS file into a new shu store. The data is
+%% built in a temporary file which is only renamed to MetaShu once fully written
+%% and synced, so meta.shu never exists in a partially-migrated state: an
+%% interrupted migration leaves no meta.shu and the next start re-runs it from
+%% the intact meta.dets. Only after meta.shu is published is meta.dets retired.
+%% A corrupt or unexpectedly shaped DETS fails loudly (file preserved) rather
+%% than silently discarding metadata.
+migrate_from_dets(MetaShu, MetaDets, Schema) ->
+    TmpShu = MetaShu ++ ".migrating",
+    %% Discard any leftover temp from a previously interrupted attempt. A
+    %% failure here (other than "already absent") means we cannot guarantee a
+    %% clean temp, so fail loudly rather than migrating into stale/foreign
+    %% state; the source meta.dets is left intact for a retry.
+    case file:delete(TmpShu) of
+        ok -> ok;
+        {error, enoent} -> ok;
+        {error, DelReason} ->
+            ?ERROR("ra_log_meta: cannot remove stale migration temp ~ts: ~p",
+                   [TmpShu, DelReason]),
+            error({migration_temp_cleanup_failed, TmpShu, DelReason})
+    end,
+    TmpState = open_shu(TmpShu, Schema),
+    {Count, TmpState1} = migrate_dets_into(MetaDets, TmpState, TmpShu),
+    %% flush + close the temp store, then atomically publish it as meta.shu.
+    ok = shu:close(TmpState1),
+    ok = file:rename(TmpShu, MetaShu),
+    %% migration is now durable and published; retire the source DETS.
+    ok = rename_migrated(MetaDets),
+    {Count, open_shu(MetaShu, Schema)}.
+
+migrate_dets_into(MetaDets, TmpState, TmpShu) ->
     case dets:open_file(ra_log_meta_migration, [{file, MetaDets}]) of
         {ok, DetsTable} ->
-            Result =
-                try
-                    do_migrate_from_dets(DetsTable, ShuState0)
-                catch
-                    Class:Reason:Stack ->
-                        ?ERROR("ra_log_meta: DETS migration failed; ~ts is "
-                               "preserved for inspection: ~p:~p~n~p",
-                               [MetaDets, Class, Reason, Stack]),
-                        _ = dets:close(DetsTable),
-                        erlang:raise(Class, Reason, Stack)
-                end,
-            _ = dets:close(DetsTable),
-            %% Only reached on success; retire the source file.
-            ok = rename_migrated(MetaDets),
-            Result;
+            try
+                Result = do_migrate_from_dets(DetsTable, TmpState),
+                _ = dets:close(DetsTable),
+                Result
+            catch
+                Class:Reason:Stack ->
+                    ?ERROR("ra_log_meta: DETS migration failed; ~ts is "
+                           "preserved for inspection: ~p:~p~n~p",
+                           [MetaDets, Class, Reason, Stack]),
+                    _ = dets:close(DetsTable),
+                    _ = catch shu:close(TmpState),
+                    _ = file:delete(TmpShu),
+                    erlang:raise(Class, Reason, Stack)
+            end;
         {error, Reason} ->
+            _ = catch shu:close(TmpState),
+            _ = file:delete(TmpShu),
             ?ERROR("ra_log_meta: cannot open legacy DETS ~ts for migration; "
                    "it is preserved for inspection: ~p", [MetaDets, Reason]),
             error({dets_open_failed, MetaDets, Reason})
@@ -537,11 +580,18 @@ rename_migrated(MetaDets) ->
 
 %% Start an asynchronous compaction. shu is flipped into 'compacting' mode
 %% which buffers subsequent writes in memory until finish_compact/2 is called.
+%% The worker is spawned with a link as well as a monitor: the link guarantees
+%% the worker dies with this process (even on a brutal supervisor kill), so it
+%% can never outlive the store and write meta.shu concurrently with the
+%% restarted store. This process traps exits, so the worker's own exit arrives
+%% as a harmless {'EXIT', _, _} info message (the monitor DOWN carries the
+%% actual result).
 -dialyzer({nowarn_function, start_compact/1}).
 start_compact(#?MODULE{compact_pid = undefined, shu = S0} = State) ->
     {Work, S1} = shu:prepare_compact(S0),
-    {Pid, MRef} = spawn_monitor(
-                    fun () -> exit({compact_result, shu:do_compact(Work)}) end),
+    {Pid, MRef} = spawn_opt(
+                    fun () -> exit({compact_result, shu:do_compact(Work)}) end,
+                    [link, monitor]),
     State#?MODULE{shu = S1, compact_pid = Pid, compact_mref = MRef};
 start_compact(#?MODULE{compact_pid = Pid} = State) when is_pid(Pid) ->
     %% already compacting
@@ -601,29 +651,97 @@ write_ops(#?MODULE{shu = S0} = State, WriteOps) ->
             State#?MODULE{shu = S1};
         {wal_full, S1} ->
             State1 = State#?MODULE{shu = S1},
-            State2 = case State1#?MODULE.compact_pid of
-                         undefined ->
-                             %% no compaction running yet: start one, then
-                             %% retry (the write buffers into the fresh WAL)
-                             start_compact(State1);
-                         _ ->
-                             %% a compaction is running and its buffer is full;
-                             %% wait for it to complete before retrying
-                             ensure_compaction_finished(State1)
-                     end,
-            write_ops(State2, WriteOps);
+            case State1#?MODULE.compact_pid of
+                undefined ->
+                    %% Start a background compaction and retry: a batch that
+                    %% fits wal_size succeeds by buffering into the compacting
+                    %% WAL (non-blocking). A batch that does not fit is handled
+                    %% once a compaction is in flight (the clause below).
+                    write_ops(start_compact(State1), WriteOps);
+                _ ->
+                    %% A compaction is in flight and even its bounded in-memory
+                    %% buffer is full. Wait for it to complete, fully reclaiming
+                    %% the WAL, then retry once. If the batch STILL does not fit
+                    %% it exceeds wal_size and can never be written whole, so
+                    %% fall back to per-op writes.
+                    State2 = ensure_compaction_finished(State1),
+                    case shu:write_batch(State2#?MODULE.shu, WriteOps) of
+                        {ok, S3} ->
+                            State2#?MODULE{shu = S3};
+                        {wal_full, S3} ->
+                            write_ops_incremental(State2#?MODULE{shu = S3},
+                                                  WriteOps);
+                        {error, Reason} = Err ->
+                            ?ERROR("ra_log_meta: write_batch failed: ~p",
+                                   [Reason]),
+                            exit(Err)
+                    end
+            end;
         {error, Reason} = Err ->
             ?ERROR("ra_log_meta: write_batch failed: ~p", [Reason]),
             exit(Err)
     catch
-        throw:{error, atom_table_full} = ATErr ->
-            ?ERROR("ra_log_meta: cannot persist metadata, shu atom table is "
-                   "full (too many distinct node names): ~p", [ATErr]),
-            exit({shu_write_failed, ATErr});
-        throw:{unknown_field, _} = UFErr ->
-            ?ERROR("ra_log_meta: cannot persist metadata: ~p", [UFErr]),
-            exit({shu_write_failed, UFErr})
+        throw:Thrown ->
+            shu_write_throw(Thrown)
     end.
+
+%% Fall back path for a batch too large to fit the WAL in one write_batch:
+%% write each op individually, reclaiming the WAL with a synchronous compaction
+%% whenever it fills. Guaranteed to make progress unless a single op cannot fit
+%% an empty WAL, which only happens if wal_size is misconfigured below one entry.
+write_ops_incremental(State, []) ->
+    State;
+write_ops_incremental(#?MODULE{shu = S0} = State, [{Key, FieldValues} | Rest]) ->
+    try shu:write(S0, Key, FieldValues) of
+        {ok, S1} ->
+            write_ops_incremental(State#?MODULE{shu = S1}, Rest);
+        {wal_full, S1} ->
+            State1 = compact_now(State#?MODULE{shu = S1}),
+            case shu:write(State1#?MODULE.shu, Key, FieldValues) of
+                {ok, S2} ->
+                    write_ops_incremental(State1#?MODULE{shu = S2}, Rest);
+                {wal_full, _} ->
+                    ?ERROR("ra_log_meta: wal_size too small to hold a single "
+                           "write op", []),
+                    exit(wal_size_too_small);
+                {error, Reason} = Err ->
+                    ?ERROR("ra_log_meta: write failed: ~p", [Reason]),
+                    exit(Err)
+            end;
+        {error, Reason} = Err ->
+            ?ERROR("ra_log_meta: write failed: ~p", [Reason]),
+            exit(Err)
+    catch
+        throw:Thrown ->
+            shu_write_throw(Thrown)
+    end.
+
+%% Synchronously reclaim the WAL (used by the incremental fallback, where no
+%% async compaction is in flight).
+compact_now(#?MODULE{shu = S0} = State) ->
+    {Work, S1} = shu:prepare_compact(S0),
+    case shu:do_compact(Work) of
+        ok ->
+            {ok, S2} = shu:finish_compact(ok, S1),
+            State#?MODULE{shu = S2};
+        {error, Reason} = Err ->
+            {ok, _} = shu:abort_compact(S1),
+            ?ERROR("ra_log_meta: inline compaction failed: ~p", [Reason]),
+            exit({compaction_failed, Err})
+    end.
+
+-spec shu_write_throw(term()) -> no_return().
+shu_write_throw({error, atom_table_full} = ATErr) ->
+    ?ERROR("ra_log_meta: cannot persist metadata, shu atom table is full "
+           "(too many distinct node names): ~p", [ATErr]),
+    exit({shu_write_failed, ATErr});
+shu_write_throw({unknown_field, _} = UFErr) ->
+    ?ERROR("ra_log_meta: cannot persist metadata: ~p", [UFErr]),
+    exit({shu_write_failed, UFErr});
+shu_write_throw(Other) ->
+    %% unexpected thrown term; surface it as a controlled failure
+    ?ERROR("ra_log_meta: unexpected shu error: ~p", [Other]),
+    exit({shu_write_failed, Other}).
 
 %% Wait for the in-flight compaction to complete so the WAL is reclaimed. A
 %% compaction that never completes leaves the store unable to make progress and
@@ -639,19 +757,37 @@ ensure_compaction_finished(State0) ->
             exit(compaction_stuck)
     end.
 
+%% Durable sync for store_sync/delete_sync: the caller requires the write to be
+%% on disk when the call returns. If a compaction is in flight, a high-frequency
+%% field written this batch is only buffered in memory and shu:sync cannot flush
+%% it, so first finish the compaction (which durably replays the buffered
+%% writes), then sync. When not compacting this is just a plain sync.
+sync_shu_durable(#?MODULE{compact_pid = undefined} = State) ->
+    sync_shu(State);
+sync_shu_durable(State) ->
+    sync_shu(ensure_compaction_finished(State)).
+
 %% Periodically fsync the shu store to bound loss of WAL-buffered
 %% (high-frequency) fields such as last_applied, similar to the old DETS
-%% auto_save interval.
+%% auto_save interval. This is best-effort: during a compaction the buffered
+%% high-frequency writes are flushed durably when the compaction completes, so a
+%% compaction_in_progress result is ignored here.
 sync_shu(#?MODULE{shu = S0} = State) ->
     case shu:sync(S0) of
         {ok, S1} ->
             State#?MODULE{shu = S1};
         {error, compaction_in_progress} ->
             %% pending writes are buffered and flushed when compaction ends
+            %% (sync_shu_durable finishes the compaction first, so this only
+            %% arises on the best-effort periodic path)
             State;
-        {error, Reason} ->
+        {error, Reason} = Err ->
+            %% A genuine fsync failure (e.g. EIO) means the disk is failing; we
+            %% must not let a store_sync/delete_sync caller believe its write is
+            %% durable when it is not. Fail loudly (the log subtree restarts and
+            %% recovers from the WAL), matching the write path's behaviour.
             ?ERROR("ra_log_meta: sync failed: ~p", [Reason]),
-            State
+            exit(Err)
     end.
 
 schedule_sync() ->

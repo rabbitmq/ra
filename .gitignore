@@ -15,6 +15,7 @@ callgrind*
 ct.coverdata
 test/ct.cover.spec
 _build
+_checkouts
 
 ra.d
 *.plt
