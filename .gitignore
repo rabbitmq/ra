@@ -1,4 +1,5 @@
 erl_crash.dump
+rebar3.crashdump
 .sw?
 .*.sw?
 *.beam
@@ -14,6 +15,7 @@ callgrind*
 ct.coverdata
 test/ct.cover.spec
 _build
+_checkouts
 
 ra.d
 *.plt

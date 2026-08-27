@@ -29,7 +29,11 @@ init([#{data_dir := DataDir,
     PreInit = #{id => ra_log_pre_init,
                 start => {ra_log_pre_init, start_link, [System]}},
     Meta = #{id => ra_log_meta,
-             start => {ra_log_meta, start_link, [Cfg]}},
+             start => {ra_log_meta, start_link, [Cfg]},
+             %% ra_log_meta:terminate/2 may wait up to 30s for an in-flight
+             %% compaction to finish before closing the shu store cleanly; give
+             %% it that budget instead of the 5s worker default.
+             shutdown => 30_000},
     PoolSize = ra_log_sync:pool_size(),
     LogSyncWorkers = [#{id => {ra_log_sync, I},
                         start => {ra_log_sync, start_link,

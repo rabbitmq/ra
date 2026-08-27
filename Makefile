@@ -11,7 +11,7 @@ ESCRIPT_EMU_ARGS = -noinput -setcookie ra_fifo_cli
 dep_gen_batch_server = hex 0.10.0
 dep_aten = hex 0.6.0
 dep_seshat = hex 1.0.1
-dep_shu = git https://github.com/rabbitmq/shu main
+dep_shu = git https://github.com/lukebakken/rmq-shu shu-fixes
 DEPS = aten gen_batch_server seshat shu
 
 TEST_DEPS = proper meck inet_tcp_proxy
