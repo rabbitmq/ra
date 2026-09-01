@@ -50,6 +50,7 @@
          restart_server/3,
          stop_server/2,
          force_delete_server/2,
+         force_delete_server/3,
          trigger_election/1,
          trigger_election/2,
          %% membership changes
@@ -256,7 +257,21 @@ stop_server(System, ServerId)
 -spec force_delete_server(atom(), ServerId :: ra_server_id()) ->
     ok | {error, term()} | {badrpc, term()}.
 force_delete_server(System, ServerId) ->
-    ra_server_sup_sup:delete_server(System, ServerId).
+    force_delete_server(System, ServerId, infinity).
+
+%% @doc Deletes a ra server, bounding the operation by a timeout.
+%% The server is forcefully deleted. The timeout bounds the remote calls made
+%% to the server's node, so a member on a slow or unreachable node fails with
+%% `{badrpc, timeout}' instead of blocking indefinitely.
+%% @param ServerId the ra_server_id() of the server
+%% @param Timeout the timeout in milliseconds or `infinity'
+%% @returns `ok | {error, nodedown} | {badrpc, Reason}'
+%% @end
+-spec force_delete_server(atom(), ServerId :: ra_server_id(),
+                          Timeout :: timeout()) ->
+    ok | {error, term()} | {badrpc, term()}.
+force_delete_server(System, ServerId, Timeout) ->
+    ra_server_sup_sup:delete_server(System, ServerId, Timeout).
 
 %% @doc Starts or restarts a ra cluster.
 %%

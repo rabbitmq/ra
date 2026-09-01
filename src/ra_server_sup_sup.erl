@@ -25,7 +25,8 @@
 -export([start_server/2,
          restart_server/3,
          stop_server/2,
-         delete_server/2,
+         stop_server/3,
+         delete_server/3,
          remove_all/1,
          start_link/1,
          recover_config/2,
@@ -130,11 +131,17 @@ restart_server_rpc(System, {RaName, _Node}, AddConfig)
 
 -spec stop_server(System :: atom(), RaNodeId :: ra_server_id()) ->
     ok | {error, term()}.
-stop_server(System, ServerId) when is_atom(System) ->
+stop_server(System, ServerId) ->
+    stop_server(System, ServerId, infinity).
+
+-spec stop_server(System :: atom(), RaNodeId :: ra_server_id(),
+                  Timeout :: timeout()) ->
+    ok | {error, term()}.
+stop_server(System, ServerId, Timeout) when is_atom(System) ->
     Node = ra_lib:ra_server_id_node(ServerId),
     RaName = ra_lib:ra_server_id_to_local_name(ServerId),
     Res = rpc:call(Node, ?MODULE,
-                   prepare_server_stop_rpc, [System, RaName]),
+                   prepare_server_stop_rpc, [System, RaName], Timeout),
     case Res of
         {error, _} = Err ->
             Err;
@@ -156,14 +163,14 @@ prepare_server_stop_rpc(System, RaName) ->
             {ok, Parent, SrvSup}
     end.
 
--spec delete_server(atom(), ServerId :: ra_server_id()) ->
+-spec delete_server(atom(), ServerId :: ra_server_id(), Timeout :: timeout()) ->
     ok | {error, term()} | {badrpc, term()}.
-delete_server(System, ServerId) when is_atom(System) ->
+delete_server(System, ServerId, Timeout) when is_atom(System) ->
     Node = ra_lib:ra_server_id_node(ServerId),
     Name = ra_lib:ra_server_id_to_local_name(ServerId),
-    case stop_server(System, ServerId) of
+    case stop_server(System, ServerId, Timeout) of
         ok ->
-            rpc:call(Node, ?MODULE, delete_server_rpc, [System, Name]);
+            rpc:call(Node, ?MODULE, delete_server_rpc, [System, Name], Timeout);
         {error, _} = Err -> Err
     end.
 
