@@ -121,7 +121,7 @@
 %% configured
 
 -type send_msg_opts() :: send_msg_opt() | [send_msg_opt()].
--type locator() :: pid() | atom() | {atom(), node()}.
+-type locator() :: pid() | atom() | {atom(), node()} | reference().
 
 -type release_cursor_condition() :: {written, ra_index()} | no_snapshot_sends.
 -type release_cursor_opts() :: #{condition => [release_cursor_condition()]}.
@@ -182,7 +182,7 @@
 %%
 %% <dl>
 %% <dt><b>send_msg</b></dt>
-%% <dd> send a message to a pid or registered process
+%% <dd> send a message to a pid, a registered process or a process alias
 %% NB: this is sent using `noconnect' and `nosuspend' options in order to avoid
 %% blocking the ra process on connectivity failures. It can optionally be wrapped up as
 %% a `ra_event' and/or as a gen cast message (``{'$cast', Msg}'')

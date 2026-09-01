@@ -2393,7 +2393,9 @@ get_node(P) when is_pid(P) ->
 get_node({_, Node}) ->
     Node;
 get_node(Proc) when is_atom(Proc) ->
-    node().
+    node();
+get_node(Alias) when is_reference(Alias) ->
+    node(Alias).
 
 can_execute_locally(RaftState, TargetNode,
                     #state{server_state = ServerState} = State) ->

@@ -185,8 +185,8 @@ returned by the state machine unless specific effect provide the `local` option.
 
 | Spec | Executed on |
 | -----| ----------- |
-| `{send_msg, pid(), Msg :: term()}` | leader |
-| `{send_msg, pid(), Msg :: term(), [local]}` | on member local to `pid()` else leader |
+| `{send_msg, locator(), Msg :: term()}` | leader |
+| `{send_msg, locator(), Msg :: term(), [local]}` | on member local to `locator()` else leader |
 | `{monitor \| demonitor, process \| node, pid() \| node()}` | leader |
 | `{mod_call, mfa()}` | leader |
 | `{timer, Name :: term(), Time :: non_neg_integer() \| infinity}` | leader |
@@ -202,16 +202,20 @@ returned by the state machine unless specific effect provide the `local` option.
 
 ### Send a message
 
-The `{send_msg, pid(), Msg :: term()}` effect asynchronously sends a message
-to the specified
-`pid`. Note that `ra` uses `erlang:send/3` with the `no_connect` and `no_suspend`
+The `{send_msg, locator(), Msg :: term()}` effect asynchronously sends a message
+to the specified target `locator()`. The target can be:
+* a PID (`pid()`)
+* a registered process (`atom()` or `{atom(), node()}`)
+* a process alias (`reference()`)
+
+Note that `ra` uses `erlang:send/3` with the `no_connect` and `no_suspend`
 options which are the least reliable message sending options. It does this so
 that a state machine `send_msg` effect will never block the main `ra` process.
 To ensure message reliability normal [Automatic Repeat Query (ARQ)](https://en.wikipedia.org/wiki/Automatic_repeat_request)
 like protocols between the state machine and the receiver should be implemented
 if needed.
 
-The `{send_msg, pid(), Msg :: term(), Options :: list()}` effect can be used to further
+The `{send_msg, locator(), Msg :: term(), Options :: list()}` effect can be used to further
 control how the effect is executed via options. The options are:
 
 * `ra_event`: the message will be wrapped in a `ra_event` structure like
@@ -219,9 +223,9 @@ control how the effect is executed via options. The options are:
     a `ra_event_formatter` server configuration.
 * `cast`: the message will be wrappen in a standard `{$gen_cast, Msg}` wrapper
     to conform to OTP `gen` conventions.
-* `local`: if the target `pid()` is local to any member of the Ra cluster the delivery
+* `local`: if the target `locator()` is local to any member of the Ra cluster the delivery
 of the message will be done from the local member even if this is a follower.
-This way a network hop can be avoided. If the target `pid()` is on a node
+This way a network hop can be avoided. If the target `locator()` is on a node
 without a Ra member it will be sent from the leader.
 
 ### Monitors

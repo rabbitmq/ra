@@ -29,6 +29,7 @@ all() ->
 all_tests() ->
     [
      send_msg_without_options,
+     send_msg_with_alias,
      send_msg_with_ra_event_option,
      send_msg_with_cast_option,
      send_msg_with_ra_event_and_cast_options,
@@ -113,6 +114,25 @@ send_msg_without_options(Config) ->
     ServerId = ?config(server_id, Config),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
     {ok, ok, _} = ra:process_command(ServerId, {echo, self(), ?FUNCTION_NAME}),
+    receive ?FUNCTION_NAME -> ok
+    after 250 ->
+              flush(),
+              exit(receive_msg_timeout)
+    end,
+    ok.
+
+send_msg_with_alias(Config) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> the_state end),
+    meck:expect(Mod, apply, fun (_, {echo, Alias, Msg}, State) ->
+                                    {State, ok, {send_msg, Alias, Msg}}
+                            end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    ok = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
+    Alias = erlang:alias([reply]),
+    {ok, ok, _} = ra:process_command(ServerId, {echo, Alias, ?FUNCTION_NAME}),
     receive ?FUNCTION_NAME -> ok
     after 250 ->
               flush(),
