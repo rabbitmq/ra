@@ -63,6 +63,7 @@ all() ->
      follower_install_snapshot_machine_version,
      recovery_checkpoint_reinitialises_aux_state,
      recovery_checkpoint_reinitialises_aux_state_same_version,
+     recover_survives_committed_delete_entry,
      leader_server_join,
      leader_server_join_nonvoter,
      leader_server_leave,
@@ -2004,6 +2005,46 @@ recovery_checkpoint_reinitialises_aux_state_same_version(_Config) ->
                   effective_machine_module = Mod},
       machine_state := recovered_machine_state,
       aux_state := fresh_aux_state} = ra_server:recover(State00),
+    ok.
+
+recover_survives_committed_delete_entry(_Config) ->
+    %% simulates a node that crashed after a '$ra_cluster' delete entry was
+    %% durably logged and committed, but before last_applied was persisted
+    %% past it: on restart, recover/1 replays the same entry and must not
+    %% crash.
+    Mod = ?FUNCTION_NAME,
+    mock_machine(Mod),
+    DeleteCmd = {'$ra_cluster', meta(), delete, await_consensus},
+    Log0 = ra_log:append({1, 1, DeleteCmd},
+                         ra_log:init(#{system_config => ra_system:default_config(),
+                                       uid => <<>>})),
+    {Log, _} = ra_log:handle_event({written, 1, [{1, 1}]}, Log0),
+    Cfg = #cfg{id = ?N1,
+               uid = <<"n1">>,
+               log_id = <<"n1">>,
+               metrics_key = n1,
+               metrics_labels = #{},
+               machine = {machine, Mod, #{}},
+               machine_version = 0,
+               machine_versions = [{0, 0}],
+               effective_machine_version = 0,
+               effective_machine_module = Mod,
+               system_config = ra_system:default_config()},
+    State0 = #{cfg => Cfg,
+               leader_id => ?N1,
+               cluster => #{?N1 => new_peer_with(#{next_index => 2,
+                                                    match_index => 1})},
+               cluster_index_term => {0, 0},
+               cluster_change_permitted => true,
+               machine_state => init_state,
+               current_term => 1,
+               commit_index => 1,
+               last_applied => 0,
+               log => Log,
+               query_index => 0,
+               queries_waiting_heartbeats => queue:new(),
+               pending_consistent_queries => []},
+    ?assertMatch({delete_and_terminate, _}, ra_server:recover(State0)),
     ok.
 
 leader_server_join(_Config) ->
