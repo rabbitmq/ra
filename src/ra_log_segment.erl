@@ -725,7 +725,6 @@ segref(Filename) ->
                    links => non_neg_integer(),
                    num_entries => non_neg_integer(),
                    ref => option(ra_log:segment_ref()),
-                   indexes => ra_seq:state(),
                    live_size => non_neg_integer()
                   }.
 
@@ -748,13 +747,9 @@ info(Filename, Live0)
         IndexRecordSize = index_record_size(Version),
         IndexSize = MaxCount * IndexRecordSize,
         DataStart = ?HEADER_SIZE + IndexSize,
-        %% Pass Live0 directly - ra_seq:in/2 is used for membership checks
-        %% This avoids expanding the sequence to a set which could be expensive
-        %% for large sequences. ra_seq:in/2 is efficient for compact sequences
-        %% with ranges.
         case file:pread(Fd, ?HEADER_SIZE, IndexSize) of
             {ok, Data} ->
-                {NumEntries, DataOffset, Range, IndexesSeq, LiveSize} =
+                {NumEntries, DataOffset, Range, LiveSize} =
                     parse_index_info(Version, Data, DataStart, Live0),
                 Ref = case Range of
                           undefined -> undefined;
@@ -768,8 +763,7 @@ info(Filename, Live0)
                   max_count => MaxCount,
                   num_entries => NumEntries,
                   ref => Ref,
-                  live_size => LiveSize,
-                  indexes => IndexesSeq};
+                  live_size => LiveSize};
             eof ->
                 %% Empty segment
                 #{size => DataStart,
@@ -780,8 +774,7 @@ info(Filename, Live0)
                   max_count => MaxCount,
                   num_entries => 0,
                   ref => undefined,
-                  live_size => 0,
-                  indexes => []}
+                  live_size => 0}
         end
     after
         _ = file:close(Fd)
@@ -1074,46 +1067,87 @@ parse_index_data_loop(Fmt, Bin, ByteOffset, Num, LastIdx, DataOffset, Range, Ind
                                   Index1#{Idx => {Term, Offset, Length, Crc}})
     end.
 
-%% Optimized index parsing for info/2 that computes stats in a single pass
-%% without building a full index map. Returns:
-%% {NumEntries, DataOffset, Range, IndexesSeq, LiveSize}
+%% Index parsing for info/2 that computes stats in a single pass without
+%% building a full index map. Returns {NumEntries, DataOffset, Range, LiveSize}.
+%%
+%% Index records are appended in index order and LiveSeq is ordered
+%% high -> low, so both sides are sorted and can be walked together with a
+%% cursor. Doing a ra_seq:in/2 membership test per record instead would be
+%% O(records * runs), which for a sparse live sequence - exactly the case
+%% where major compaction is worth running - is pathological.
 parse_index_info(Version, Data, DataOffset, LiveSeq) ->
     Fmt = idx_fmt(Version),
-    parse_index_info_loop(Fmt, Data, 0, 0, 0, DataOffset, undefined, [], 0, LiveSeq).
+    %% undefined means "no live sequence supplied", i.e. count everything
+    Live = case LiveSeq of
+               undefined ->
+                   undefined;
+               _ ->
+                   lists:reverse(LiveSeq)
+           end,
+    parse_index_info_loop(Fmt, Data, 0, 0, 0, DataOffset, undefined, 0,
+                          Live, Live).
 
 parse_index_info_loop(Fmt, Bin, ByteOffset, Num, LastIdx, DataOffset, Range,
-                      IdxAcc, LiveSize, LiveSeq) ->
+                      LiveSize, Cur0, Live) ->
     case decode_index_record(Fmt, Bin, ByteOffset) of
         eof ->
             %% End of data or partially written index
-            {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)),
-             LiveSize};
+            {Num, DataOffset, Range, LiveSize};
         {ok, {Idx, _Term, Offset, Length, _Crc}} ->
-            %% Handle index going backwards (trim entries)
-            IdxAcc1 = case Idx < LastIdx of
-                          true ->
-                              lists:dropwhile(fun(I) -> I > Idx end, IdxAcc);
-                          false ->
-                              IdxAcc
-                      end,
-            %% Compute live size: if LiveSeq is undefined, all entries are live
-            LiveSize1 = case LiveSeq of
-                            undefined ->
-                                LiveSize + Length;
-                            _ ->
-                                case ra_seq:in(Idx, LiveSeq) of
-                                    true ->
-                                        LiveSize + Length;
-                                    false ->
-                                        LiveSize
-                                end
-                        end,
+            {LiveSize1, Cur} = live_size_add(Idx, Length, LastIdx, LiveSize,
+                                             Cur0, Live),
             RecSize = Fmt#idx_fmt.record_size,
             parse_index_info_loop(Fmt, Bin, ByteOffset + RecSize, Num + 1, Idx,
                                   Offset + Length,
                                   update_range(Range, Idx),
-                                  [Idx | IdxAcc1], LiveSize1, LiveSeq)
+                                  LiveSize1, Cur, Live)
     end.
+
+live_size_add(_Idx, Length, _LastIdx, LiveSize, Cur, undefined) ->
+    %% no live sequence, every entry counts
+    {LiveSize + Length, Cur};
+live_size_add(Idx, Length, LastIdx, LiveSize, Cur0, Live) ->
+    %% an index going backwards means the segment contains overwrites, so the
+    %% cursor has to restart. Overwrites are one off truncation points so this
+    %% stays effectively O(records + runs).
+    %% NB: as before, a live index appearing twice in an overwritten segment
+    %% contributes its length twice.
+    Cur1 = case Idx < LastIdx of
+               true -> Live;
+               false -> Cur0
+           end,
+    Cur = live_advance(Idx, Cur1),
+    case live_holds(Idx, Cur) of
+        true ->
+            {LiveSize + Length, Cur};
+        false ->
+            {LiveSize, Cur}
+    end.
+
+%% drop live runs that end below Idx
+live_advance(Idx, [E | Rem] = Cur) ->
+    case live_end(E) < Idx of
+        true ->
+            live_advance(Idx, Rem);
+        false ->
+            Cur
+    end;
+live_advance(_Idx, []) ->
+    [].
+
+%% after live_advance/2 the leading run ends at or above Idx, so Idx is live
+%% exactly when that run also starts at or below it
+live_holds(_Idx, []) ->
+    false;
+live_holds(Idx, [{Start, _} | _]) ->
+    Start =< Idx;
+live_holds(Idx, [I | _]) when is_integer(I) ->
+    I =< Idx.
+
+live_end({_, End}) ->
+    End;
+live_end(I) when is_integer(I) ->
+    I.
 
 write_header(MaxCount, Fd) ->
     Header = <<?MAGIC, ?VERSION:16/unsigned, MaxCount:16/unsigned>>,
