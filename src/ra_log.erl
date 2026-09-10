@@ -1747,7 +1747,7 @@ my_segrefs(UId, SegWriter) ->
                         %% if a server recovered when a segment had been opened
                         %% but never had any entries written the segref would be
                         %% undefined
-                        case ra_log_segment:info(File) of
+                        case ra_log_segment:segref_info(File) of
                             #{ref := SegRef,
                               file_type := regular}
                               when is_tuple(SegRef) ->

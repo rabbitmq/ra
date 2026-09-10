@@ -65,6 +65,7 @@ all_tests() ->
      writers_snapshot_persisted_at_rollover,
      writers_snapshot_survives_empty_wal_recovery,
      forget_writer_removes_entry,
+     counters_track_writes_and_file_size,
      recovery_trims_stale_writers,
      recover_multi_wal_with_concurrent_deletes
     ].
@@ -300,6 +301,53 @@ sparse_write_recover_with_mt(Config) ->
 %% TODO: as sparse writes are pre committed I dont
 %% think we'll ever overwrite anything.
 sparse_write_overwrite(_Config) ->
+    ok.
+
+%% The byte counter is accumulated per batch while the file size gauge is
+%% updated per entry (fill_ratio/1 reads the latter for back pressure), so
+%% assert both stay in step with what actually landed on disk.
+counters_track_writes_and_file_size(Config) ->
+    meck:new(ra_log_segment_writer, [passthrough]),
+    meck:expect(ra_log_segment_writer, await, fun(_) -> ok end),
+    Conf = ?config(wal_conf, Config),
+    #{dir := Dir, names := #{wal := WalName}} = Conf,
+    WriterId = ?config(writer_id, Config),
+    Tid = ets:new(?FUNCTION_NAME, []),
+    {ok, Pid} = ra_log_wal:start_link(Conf),
+    ?assertMatch(#{writes := 0,
+                   bytes_written := 0,
+                   current_file_size := 0},
+                 ra_counters:overview(WalName)),
+
+    %% a run of single writes, each one likely its own batch
+    Data = <<"counter-test-data">>,
+    [begin
+         {ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data),
+         ok = await_written(WriterId, 1, [I])
+     end || I <- lists:seq(1, 10)],
+    check_counters(WalName, Dir, 10),
+
+    %% then a batch of many writes issued before any are awaited, so that
+    %% several entries share a batch
+    [{ok, _} = ra_log_wal:write(Pid, WriterId, Tid, I, 1, Data)
+     || I <- lists:seq(11, 210)],
+    ok = await_written(WriterId, 1, [{11, 210}]),
+    check_counters(WalName, Dir, 210),
+
+    proc_lib:stop(Pid),
+    meck:unload(),
+    ok.
+
+check_counters(WalName, Dir, ExpectedWrites) ->
+    #{writes := Writes,
+      bytes_written := BytesWritten,
+      current_file_size := FileSize} = ra_counters:overview(WalName),
+    ?assertEqual(ExpectedWrites, Writes),
+    %% both track the same quantity within a single wal file
+    ?assertEqual(BytesWritten, FileSize),
+    %% and it must match the file on disk, less the 5 byte wal header
+    [WalFile] = filelib:wildcard(filename:join(Dir, "*.wal")),
+    ?assertEqual(filelib:file_size(WalFile) - 5, FileSize),
     ok.
 
 wal_filename_upgrade(Config) ->
@@ -1546,6 +1594,12 @@ writers_snapshot_persisted_at_rollover(Config) ->
               flush(),
               ct:fail("mem_tables timeout")
     end,
+    %% the writers snapshot is now persisted *after* the mem_tables cast is
+    %% sent (so the segment writer can start sooner), so receiving that cast
+    %% does not by itself guarantee the WAL has finished writing the
+    %% snapshot yet. A synchronous round-trip through the WAL process does:
+    %% it can only reply once it has returned from handling the roll-over.
+    _ = sys:get_state(Pid),
     %% verify the writers.snapshot file was created
     WritersFile = filename:join(Dir, "writers.snapshot"),
     ?assert(filelib:is_file(WritersFile)),

@@ -73,7 +73,13 @@
 
 -record(batch, {num_writes = 0 :: non_neg_integer(),
                 waiting = #{} :: #{pid() => #batch_writer{}},
-                pending = [] :: iolist()
+                pending = [] :: iolist(),
+                %% bytes written in this batch, so that ?C_BYTES_WRITTEN can
+                %% be updated once per batch rather than per entry
+                bytes = 0 :: non_neg_integer(),
+                %% the smallest live index per writer, resolved once per
+                %% batch rather than looked up per entry
+                smallest = #{} :: #{ra_uid() => ra:index()}
                }).
 
 -type writer_name_cache() :: {NextIntId :: non_neg_integer(),
@@ -535,10 +541,15 @@ write_data({UId, Pid} = Id, MtTid, Idx, Term, Data0, Trunc, SmallestIndex,
             Record = [HeaderData,
                       <<Checksum:32/integer, EntryDataLen:32/unsigned>> |
                       Entry],
-            Batch = incr_batch(Batch0, UId, Pid, MtTid,
-                               Idx, Term, Record, SmallestIndex),
+            Batch1 = incr_batch(Batch0, UId, Pid, MtTid,
+                                Idx, Term, Record, SmallestIndex),
+            %% ?C_BYTES_WRITTEN is cumulative so it is accumulated here and
+            %% added once per batch in complete_batch/1. ?C_CURRENT_FILE_SIZE
+            %% is deliberately still updated per entry: fill_ratio/1 reads it
+            %% and callers use that for back pressure, so it should not lag a
+            %% batch behind.
+            Batch = Batch1#batch{bytes = Batch1#batch.bytes + DataSize},
             NewFileSize = FileSize + DataSize,
-            counters:add(Counter, ?C_BYTES_WRITTEN, DataSize),
             counters:put(Counter, ?C_CURRENT_FILE_SIZE, NewFileSize),
             State0#state{batch = Batch,
                          wal = Wal#wal{writer_name_cache = Cache,
@@ -550,8 +561,24 @@ write_data({UId, Pid} = Id, MtTid, Idx, Term, Data0, Trunc, SmallestIndex,
 
 handle_msg({append, {UId, Pid} = Id, MtTid, ExpectedPrevIdx, Idx, Term, Entry},
            #state{conf = Conf,
-                  writers = Writers} = State0) ->
-    SmallestIdx = smallest_live_index(Conf, UId),
+                  batch = Batch0,
+                  writers = Writers} = State1) ->
+    %% The smallest live index is resolved once per writer per batch rather
+    %% than per entry. A snapshot completing mid batch is therefore noticed
+    %% one batch later, which only means an entry that could have been
+    %% dropped gets written. Recovery and the segment writer both re-read
+    %% the snapshot state, so they still skip it.
+    {SmallestIdx, State0} =
+        case Batch0 of
+            #batch{smallest = #{UId := S}} ->
+                {S, State1};
+            #batch{smallest = Sm} ->
+                S = smallest_live_index(Conf, UId),
+                {S, State1#state{batch =
+                                     Batch0#batch{smallest = Sm#{UId => S}}}};
+            _ ->
+                {smallest_live_index(Conf, UId), State1}
+        end,
     %% detect if truncating flag should be set
     Trunc = Idx == SmallestIdx,
 
@@ -652,12 +679,13 @@ roll_over(#state{wal = Wal0, file_num = Num0,
     %% if this is the first wal since restart randomise the first
     %% max wal size to reduce the likelihood that each erlang node will
     %% flush mem tables at the same time
-    %% persist writers map so that sequence tracking survives crashes
-    %% even after all WAL files have been deleted by the segment writer
-    ok = persist_writers(Dir, Writers),
     NextMaxBytes =
         case Wal0 of
             undefined ->
+                %% persist writers map so that sequence tracking survives
+                %% crashes even after all WAL files have been deleted by
+                %% the segment writer
+                ok = persist_writers(Dir, Writers),
                 Half = MaxBytes div 2,
                 Half + rand:uniform(Half);
             #wal{ranges = Ranges,
@@ -674,6 +702,10 @@ roll_over(#state{wal = Wal0, file_num = Num0,
                 ok = ra_log_segment_writer:accept_mem_tables(SegWriter,
                                                              MemTables,
                                                              Filename),
+                %% persist writers map after handing the mem tables to the
+                %% segment writer so it can start flushing sooner, rather
+                %% than waiting behind this write+rename
+                ok = persist_writers(Dir, Writers),
                 MaxBytes
         end,
 
@@ -697,7 +729,10 @@ persist_writers(Dir, Writers) ->
     File = writers_snapshot_file(Dir),
     Tmp = File ++ ".tmp",
     Bin = term_to_binary(Writers),
-    ok = ra_lib:write_file(Tmp, Bin),
+    %% this is a recovery optimisation only: recover_writers/1 falls back to
+    %% #{} if the file is missing, truncated or undecodable, so the fsync
+    %% that Sync = true would cost here isn't needed
+    ok = ra_lib:write_file(Tmp, Bin, false),
     ok = prim_file:rename(Tmp, File).
 
 recover_writers(Dir) ->
@@ -785,13 +820,16 @@ sync(Fd, Meth) ->
 complete_batch(#state{batch = undefined} = State) ->
     State;
 complete_batch(#state{batch = #batch{waiting = Waiting,
+                                     bytes = Bytes,
                                      num_writes = NumWrites},
                       wal = Wal,
                       conf = Cfg} = State0) ->
     % TS = erlang:system_time(microsecond),
     State = flush_pending(State0),
     % SyncTS = erlang:system_time(microsecond),
-    counters:add(Cfg#conf.counter, ?C_WRITES, NumWrites),
+    Counter = Cfg#conf.counter,
+    counters:add(Counter, ?C_WRITES, NumWrites),
+    counters:add(Counter, ?C_BYTES_WRITTEN, Bytes),
 
     %% process writers
     Ranges = maps:fold(fun complete_batch_writer/3, Wal#wal.ranges, Waiting),
