@@ -243,17 +243,25 @@
 -define(ERROR(Fmt, Args), ?DISPATCH_LOG(error, Fmt, Args)).
 
 -define(DISPATCH_LOG(Level, Fmt, Args),
-        %% same as OTP logger does when using the macro
-        try
-            (ra_env:logger_mod()):log(Level, Fmt, Args,
-                                      #{mfa => {?MODULE,
-                                                ?FUNCTION_NAME,
-                                                ?FUNCTION_ARITY},
-                                        file => ?FILE,
-                                        line => ?LINE,
-                                        domain => [ra]})
-        catch
-            _:_ -> ok
+        %% same as OTP logger does when using the macro: gate on the level
+        %% first so that Fmt/Args are not evaluated (they may contain
+        %% arbitrarily expensive calls) when the event would be discarded
+        %% anyway
+        case logger:allow(Level, ?MODULE) of
+            true ->
+                try
+                    (ra_env:logger_mod()):log(Level, Fmt, Args,
+                                              #{mfa => {?MODULE,
+                                                        ?FUNCTION_NAME,
+                                                        ?FUNCTION_ARITY},
+                                                file => ?FILE,
+                                                line => ?LINE,
+                                                domain => [ra]})
+                catch
+                    _:_ -> ok
+                end;
+            false ->
+                ok
         end,
         ok).
 
