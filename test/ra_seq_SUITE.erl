@@ -34,7 +34,8 @@ all_tests() ->
      remove_prefix,
      remove_prefix_2,
      from_list_with_duplicates,
-     has_overlap
+     has_overlap,
+     in
     ].
 
 %% Property tests. `add/2' and `remove_prefix/2' merge and split runs
@@ -52,7 +53,8 @@ prop_tests() ->
      prop_remove_prefix_model,
      prop_remove_prefix_canonical,
      prop_remove_prefix_roundtrip,
-     prop_remove_prefix_detects_gaps
+     prop_remove_prefix_detects_gaps,
+     prop_in_model
     ].
 
 groups() ->
@@ -293,6 +295,29 @@ has_overlap(_Config) ->
 
     ok.
 
+in(_Config) ->
+    ?assertEqual(false, ra_seq:in(1, [])),
+
+    %% S = [11, {5, 9}, {1, 3}]
+    S = ra_seq:from_list([1, 2, 3, 5, 6, 7, 8, 9, 11]),
+    ?assertEqual(true, ra_seq:in(11, S)),
+    ?assertEqual(true, ra_seq:in(1, S)),
+    ?assertEqual(true, ra_seq:in(3, S)),
+    ?assertEqual(true, ra_seq:in(5, S)),
+    ?assertEqual(true, ra_seq:in(7, S)),
+    ?assertEqual(true, ra_seq:in(9, S)),
+
+    %% absent, above the whole sequence - must exit early rather than scan
+    ?assertEqual(false, ra_seq:in(12, S)),
+    %% absent, in the gap directly above a range
+    ?assertEqual(false, ra_seq:in(10, S)),
+    %% absent, in the gap between two ranges
+    ?assertEqual(false, ra_seq:in(4, S)),
+    %% absent, below the whole sequence
+    ?assertEqual(false, ra_seq:in(0, S)),
+
+    ok.
+
 %%%===================================================================
 %%% Property tests
 %%%===================================================================
@@ -411,6 +436,15 @@ prop_remove_prefix_detects_gaps(_Config) ->
                           {error, not_prefix} ==
                               ra_seq:remove_prefix(Prefix, Seq)
                       end)
+      end, [], 2000).
+
+%% in/2 relies on the high -> low ordering to exit early; check it against
+%% the naive membership test on the fully expanded sequence.
+prop_in_model(_Config) ->
+    run_proper(
+      fun () ->
+              ?FORALL({Idx, S}, {index(), seq()},
+                      ra_seq:in(Idx, S) == lists:member(Idx, ra_seq:expand(S)))
       end, [], 2000).
 
 %%%===================================================================
