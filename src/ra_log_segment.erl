@@ -24,6 +24,7 @@
          data_size/1,
          filename/1,
          segref/1,
+         segref_info/1,
          info/1,
          info/2,
          is_same_as/2,
@@ -796,6 +797,63 @@ info(Filename, Live0)
     after
         _ = file:close(Fd)
     end.
+
+%% @doc Like info/1 but for a caller that only needs the segref and file
+%% type (e.g. ra_log:my_segrefs/2): skips num_entries, live_size and the
+%% ctime/links stat fields entirely.
+-spec segref_info(file:filename_all()) ->
+    #{ref => option(ra_log:segment_ref()),
+      file_type => regular | symlink}.
+segref_info(Filename)
+  when not is_tuple(Filename) ->
+    {ok, #file_info{type = Type}} =
+        prim_file:read_link_info(Filename, [raw, {time, posix}]),
+    {ok, Fd} = file:open(Filename, [read, raw, binary]),
+    try
+        {ok, Version, MaxCount} = read_header(Fd),
+        IndexSize = MaxCount * index_record_size(Version),
+        Ref = case file:pread(Fd, ?HEADER_SIZE, IndexSize) of
+                  {ok, Data} ->
+                      case scan_range(Version, Data) of
+                          undefined ->
+                              undefined;
+                          Range ->
+                              {ra_lib:to_binary(filename:basename(Filename)),
+                               Range}
+                      end;
+                  eof ->
+                      undefined
+              end,
+        #{ref => Ref, file_type => Type}
+    after
+        _ = file:close(Fd)
+    end.
+
+%% Index parsing for segref_info/1: only the index range is needed. Written
+%% as a directly-recursing binary match (rather than reusing
+%% decode_index_record/3's by-offset lookup) so the emulator can keep a
+%% single match context across the whole scan instead of re-deriving a
+%% sub-binary for every record.
+scan_range(2, Bin) ->
+    scan_range_v2(Bin, undefined);
+scan_range(1, Bin) ->
+    scan_range_v1(Bin, undefined).
+
+scan_range_v2(<<0:64, 0:64, 0:64, 0:32, 0:32/integer, _/binary>>, Range) ->
+    Range;
+scan_range_v2(<<Idx:64/unsigned, _Term:64/unsigned, _DataOffset:64/unsigned,
+                _Length:32/unsigned, _Crc:32/integer, Rest/binary>>, Range) ->
+    scan_range_v2(Rest, update_range(Range, Idx));
+scan_range_v2(_, Range) ->
+    Range.
+
+scan_range_v1(<<0:64, 0:64, 0:32, 0:32, 0:32/integer, _/binary>>, Range) ->
+    Range;
+scan_range_v1(<<Idx:64/unsigned, _Term:64/unsigned, _DataOffset:32/unsigned,
+                _Length:32/unsigned, _Crc:32/integer, Rest/binary>>, Range) ->
+    scan_range_v1(Rest, update_range(Range, Idx));
+scan_range_v1(_, Range) ->
+    Range.
 
 -spec is_same_as(state(), file:filename_all()) -> boolean().
 is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
