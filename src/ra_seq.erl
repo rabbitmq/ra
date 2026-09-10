@@ -217,9 +217,17 @@ in(_Idx, []) ->
     false;
 in(Idx, [Idx | _]) ->
     true;
+in(Idx, [Next | _])
+  when is_integer(Next) andalso Next < Idx ->
+    %% sequences are ordered high -> low so nothing from here on can
+    %% match either
+    false;
 in(Idx, [Next | Rem])
  when is_integer(Next) ->
     in(Idx, Rem);
+in(Idx, [{_, End} | _])
+  when End < Idx ->
+    false;
 in(Idx, [Range | Rem]) ->
     case ra_range:in(Idx, Range) of
         true ->
