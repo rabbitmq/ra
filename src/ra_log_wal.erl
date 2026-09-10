@@ -679,12 +679,13 @@ roll_over(#state{wal = Wal0, file_num = Num0,
     %% if this is the first wal since restart randomise the first
     %% max wal size to reduce the likelihood that each erlang node will
     %% flush mem tables at the same time
-    %% persist writers map so that sequence tracking survives crashes
-    %% even after all WAL files have been deleted by the segment writer
-    ok = persist_writers(Dir, Writers),
     NextMaxBytes =
         case Wal0 of
             undefined ->
+                %% persist writers map so that sequence tracking survives
+                %% crashes even after all WAL files have been deleted by
+                %% the segment writer
+                ok = persist_writers(Dir, Writers),
                 Half = MaxBytes div 2,
                 Half + rand:uniform(Half);
             #wal{ranges = Ranges,
@@ -701,6 +702,10 @@ roll_over(#state{wal = Wal0, file_num = Num0,
                 ok = ra_log_segment_writer:accept_mem_tables(SegWriter,
                                                              MemTables,
                                                              Filename),
+                %% persist writers map after handing the mem tables to the
+                %% segment writer so it can start flushing sooner, rather
+                %% than waiting behind this write+rename
+                ok = persist_writers(Dir, Writers),
                 MaxBytes
         end,
 
@@ -724,7 +729,10 @@ persist_writers(Dir, Writers) ->
     File = writers_snapshot_file(Dir),
     Tmp = File ++ ".tmp",
     Bin = term_to_binary(Writers),
-    ok = ra_lib:write_file(Tmp, Bin),
+    %% this is a recovery optimisation only: recover_writers/1 falls back to
+    %% #{} if the file is missing, truncated or undecodable, so the fsync
+    %% that Sync = true would cost here isn't needed
+    ok = ra_lib:write_file(Tmp, Bin, false),
     ok = prim_file:rename(Tmp, File).
 
 recover_writers(Dir) ->
