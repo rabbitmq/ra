@@ -1594,6 +1594,12 @@ writers_snapshot_persisted_at_rollover(Config) ->
               flush(),
               ct:fail("mem_tables timeout")
     end,
+    %% the writers snapshot is now persisted *after* the mem_tables cast is
+    %% sent (so the segment writer can start sooner), so receiving that cast
+    %% does not by itself guarantee the WAL has finished writing the
+    %% snapshot yet. A synchronous round-trip through the WAL process does:
+    %% it can only reply once it has returned from handling the roll-over.
+    _ = sys:get_state(Pid),
     %% verify the writers.snapshot file was created
     WritersFile = filename:join(Dir, "writers.snapshot"),
     ?assert(filelib:is_file(WritersFile)),
