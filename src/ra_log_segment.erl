@@ -680,10 +680,9 @@ fold0(#state{cfg = Cfg, cache = Cache0} = State, Idx, FinalIdx, Fun, AccFun,
     case lookup_index(State, Idx) of
         {ok, {Term, Offset, Length, Crc} = IdxRec} ->
             %% a fold walks Idx .. FinalIdx contiguously by construction,
-            %% so it should always use the read-ahead cache regardless of
+            %% so it always uses pread/4's read-ahead cache regardless of
             %% the segment's declared access pattern
-            case pread(Cfg#cfg{access_pattern = sequential}, Cache0, Offset,
-                       Length) of
+            case pread(Cfg, Cache0, Offset, Length) of
                 {ok, Data, Cache} ->
                     case validate_checksum(Crc, Data) of
                         true ->
@@ -1246,23 +1245,15 @@ read_header(Fd) ->
             Err
     end.
 
-pread(#cfg{access_pattern = random,
-           fd = Fd}, Cache, Pos, Length) ->
-    %% no cache
-    {ok, Data} = file:pread(Fd, Pos, Length),
-    case byte_size(Data)  of
-        Length ->
-            {ok, Data, Cache};
-        _ ->
-            {error, partial_data}
-    end;
 pread(#cfg{}, {CPos, CLen, Bin} = Cache, Pos, Length)
   when Pos >= CPos andalso
        Pos + Length =< (CPos + CLen) ->
     %% read fits inside cache
     {ok, binary:part(Bin, Pos - CPos, Length), Cache};
-pread(#cfg{access_pattern = sequential,
-           fd = Fd} = Cfg, undefined, Pos, Length) ->
+pread(#cfg{fd = Fd} = Cfg, undefined, Pos, Length) ->
+    %% pread/4's only caller is fold0/7, which always wants read-ahead
+    %% caching regardless of the segment's declared access pattern (a fold
+    %% is sequential by construction), so this always builds a cache
     CacheLen = max(Length, ?READ_AHEAD_B),
     {ok, CacheData} = file:pread(Fd, Pos, CacheLen),
     case byte_size(CacheData) >= Length  of
