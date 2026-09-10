@@ -678,7 +678,11 @@ fold0(#state{cfg = Cfg, cache = Cache0} = State, Idx, FinalIdx, Fun, AccFun,
       Acc0, MissingKeyStrat) ->
     case lookup_index(State, Idx) of
         {ok, {Term, Offset, Length, Crc} = IdxRec} ->
-            case pread(Cfg, Cache0, Offset, Length) of
+            %% a fold walks Idx .. FinalIdx contiguously by construction,
+            %% so it should always use the read-ahead cache regardless of
+            %% the segment's declared access pattern
+            case pread(Cfg#cfg{access_pattern = sequential}, Cache0, Offset,
+                       Length) of
                 {ok, Data, Cache} ->
                     case validate_checksum(Crc, Data) of
                         true ->
