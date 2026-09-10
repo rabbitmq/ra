@@ -99,6 +99,9 @@
                                     compute_checksums => boolean(),
                                     mode => append | read,
                                     index_mode => index_mode(),
+                                    %% in append mode, fail with enoent rather
+                                    %% than creating the file if it is missing
+                                    must_exist => boolean(),
                                     access_pattern => sequential | random,
                                     file_advise => posix_file_advise()}.
 -opaque state() :: #state{}.
@@ -145,10 +148,20 @@ open(Filename, Options) ->
                 read ->
                     [read, raw, binary]
             end,
-    case file:open(Filename, Modes) of
-        {ok, Fd} ->
-            process_file(FileExists, Mode, Filename, Fd, Options);
-        Err -> Err
+    case not FileExists andalso maps:get(must_exist, Options, false) of
+        true ->
+            %% the caller reached us via a cached filename and needs to know
+            %% the file has gone, rather than have an empty one created in
+            %% its place. NB: this reuses the read_file_info above so it
+            %% costs no extra syscall.
+            {error, enoent};
+        false ->
+            case file:open(Filename, Modes) of
+                {ok, Fd} ->
+                    process_file(FileExists, Mode, Filename, Fd, Options);
+                Err ->
+                    Err
+            end
     end.
 
 process_file(true, Mode, Filename, Fd, Options) ->

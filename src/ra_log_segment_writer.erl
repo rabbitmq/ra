@@ -27,6 +27,16 @@
 -record(state, {data_dir :: file:filename(),
                 system :: atom(),
                 counter :: counters:counters_ref(),
+                %% Caches the current (highest numbered) segment file per uid
+                %% so that the common flush does not have to list the server
+                %% directory, which is O(number of segment files).
+                %%
+                %% This has to be an ETS table rather than a field: the flush
+                %% runs in processes spawned by ra_lib:partition_parallel/3
+                %% over a closure that captures #state{}, so anything held
+                %% here is deep copied into every worker. It also has to be
+                %% public, as those workers both read and update it.
+                seg_cache :: ets:tid(),
                 segment_conf = #{} :: ra_log_segment:ra_log_segment_options()}).
 
 -include("ra.hrl").
@@ -120,9 +130,12 @@ init([#{data_dir := DataDir,
                              module => ?MODULE}),
     SegmentConf = maps:get(segment_conf, Conf, #{}),
     maybe_upgrade_segment_file_names(System, DataDir),
+    Cache = ets:new(ra_log_segment_writer_cache,
+                    [set, public, {read_concurrency, true}]),
     {ok, #state{system = System,
                 data_dir = DataDir,
                 counter = CRef,
+                seg_cache = Cache,
                 segment_conf = SegmentConf}}.
 
 handle_call(await, _From, State) ->
@@ -138,7 +151,8 @@ segments_for(UId, #state{data_dir = DataDir}) ->
     segment_files(Dir).
 
 handle_cast({mem_tables, UIdTidRanges, WalFile},
-            #state{system = System} = State) ->
+            #state{system = System,
+                   seg_cache = Cache} = State) ->
     T1 = erlang:monotonic_time(),
     ok = counters:add(State#state.counter, ?C_MEM_TABLES, map_size(UIdTidRanges)),
     #{names := Names} = ra_system:fetch(System),
@@ -157,6 +171,7 @@ handle_cast({mem_tables, UIdTidRanges, WalFile},
                                    ?DEBUG("segment_writer in '~ts': deleting memtable "
                                           "for ~ts as not a registered uid",
                                           [System, UId]),
+                                   _ = ets:delete(Cache, UId),
                                    ok = ra_log_ets:delete_mem_tables(Names, UId),
                                    Acc
                            end
@@ -189,9 +204,12 @@ handle_cast({mem_tables, UIdTidRanges, WalFile},
     {noreply, State};
 handle_cast({truncate_segments, Who, {Name, _Range} = SegRef},
             #state{segment_conf = SegConf,
+                   seg_cache = Cache,
                    system = System} = State0) ->
     %% remove all segments below the provided SegRef
     %% Also delete the segref if the file hasn't changed
+    %% this can replace the current segment so the cache has to be dropped
+    _ = ets:delete(Cache, Who),
     T1 = erlang:monotonic_time(),
     Files = segments_for(Who, State0),
     {_Keep, Discard} = lists:splitwith(
@@ -331,22 +349,26 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
 flush_mem_table_range(ServerUId, {Tid, Seq},
                       #state{data_dir = DataDir,
                              system = System,
+                             seg_cache = Cache,
                              segment_conf = SegConf} = State) ->
     Dir = filename:join(DataDir, binary_to_list(ServerUId)),
-    case open_file(Dir, SegConf) of
+    case open_file(Dir, ServerUId, SegConf, Cache) of
         enoent ->
             ?DEBUG("segment_writer: skipping segment as directory ~ts does "
                    "not exist", [Dir]),
             %% Directory gone (server deleted), clean up the memtable
+            _ = ets:delete(Cache, ServerUId),
             #{names := Names} = ra_system:fetch(System),
             ok = ra_log_ets:delete_mem_tables(Names, ServerUId),
             [];
-        Segment0 ->
-            Segment1 = maybe_open_new_segment(ServerUId, Segment0, SegConf),
+        {Segment0, Created0} ->
+            {Segment1, Created1} = maybe_open_new_segment(ServerUId, Segment0,
+                                                          SegConf),
             case append_to_segment(ServerUId, Tid, Seq, Segment1, State) of
                 undefined ->
                     %% Directory disappeared during write - close segment handle
                     _ = ra_log_segment:close(Segment1),
+                    _ = ets:delete(Cache, ServerUId),
                     ?WARN("segment_writer: skipping segments for ~w as "
                           "directory ~ts disappeared whilst writing",
                           [ServerUId, Dir]),
@@ -366,8 +388,20 @@ flush_mem_table_range(ServerUId, {Tid, Seq},
                                       [SRef | ClosedSegRefs]
                               end,
 
+                    %% remember where to resume appending next time
+                    true = ets:insert(Cache,
+                                      {ServerUId,
+                                       ra_log_segment:filename(Segment)}),
                     ok = ra_log_segment:close(Segment),
-                    _ = ra_lib:sync_dir(Dir),
+                    %% the directory only needs syncing if a file appeared in
+                    %% it, an append to an existing segment does not change
+                    %% the directory entry
+                    case Created0 orelse Created1 orelse Closed0 =/= [] of
+                        true ->
+                            _ = ra_lib:sync_dir(Dir);
+                        false ->
+                            ok
+                    end,
                     SegRefs
             end
     end.
@@ -512,6 +546,9 @@ segment_files(Dir) ->
             []
     end.
 
+-spec maybe_open_new_segment(ra_uid(), ra_log_segment:state(),
+                             ra_log_segment:ra_log_segment_options()) ->
+    {ra_log_segment:state(), Created :: boolean()}.
 maybe_open_new_segment(ServerUId, Seg, SegConf) ->
     case ra_log_segment:range(Seg) of
         {_First, Last} ->
@@ -520,15 +557,15 @@ maybe_open_new_segment(ServerUId, Seg, SegConf) ->
                 true ->
                     case open_successor_segment(Seg, SegConf) of
                         enoent ->
-                            Seg;
+                            {Seg, false};
                         NewSeg ->
-                            NewSeg
+                            {NewSeg, true}
                     end;
                 false ->
-                    Seg
+                    {Seg, false}
             end;
         _ ->
-            Seg
+            {Seg, false}
     end.
 
 open_successor_segment(CurSeg, SegConf) ->
@@ -544,19 +581,48 @@ open_successor_segment(CurSeg, SegConf) ->
             Seg
     end.
 
+-spec open_file(file:filename_all(), ra_uid(),
+                ra_log_segment:ra_log_segment_options(), ets:tid()) ->
+    {ra_log_segment:state(), Created :: boolean()} | enoent.
+open_file(Dir, ServerUId, SegConf, Cache) ->
+    case ets:lookup(Cache, ServerUId) of
+        [{_, File}] ->
+            %% Trust the cached filename but require it to still exist. If it
+            %% has gone we must fall back to a scan: creating a fresh file
+            %% under a name that already had entries would leave two segments
+            %% claiming overlapping ranges.
+            case ra_log_segment:open(File, SegConf#{mode => append,
+                                                    must_exist => true}) of
+                {ok, Segment} ->
+                    {Segment, false};
+                {error, enoent} ->
+                    open_file(Dir, SegConf);
+                Err ->
+                    open_file_err(Dir, File, SegConf, Err)
+            end;
+        [] ->
+            open_file(Dir, SegConf)
+    end.
+
 open_file(Dir, SegConf) ->
-    File = case find_segment_files(Dir) of
-               [] ->
-                   F = ra_lib:zpad_filename("", "segment", 1),
-                   filename:join(Dir, F);
-               [F | _] ->
-                   F
-           end,
+    {File, Created} = case find_segment_files(Dir) of
+                          [] ->
+                              F = ra_lib:zpad_filename("", "segment", 1),
+                              {filename:join(Dir, F), true};
+                          [F | _] ->
+                              {F, false}
+                      end,
     %% There is a chance we'll get here without the target directory
     %% existing which could happen after server deletion
     case ra_log_segment:open(File, SegConf#{mode => append}) of
         {ok, Segment} ->
-            Segment;
+            {Segment, Created};
+        Err ->
+            open_file_err(Dir, File, SegConf, Err)
+    end.
+
+open_file_err(Dir, File, SegConf, Err) ->
+    case Err of
         {error, missing_segment_header} ->
             %% A file was created but the segment header had not been
             %% synced. In this case it is typically safe to just delete
@@ -569,7 +635,7 @@ open_file(Dir, SegConf) ->
             ?DEBUG("segment_writer: failed to open segment file ~ts "
                   "error: enoent", [File]),
             enoent;
-        Err ->
+        _ ->
             %% Any other error should be considered a hard error or else
             %% we'd risk data loss
             ?WARN("segment_writer: failed to open segment file ~ts "
