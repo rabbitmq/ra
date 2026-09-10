@@ -6,6 +6,9 @@
 -export([
          ]).
 
+%% NB: proper must be included before eunit as both define ?LET
+-include_lib("proper/include/proper.hrl").
+-include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %%%===================================================================
@@ -14,7 +17,8 @@
 
 all() ->
     [
-     {group, tests}
+     {group, tests},
+     {group, props}
     ].
 
 
@@ -33,8 +37,27 @@ all_tests() ->
      has_overlap
     ].
 
+%% Property tests. `add/2' and `remove_prefix/2' merge and split runs
+%% rather than walking individual indexes, so these check both the values
+%% they compute and that the representation stays canonical - a sequence
+%% never holds a range shorter than three indexes, which `append/2',
+%% `floor/2' and `limit/2' all rely on.
+prop_tests() ->
+    [
+     prop_from_list_canonical,
+     prop_expand_descending,
+     prop_add_model,
+     prop_add_canonical,
+     prop_add_appendable,
+     prop_remove_prefix_model,
+     prop_remove_prefix_canonical,
+     prop_remove_prefix_roundtrip,
+     prop_remove_prefix_detects_gaps
+    ].
+
 groups() ->
-    [{tests, [], all_tests()}].
+    [{tests, [], all_tests()},
+     {props, [], prop_tests()}].
 
 init_per_suite(Config) ->
     Config.
@@ -269,3 +292,234 @@ has_overlap(_Config) ->
     ?assertEqual([], ra_seq:in_range({4, 4}, S)),
 
     ok.
+
+%%%===================================================================
+%%% Property tests
+%%%===================================================================
+
+prop_from_list_canonical(_Config) ->
+    run_proper(
+      fun () ->
+              ?FORALL(L, list(index()),
+                      begin
+                          S = ra_seq:from_list(L),
+                          is_canonical(S) andalso
+                          lists:usort(L) == lists:sort(ra_seq:expand(S))
+                      end)
+      end, [], 1000).
+
+%% expand/1 must always yield strictly descending, duplicate free indexes.
+%% add/2 and remove_prefix/2 both rely on this ordering.
+prop_expand_descending(_Config) ->
+    run_proper(
+      fun () ->
+              ?FORALL(S, seq(),
+                      begin
+                          E = ra_seq:expand(S),
+                          E == lists:reverse(lists:usort(E))
+                      end)
+      end, [], 1000).
+
+prop_add_model(_Config) ->
+    run_proper(
+      fun () ->
+              ?FORALL({Add, To}, {seq(), seq()},
+                      ra_seq:expand(ra_seq:add(Add, To)) ==
+                          model_add(Add, To))
+      end, [], 2000).
+
+prop_add_canonical(_Config) ->
+    run_proper(
+      fun () ->
+              ?FORALL({Add, To}, {seq(), seq()},
+                      is_canonical(ra_seq:add(Add, To)))
+      end, [], 2000).
+
+%% the result of add/2 must still be appendable, i.e. append/2 must not
+%% raise a function_clause on the next index
+prop_add_appendable(_Config) ->
+    run_proper(
+      fun () ->
+              ?FORALL({Add, To}, {non_empty_seq(), seq()},
+                      begin
+                          S = ra_seq:add(Add, To),
+                          Next = ra_seq:last(S) + 1,
+                          is_canonical(ra_seq:append(Next, S))
+                      end)
+      end, [], 2000).
+
+prop_remove_prefix_model(_Config) ->
+    run_proper(
+      fun () ->
+              ?FORALL({Prefix, Seq}, prefix_and_seq(),
+                      begin
+                          Expected = model_remove_prefix(Prefix, Seq),
+                          case ra_seq:remove_prefix(Prefix, Seq) of
+                              {ok, S} ->
+                                  {ok, ra_seq:expand(S)} == Expected;
+                              {error, not_prefix} = Err ->
+                                  Err == Expected
+                          end
+                      end)
+      end, [], 3000).
+
+prop_remove_prefix_canonical(_Config) ->
+    run_proper(
+      fun () ->
+              ?FORALL({Prefix, Seq}, prefix_and_seq(),
+                      case ra_seq:remove_prefix(Prefix, Seq) of
+                          {ok, S} ->
+                              is_canonical(S);
+                          {error, not_prefix} ->
+                              true
+                      end)
+      end, [], 3000).
+
+%% splitting a sequence at an arbitrary point and removing the lower half
+%% must always yield exactly the upper half
+prop_remove_prefix_roundtrip(_Config) ->
+    run_proper(
+      fun () ->
+              ?FORALL({Seq, N}, {seq(), integer(0, 30)},
+                      begin
+                          %% expand/1 is descending, take the N lowest
+                          Asc = lists:reverse(ra_seq:expand(Seq)),
+                          K = min(N, length(Asc)),
+                          {Low, High} = lists:split(K, Asc),
+                          Prefix = ra_seq:from_list(Low),
+                          Expected = ra_seq:from_list(High),
+                          case ra_seq:remove_prefix(Prefix, Seq) of
+                              {ok, Expected} ->
+                                  true;
+                              _ ->
+                                  false
+                          end
+                      end)
+      end, [], 2000).
+
+%% if the prefix omits an index that the sequence holds below the prefix's
+%% last index, that must be reported rather than silently dropped
+prop_remove_prefix_detects_gaps(_Config) ->
+    run_proper(
+      fun () ->
+              ?FORALL(Seq, seq_of_at_least(2),
+                      begin
+                          Asc = lists:reverse(ra_seq:expand(Seq)),
+                          %% a prefix of everything but the lowest index,
+                          %% so it always covers something it should not
+                          Prefix = ra_seq:from_list(tl(Asc)),
+                          {error, not_prefix} ==
+                              ra_seq:remove_prefix(Prefix, Seq)
+                      end)
+      end, [], 2000).
+
+%%%===================================================================
+%%% Generators
+%%%===================================================================
+
+index() ->
+    integer(0, 40).
+
+%% A mix of sparse sequences (mostly singletons, exercises the gap
+%% handling) and run based sequences (multi index ranges, exercises the
+%% range merging and splitting paths).
+seq() ->
+    union([sparse_seq(), run_seq()]).
+
+sparse_seq() ->
+    ?LET(L, list(index()), ra_seq:from_list(L)).
+
+run_seq() ->
+    ?LET(Runs, list({index(), integer(1, 8)}),
+         ra_seq:from_list(
+           lists:append([lists:seq(S, S + Len - 1) || {S, Len} <- Runs]))).
+
+non_empty_seq() ->
+    ?SUCHTHAT(S, seq(), S =/= []).
+
+seq_of_at_least(N) ->
+    ?SUCHTHAT(S, seq(), ra_seq:length(S) >= N).
+
+%% Prefix/sequence pairs. Weighted towards genuine prefixes so that the
+%% success path is well covered, but includes prefixes with extra lower
+%% indexes (legal, they have already been removed) and entirely unrelated
+%% sequences (which must be rejected).
+prefix_and_seq() ->
+    ?LET(Seq, seq(),
+         frequency(
+           [{5, {genuine_prefix(Seq), Seq}},
+            {3, {prefix_with_extras(Seq), Seq}},
+            {2, {seq(), Seq}}])).
+
+genuine_prefix(Seq) ->
+    ?LET(N, integer(0, 30),
+         begin
+             Asc = lists:reverse(ra_seq:expand(Seq)),
+             ra_seq:from_list(lists:sublist(Asc, min(N, length(Asc))))
+         end).
+
+prefix_with_extras(Seq) ->
+    ?LET({N, Extras}, {integer(0, 30), list(index())},
+         begin
+             Asc = lists:reverse(ra_seq:expand(Seq)),
+             Taken = lists:sublist(Asc, min(N, length(Asc))),
+             Ceil = case Taken of
+                        [] -> 0;
+                        _ -> lists:max(Taken)
+                    end,
+             %% extras must stay at or below the prefix's last index, else
+             %% they would extend the prefix over indexes of Seq that are
+             %% deliberately not being removed
+             ra_seq:from_list(Taken ++ [E || E <- Extras, E =< Ceil])
+         end).
+
+%%%===================================================================
+%%% Property helpers
+%%%===================================================================
+
+%% from_list/1 is usort + repeated append/2, so it produces the canonical
+%% representation by construction. Any sequence must round-trip through it.
+is_canonical(S) ->
+    S == ra_seq:from_list(ra_seq:expand(S)).
+
+model_add(Add, To) ->
+    A = ra_seq:expand(Add),
+    T = ra_seq:expand(To),
+    case {A, T} of
+        {[], _} ->
+            T;
+        {_, []} ->
+            A;
+        _ ->
+            Fst = lists:min(A),
+            lists:reverse(lists:sort([I || I <- T, I < Fst] ++ A))
+    end.
+
+model_remove_prefix(Prefix, Seq) ->
+    P = ra_seq:expand(Prefix),
+    S = ra_seq:expand(Seq),
+    case {P, S} of
+        {[], _} ->
+            {ok, S};
+        {_, []} ->
+            {ok, []};
+        _ ->
+            PrefLast = lists:max(P),
+            Low = [I || I <- S, I =< PrefLast],
+            case Low -- P of
+                [] ->
+                    {ok, [I || I <- S, I > PrefLast]};
+                _ ->
+                    {error, not_prefix}
+            end
+    end.
+
+run_proper(Fun, Args, NumTests) ->
+    ?assertEqual(
+       true,
+       proper:counterexample(erlang:apply(Fun, Args),
+                             [{numtests, NumTests},
+                              {on_output,
+                               fun(".", _) -> ok;
+                                  (F, A) -> ct:pal(?LOW_IMPORTANCE, F, A)
+                               end}])).
