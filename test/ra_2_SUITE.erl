@@ -445,10 +445,10 @@ cluster_is_deleted_after_restart_of_terminating_leader(Config) ->
     ok = ra:restart_server(?SYS, Down),
 
     %% all data should eventually be deleted
-    ok = validate_dir_deleted(LeaderUId, 50),
-    ok = validate_dir_deleted(DownUId, 50),
-    ok = validate_process_down(LeaderName, 50),
-    ok = validate_process_down(DownName, 50),
+    ok = validate_dir_deleted(LeaderUId, 100),
+    ok = validate_dir_deleted(DownUId, 100),
+    ok = validate_process_down(LeaderName, 100),
+    ok = validate_process_down(DownName, 100),
     ok.
 
 cluster_cannot_be_deleted_in_minority(Config) ->

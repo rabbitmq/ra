@@ -67,6 +67,9 @@
 -define(DEFAULT_ELECTION_MULT, 5).
 -define(TICK_INTERVAL_MS, 1000).
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
+%% the number of tick intervals a server that applied a cluster delete command
+%% during recovery keeps trying to replicate it before deleting itself
+-define(DELETE_AFTER_RECOVERY_TICKS, 5).
 %% Utilisation average calculations are all in μs.
 -define(INSTALL_SNAP_RPC_TIMEOUT, 120 * 1000).
 
@@ -1056,9 +1059,37 @@ receive_snapshot(EventType, Msg, State00) ->
             next_state(follower, State, Actions)
     end.
 
-terminating_leader(enter, OldState, State0) ->
-    {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
+terminating_leader(enter, OldState,
+                   #state{conf = #conf{tick_timeout = TickTimeout},
+                          server_state = ServerState} = State0) ->
+    {State, Actions0} = handle_enter(?FUNCTION_NAME, OldState, State0),
+    Actions = case ra_server:is_delete_after_recovery(ServerState) of
+                  true ->
+                      %% The delete command was applied again during recovery
+                      %% so this server cannot expect to ever become fully
+                      %% replicated: members that completed their deletion
+                      %% before the restart will never reply. Replicate the
+                      %% command for a limited time only, then complete the
+                      %% deletion regardless.
+                      [{state_timeout,
+                        TickTimeout * ?DELETE_AFTER_RECOVERY_TICKS,
+                        complete_delete} | Actions0];
+                  false ->
+                      Actions0
+              end,
     {keep_state, State, Actions};
+terminating_leader(state_timeout, complete_delete,
+                   #state{server_state = ServerState} = State) ->
+    case ra_server:unreplicated_peers(ServerState) of
+        [] ->
+            ok;
+        Peers ->
+            ?WARN("~ts: could not replicate the cluster delete command to ~w "
+                  "after recovery. Completing deletion, any member that did "
+                  "not receive the delete command has to be deleted manually",
+                  [log_id(State), Peers])
+    end,
+    {stop, {shutdown, delete}, State};
 terminating_leader(_EvtType, {command, _, _}, State0) ->
     % do not process any further commands
     {keep_state, State0, []};
