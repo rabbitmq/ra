@@ -36,6 +36,7 @@ all_tests() ->
      leave_and_delete_server,
      cluster_is_deleted,
      cluster_is_deleted_with_server_down,
+     cluster_is_deleted_after_restart_of_terminating_leader,
      cluster_cannot_be_deleted_in_minority,
      diverged_follower,
      start_server_noproc,
@@ -401,6 +402,53 @@ cluster_is_deleted_with_server_down(Config) ->
           UId = ra_directory:uid_of(?SYS, Name),
           ?assert(false =:= filelib:is_dir(filename:join([data_dir(), UId])))
       end || {Name, _} <- Peers],
+    ok.
+
+cluster_is_deleted_after_restart_of_terminating_leader(Config) ->
+    %% A server that has applied the '$ra_cluster' delete command does not
+    %% necessarily delete itself straight away: the leader stays up, in the
+    %% terminating_leader state, until the delete command has been replicated
+    %% to _all_ members. If such a server is restarted whilst in that state the
+    %% delete command is still in its log at or below the last_applied index
+    %% that was persisted at shutdown, so it is applied again whilst the server
+    %% is in the recover state. The deletion must still complete: the server
+    %% must not be left behind with its data on disk.
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+    Peers = [ServerId1, ServerId2, ServerId3],
+    ok = start_cluster(ClusterName, Peers),
+    {ok, _, Leader} = ra:members(ServerId1),
+    {LeaderName, _} = Leader,
+    LeaderUId = ra_directory:uid_of(?SYS, LeaderName),
+
+    %% stop one of the followers so that the leader cannot complete the
+    %% deletion and has to remain in the terminating_leader state
+    [{DownName, _} = Down | _] = Peers -- [Leader],
+    DownUId = ra_directory:uid_of(?SYS, DownName),
+    ok = ra:stop_server(?SYS, Down),
+
+    {ok, _} = ra:delete_cluster(Peers),
+    %% the leader has applied the delete command but is still waiting for the
+    %% stopped member to catch up before it deletes itself
+    timer:sleep(100),
+    ?assertEqual(terminating_leader,
+                 ets:lookup_element(ra_state, LeaderName, 2)),
+    ?assert(filelib:is_dir(filename:join([data_dir(), LeaderUId]))),
+
+    %% restart the leader before it had a chance to delete itself, the delete
+    %% command is now re-applied during recovery
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, Leader),
+    %% and bring the stopped member back so that the deletion can complete
+    ok = ra:restart_server(?SYS, Down),
+
+    %% all data should eventually be deleted
+    ok = validate_dir_deleted(LeaderUId, 50),
+    ok = validate_dir_deleted(DownUId, 50),
+    ok = validate_process_down(LeaderName, 50),
+    ok = validate_process_down(DownName, 50),
     ok.
 
 cluster_cannot_be_deleted_in_minority(Config) ->
@@ -1051,6 +1099,17 @@ validate_process_down(Name, Num) ->
         _ ->
             timer:sleep(100),
             validate_process_down(Name, Num-1)
+    end.
+
+validate_dir_deleted(UId, 0) ->
+    exit({dir_not_deleted, UId});
+validate_dir_deleted(UId, Num) ->
+    case filelib:is_dir(filename:join([data_dir(), UId])) of
+        false ->
+            ok;
+        true ->
+            timer:sleep(100),
+            validate_dir_deleted(UId, Num - 1)
     end.
 
 start_cluster(ClusterName, ServerIds, Config) ->
