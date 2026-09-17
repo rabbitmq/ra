@@ -37,6 +37,7 @@ all_tests() ->
      cluster_is_deleted,
      cluster_is_deleted_with_server_down,
      cluster_is_deleted_after_restart_of_terminating_leader,
+     cluster_is_deleted_after_restart_without_quorum,
      cluster_cannot_be_deleted_in_minority,
      diverged_follower,
      start_server_noproc,
@@ -449,6 +450,37 @@ cluster_is_deleted_after_restart_of_terminating_leader(Config) ->
     ok = validate_dir_deleted(DownUId, 100),
     ok = validate_process_down(LeaderName, 100),
     ok = validate_process_down(DownName, 100),
+    ok.
+
+cluster_is_deleted_after_restart_without_quorum(Config) ->
+    %% As cluster_is_deleted_after_restart_of_terminating_leader but the
+    %% remaining member never comes back, so the restarted server can never be
+    %% elected and can never apply the delete command again. It has to complete
+    %% its own deletion anyway: the command was committed and had already been
+    %% applied before the restart.
+    ClusterName = ?config(cluster_name, Config),
+    ServerId1 = ?config(server_id, Config),
+    ServerId2 = ?config(server_id2, Config),
+    ServerId3 = ?config(server_id3, Config),
+    Peers = [ServerId1, ServerId2, ServerId3],
+    ok = start_cluster(ClusterName, Peers),
+    {ok, _, Leader} = ra:members(ServerId1),
+    {LeaderName, _} = Leader,
+    LeaderUId = ra_directory:uid_of(?SYS, LeaderName),
+
+    [Down | _] = Peers -- [Leader],
+    ok = ra:stop_server(?SYS, Down),
+    {ok, _} = ra:delete_cluster(Peers),
+    timer:sleep(100),
+    ?assertEqual(terminating_leader,
+                 ets:lookup_element(ra_state, LeaderName, 2)),
+
+    %% restart the leader only, it is now on its own without a quorum
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, Leader),
+
+    ok = validate_dir_deleted(LeaderUId, 100),
+    ok = validate_process_down(LeaderName, 100),
     ok.
 
 cluster_cannot_be_deleted_in_minority(Config) ->
