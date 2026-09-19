@@ -1972,7 +1972,9 @@ process_new_leader_queries(#{pending_consistent_queries := Pending,
 
 -spec tick(ra_server_state()) -> effects().
 tick(#{cfg := #cfg{effective_machine_module = MacMod},
-       machine_state := MacState} = State) ->
+       machine_state := MacState,
+       commit_index := CommitIndex,
+       log := Log} = State) ->
     InfoRpcEffects = info_rpc_effects(State),
     %% A member removal can "unlock" an upgrade by raising the highest machine
     %% version supported by every other member.
@@ -1980,7 +1982,16 @@ tick(#{cfg := #cfg{effective_machine_module = MacMod},
     %% This makes sure such "upgrade windows" are not missed, e.g. during
     %% a (recommended against!) grow-then-shrink upgrade.
     %% See rabbitmq/rabbitmq-server#17511.
-    {_State, UpgradeEffects} = determine_if_machine_upgrade_allowed(State),
+    %%
+    %% Conditional, so that an already
+    %% appended but not yet committed upgrade no-op is not duplicated over and over.
+    UpgradeEffects = case ra_log:last_index_term(Log) of
+                         {CommitIndex, _} ->
+                             {_, Effs} = determine_if_machine_upgrade_allowed(State),
+                             Effs;
+                         _ ->
+                             []
+                     end,
     Now = erlang:system_time(millisecond),
     InfoRpcEffects ++ UpgradeEffects ++ ra_machine:tick(MacMod, Now, MacState).
 
