@@ -31,6 +31,12 @@ all_tests() ->
     [
      server_with_higher_version_needs_quorum_to_be_elected,
      cluster_waits_for_all_members_to_have_latest_version_to_upgrade,
+     removing_lagging_member_unlocks_upgrade,
+     grow_then_shrink_upgrades_after_last_old_member_leaves,
+     survivors_restarted_after_member_removal_end_up_upgraded,
+     removing_lagging_leader_unlocks_upgrade,
+     repeated_noop_for_same_version_changes_nothing,
+     quorum_strategy_is_unaffected_by_member_removal,
      server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher,
      unversioned_machine_never_sees_machine_version_command,
      unversioned_can_change_to_versioned,
@@ -110,7 +116,8 @@ end_per_testcase(TestCase, Config) ->
 
 machine_upgrade_quorum_tests() ->
     [server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher,
-     initial_machine_version_quorum].
+     initial_machine_version_quorum,
+     quorum_strategy_is_unaffected_by_member_removal].
 
 %%%===================================================================
 %%% Test cases
@@ -229,6 +236,79 @@ cluster_waits_for_all_members_to_have_latest_version_to_upgrade(Config) ->
                     end, 100)
       end, Cluster),
 
+    ok.
+
+removing_lagging_member_unlocks_upgrade(Config) ->
+    {Leader, V2Follower, V1Follower} = start_mixed_version_cluster(Config),
+    hold_effective_version([Leader, V2Follower, V1Follower], 1),
+    {ok, _, _} = ra:remove_member(Leader, V1Follower),
+    await_effective_version([Leader, V2Follower], 2),
+    ok.
+
+grow_then_shrink_upgrades_after_last_old_member_leaves(Config) ->
+    {Leader, V2Follower, V1Follower} = start_mixed_version_cluster(Config),
+    Mod = ?config(modname, Config),
+    ClusterName = ?config(cluster_name, Config),
+    NewMember = {list_to_atom(atom_to_list(ClusterName) ++ "4"), node()},
+    {ok, _, _} = ra:add_member(Leader, NewMember),
+    ok = ra:start_server(?SYS, ClusterName, NewMember, {module, Mod, #{}},
+                         [Leader, V2Follower, V1Follower]),
+    await_effective_version([NewMember], 1),
+    hold_effective_version([Leader, V2Follower, V1Follower, NewMember], 1),
+    {ok, _, _} = ra:remove_member(Leader, V1Follower),
+    await_effective_version([Leader, V2Follower, NewMember], 2),
+    ok.
+
+survivors_restarted_after_member_removal_end_up_upgraded(Config) ->
+    {Leader, V2Follower, V1Follower} = start_mixed_version_cluster(Config),
+    hold_effective_version([Leader, V2Follower, V1Follower], 1),
+    {ok, _, _} = ra:remove_member(Leader, V1Follower),
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:stop_server(?SYS, V2Follower),
+    ok = ra:restart_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, V2Follower),
+    await_effective_version([Leader, V2Follower], 2),
+    ok.
+
+removing_lagging_leader_unlocks_upgrade(Config) ->
+    {Leader, V2Follower, V1Follower} = start_mixed_version_cluster(Config),
+    ok = ra:transfer_leadership(Leader, V1Follower),
+    await(fun () ->
+                  case ra:members(V1Follower, 2000) of
+                      {ok, _, V1Follower} -> true;
+                      _ -> false
+                  end
+          end, 100),
+    hold_effective_version([Leader, V2Follower, V1Follower], 1),
+    {ok, _, _} = ra:remove_member(V1Follower, V1Follower),
+    await_effective_version([Leader, V2Follower], 2),
+    ok.
+
+repeated_noop_for_same_version_changes_nothing(Config) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> init_state end),
+    meck:expect(Mod, version, fun () -> 2 end),
+    meck:expect(Mod, which_module, fun (_) -> Mod end),
+    meck:expect(Mod, apply, fun (_, _, S) -> {S, ok} end),
+    ClusterName = ?config(cluster_name, Config),
+    ServerId = ?config(server_id, Config),
+    _ = start_cluster(ClusterName, {module, Mod, #{}}, [ServerId]),
+    {ok, ok, _} = ra:process_command(ServerId, dummy),
+    {ok, #{machine_versions := Versions}, _} = ra:member_overview(ServerId),
+    Noop = {noop, #{ts => erlang:system_time(millisecond)}, 2},
+    ok = gen_statem:cast(ServerId, {command, Noop}),
+    ok = gen_statem:cast(ServerId, {command, Noop}),
+    %% once a command queued behind the noops has been applied, so have they
+    {ok, ok, _} = ra:process_command(ServerId, dummy),
+    {ok, #{effective_machine_version := 2,
+           machine_versions := Versions}, _} = ra:member_overview(ServerId),
+    ok.
+
+quorum_strategy_is_unaffected_by_member_removal(Config) ->
+    {Leader, V2Follower, V1Follower} = start_mixed_version_cluster(Config, 2),
+    {ok, _, _} = ra:remove_member(Leader, V1Follower),
+    hold_effective_version([Leader, V2Follower], 2),
     ok.
 
 server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher(Config) ->
@@ -662,6 +742,62 @@ recovery_checkpoint_updates_machine_version(Config) ->
     ok.
 
 %% Utility
+
+%% Two members report machine version 2 and one reports version 1. The
+%% expected effective version is 1 under the `all' upgrade strategy and 2
+%% under `quorum'.
+start_mixed_version_cluster(Config) ->
+    start_mixed_version_cluster(Config, 1).
+
+start_mixed_version_cluster(Config, ExpectedEffectiveVersion) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> init_state end),
+    meck:expect(Mod, version, fun () -> 1 end),
+    meck:expect(Mod, which_module, fun (_) -> Mod end),
+    meck:expect(Mod, apply, fun (_, _, S) -> {S, ok} end),
+    Cluster = ?config(cluster, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Leader = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    [V2Follower, V1Follower] = lists:delete(Leader, Cluster),
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:stop_server(?SYS, V2Follower),
+    ok = ra:stop_server(?SYS, V1Follower),
+    meck:expect(Mod, version, fun () -> version_for(self(), V1Follower) end),
+    ok = ra:restart_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, V2Follower),
+    %% the v1 member is restarted last so that a v2 member is the leader
+    {ok, _, Leader1} = ra:members(Leader, 5000),
+    [V2Follower1] = [M || M <- [Leader, V2Follower], M =/= Leader1],
+    ok = ra:restart_server(?SYS, V1Follower),
+    await_effective_version(Cluster, ExpectedEffectiveVersion),
+    {Leader1, V2Follower1, V1Follower}.
+
+version_for(Pid, {V1Name, _}) ->
+    case whereis(V1Name) of
+        Pid -> 1;
+        _ -> 2
+    end.
+
+effective_version(Member) ->
+    case catch ra:member_overview(Member) of
+        {ok, #{effective_machine_version := Version}, _} -> Version;
+        _ -> undefined
+    end.
+
+await_effective_version(Members, Version) ->
+    lists:foreach(
+      fun (Member) ->
+              await(fun () -> effective_version(Member) =:= Version end, 300)
+      end, Members).
+
+%% Two seconds covers at least one tick on every member.
+hold_effective_version(Members, Version) ->
+    lists:foreach(
+      fun (_) ->
+              [?assertEqual(Version, effective_version(Member)) || Member <- Members],
+              timer:sleep(100)
+      end, lists:seq(1, 20)).
 
 validate_state_enters(States) ->
     lists:foreach(fun (S) ->
