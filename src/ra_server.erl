@@ -82,6 +82,7 @@
       voted_for => option(ra_server_id()), % persistent
       votes => non_neg_integer(),
       membership => ra_membership(),
+      pending_machine_upgrade => ra_machine:version(),
       commit_index := ra_index(),
       last_applied := ra_index(),
       persisted_last_applied => ra_index(),
@@ -680,14 +681,17 @@ handle_leader({command, Cmd}, #{cfg := #cfg{id = Self,
         {ok, Idx, Term, State0, Effects00} ->
             %% if the command is a noop command we should force it to
             %% be pipelined to all followers
-            Force = case Cmd of
-                        {noop, _, _} ->
-                            true;
-                        _ ->
-                            false
-                    end,
+            {Force, State1} =
+                case Cmd of
+                    {noop, _, MacVer} ->
+                        %% remember the requested version so that ticks do
+                        %% not append the same upgrade noop again
+                        {true, State0#{pending_machine_upgrade => MacVer}};
+                    _ ->
+                        {false, State0}
+                end,
             {State, _, Effects0} =
-                make_pipelined_rpc_effects(State0, Effects00, Force),
+                make_pipelined_rpc_effects(State1, Effects00, Force),
             % check if a reply is required.
             Effects = after_log_append_reply(Cmd, Idx, Term, Effects0),
             {leader, State, Effects}
@@ -1972,9 +1976,7 @@ process_new_leader_queries(#{pending_consistent_queries := Pending,
 
 -spec tick(ra_server_state()) -> effects().
 tick(#{cfg := #cfg{effective_machine_module = MacMod},
-       machine_state := MacState,
-       commit_index := CommitIndex,
-       log := Log} = State) ->
+       machine_state := MacState} = State) ->
     InfoRpcEffects = info_rpc_effects(State),
     %% A member removal can "unlock" an upgrade by raising the highest machine
     %% version supported by every other member.
@@ -1982,16 +1984,7 @@ tick(#{cfg := #cfg{effective_machine_module = MacMod},
     %% This makes sure such "upgrade windows" are not missed, e.g. during
     %% a (recommended against!) grow-then-shrink upgrade.
     %% See rabbitmq/rabbitmq-server#17511.
-    %%
-    %% Conditional, so that an already
-    %% appended but not yet committed upgrade no-op is not duplicated over and over.
-    UpgradeEffects = case ra_log:last_index_term(Log) of
-                         {CommitIndex, _} ->
-                             {_, Effs} = determine_if_machine_upgrade_allowed(State),
-                             Effs;
-                         _ ->
-                             []
-                     end,
+    {_State, UpgradeEffects} = determine_if_machine_upgrade_allowed(State),
     Now = erlang:system_time(millisecond),
     InfoRpcEffects ++ UpgradeEffects ++ ra_machine:tick(MacMod, Now, MacState).
 
@@ -2197,7 +2190,8 @@ become(leader, OldRaftState, #{cluster := Cluster,
           end,
 
     State#{log => Log,
-           cluster_change_permitted => CCP};
+           cluster_change_permitted => CCP,
+           pending_machine_upgrade => 0};
 become(follower, _, #{cluster := Cluster,
                       log := Log0} = State) ->
     %% followers should only ever need a single segment open at any one
@@ -4175,9 +4169,11 @@ handle_info_reply(State, #info_reply{} = _InfoReply) ->
 determine_if_machine_upgrade_allowed(
   #{cfg := #cfg{effective_machine_version = EffectiveMacVer,
                 log_id = LogId}} = State) ->
+    Pending = maps:get(pending_machine_upgrade, State, 0),
     Effects = case get_max_supported_machine_version(State) of
                   MaxSupMacVer
-                    when MaxSupMacVer > EffectiveMacVer ->
+                    when MaxSupMacVer > EffectiveMacVer andalso
+                         MaxSupMacVer > Pending ->
                       ?DEBUG(
                          "~ts: max supported machine version = ~b, "
                          "upgrading from ~b",

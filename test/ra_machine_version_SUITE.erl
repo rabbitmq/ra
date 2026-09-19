@@ -36,6 +36,7 @@ all_tests() ->
      survivors_restarted_after_member_removal_end_up_upgraded,
      removing_lagging_leader_unlocks_upgrade,
      repeated_noop_for_same_version_changes_nothing,
+     upgrade_noop_is_not_repeated_while_quorum_is_lost,
      quorum_strategy_is_unaffected_by_member_removal,
      server_with_lower_version_can_vote_for_higher_if_effective_version_is_higher,
      unversioned_machine_never_sees_machine_version_command,
@@ -303,6 +304,22 @@ repeated_noop_for_same_version_changes_nothing(Config) ->
     {ok, ok, _} = ra:process_command(ServerId, dummy),
     {ok, #{effective_machine_version := 2,
            machine_versions := Versions}, _} = ra:member_overview(ServerId),
+    ok.
+
+upgrade_noop_is_not_repeated_while_quorum_is_lost(Config) ->
+    {Leader, V2Follower, V1Follower} = start_mixed_version_cluster(Config),
+    hold_effective_version([Leader, V2Follower, V1Follower], 1),
+    {ok, _, _} = ra:remove_member(Leader, V1Follower),
+    %% the leader now knows an upgrade is possible but cannot commit it
+    ok = ra:stop_server(?SYS, V2Follower),
+    ok = ra:stop_server(?SYS, V1Follower),
+    timer:sleep(1000),
+    {ok, #{log := #{last_index := LastIndex}}, _} = ra:member_overview(Leader),
+    %% several ticks later the log has not grown
+    timer:sleep(3000),
+    {ok, #{log := #{last_index := LastIndex}}, _} = ra:member_overview(Leader),
+    ok = ra:restart_server(?SYS, V2Follower),
+    await_effective_version([Leader, V2Follower], 2),
     ok.
 
 quorum_strategy_is_unaffected_by_member_removal(Config) ->
