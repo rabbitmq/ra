@@ -67,6 +67,9 @@ all() ->
      leader_server_join_nonvoter,
      leader_server_leave,
      leader_is_removed,
+     leader_server_leave_unblocks_machine_upgrade,
+     leader_server_leave_does_not_upgrade_if_other_peer_still_lagging,
+     leader_server_join_does_not_upgrade_for_new_unknown_version_peer,
      follower_cluster_change,
      follower_cluster_change_overwrite,
      leader_applies_new_cluster,
@@ -2138,6 +2141,91 @@ leader_is_removed(_Config) ->
     {leader, State2, _} = ra_server:handle_leader({N2, AEReply}, State1b),
     % after committing the new entry the leader steps down
     {stop, #{commit_index := 4}, _} = ra_server:handle_leader({N3, AEReply}, State2),
+    ok.
+
+leader_server_leave_unblocks_machine_upgrade(_Config) ->
+    %% N4 hasn't reported a machine version yet (e.g. it is behind and has
+    %% never replied to an `#info_rpc{}') and is the only thing capping the
+    %% max supported machine version. Removing it should immediately
+    %% propose upgrading to what N2 and N3 (and this node) already support,
+    %% rather than waiting on a `#info_reply{}' that may never come again
+    %% once the remaining peers are already at parity.
+    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
+    MacVer = 2,
+    Base = base_state(3, ?FUNCTION_NAME),
+    Cfg = maps:get(cfg, Base),
+    OldCluster = #{N1 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N2 => new_peer_with(#{next_index => 4, match_index => 3,
+                                         machine_version => MacVer}),
+                   N3 => new_peer_with(#{next_index => 4, match_index => 3,
+                                         machine_version => MacVer}),
+                   N4 => new_peer_with(#{next_index => 1, match_index => 0})},
+    State = Base#{cluster => OldCluster,
+                  cfg => Cfg#cfg{machine_version = MacVer}},
+
+    {leader, _State1, Effects} =
+        ra_server:handle_leader({command, {'$ra_leave', meta(), N4,
+                                           await_consensus}}, State),
+    ?assert(lists:any(fun ({next_event, cast, {command, {noop, _, V}}}) ->
+                              V =:= MacVer;
+                          (_) ->
+                              false
+                       end, Effects)),
+    ok.
+
+leader_server_leave_does_not_upgrade_if_other_peer_still_lagging(_Config) ->
+    %% N2 is on an old machine version and stays in the cluster, so removing
+    %% the unrelated N4 must not propose an upgrade the cluster still can't
+    %% support.
+    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
+    MacVer = 2,
+    Base = base_state(3, ?FUNCTION_NAME),
+    Cfg = maps:get(cfg, Base),
+    OldCluster = #{N1 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N2 => new_peer_with(#{next_index => 4, match_index => 3,
+                                         machine_version => 0}),
+                   N3 => new_peer_with(#{next_index => 4, match_index => 3,
+                                         machine_version => MacVer}),
+                   N4 => new_peer_with(#{next_index => 1, match_index => 0})},
+    State = Base#{cluster => OldCluster,
+                  cfg => Cfg#cfg{machine_version = MacVer}},
+
+    {leader, _State1, Effects} =
+        ra_server:handle_leader({command, {'$ra_leave', meta(), N4,
+                                           await_consensus}}, State),
+    ?assertNot(lists:any(fun ({next_event, cast, {command, {noop, _, _}}}) ->
+                                 true;
+                             (_) ->
+                                 false
+                          end, Effects)),
+    ok.
+
+leader_server_join_does_not_upgrade_for_new_unknown_version_peer(_Config) ->
+    %% The machine upgrade recheck runs on every cluster change, joins
+    %% included. A newly joined member has no cached machine version yet,
+    %% so it must cap the max supported version back down to the current
+    %% effective version, even though the rest of the cluster is already
+    %% capable of a higher one.
+    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
+    MacVer = 2,
+    Base = base_state(3, ?FUNCTION_NAME),
+    Cfg = maps:get(cfg, Base),
+    OldCluster = #{N1 => new_peer_with(#{next_index => 4, match_index => 3}),
+                   N2 => new_peer_with(#{next_index => 4, match_index => 3,
+                                         machine_version => MacVer}),
+                   N3 => new_peer_with(#{next_index => 4, match_index => 3,
+                                         machine_version => MacVer})},
+    State = Base#{cluster => OldCluster,
+                  cfg => Cfg#cfg{machine_version = MacVer}},
+
+    {leader, _State1, Effects} =
+        ra_server:handle_leader({command, {'$ra_join', meta(), N4,
+                                           await_consensus}}, State),
+    ?assertNot(lists:any(fun ({next_event, cast, {command, {noop, _, _}}}) ->
+                                 true;
+                             (_) ->
+                                 false
+                          end, Effects)),
     ok.
 
 follower_cluster_change(_Config) ->
