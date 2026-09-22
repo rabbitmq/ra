@@ -396,9 +396,12 @@ flush_mem_table_range(ServerUId, {Tid, Seq},
                     %% the directory only needs syncing if a file appeared in
                     %% it, an append to an existing segment does not change
                     %% the directory entry
-                    case Created0 orelse Created1 orelse Closed0 =/= [] of
+                    case Created0 orelse
+                         Created1 orelse
+                         Closed0 =/= [] of
                         true ->
-                            _ = ra_lib:sync_dir(Dir);
+                            _ = ra_lib:sync_dir(Dir),
+                            ok;
                         false ->
                             ok
                     end,
