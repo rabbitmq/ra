@@ -32,6 +32,8 @@
          is_new/1,
          is_fully_persisted/1,
          is_fully_replicated/1,
+         is_delete_after_recovery/1,
+         unreplicated_peers/1,
          % properties
          id/1,
          uid/1,
@@ -85,6 +87,9 @@
       commit_index := ra_index(),
       last_applied := ra_index(),
       persisted_last_applied => ra_index(),
+      %% set when recovery re-applies a cluster delete command that had
+      %% already been applied before the last shutdown
+      delete_after_recovery => boolean(),
       machine_state := term(),
       aux_state => term(),
       condition => #{predicate_fun := ra_await_condition_fun(),
@@ -483,16 +488,40 @@ recover(#{cfg := #cfg{log_id = LogId,
     Before = erlang:system_time(millisecond),
     {#{log := Log0,
        cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State2, _} =
-        apply_to(CommitIndex,
-                 fun({_Idx, _, _} = E, S0) ->
-                         %% Clear out the effects and notifies map
-                         %% to avoid memory explosion
-                         {Mod, LastAppl, S, MacSt, _E, _N, LastTs} =
-                             apply_with(E, S0),
-                         put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, LastAppl),
-                         {Mod, LastAppl, S, MacSt, [], #{}, LastTs}
-                 end,
-                 State1, []),
+        try
+            apply_to(CommitIndex,
+                     fun({_Idx, _, _} = E, S0) ->
+                             %% Clear out the effects and notifies map
+                             %% to avoid memory explosion
+                             {Mod, LastAppl, S, MacSt, _E, _N, LastTs} =
+                                 apply_with(E, S0),
+                             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED,
+                                         LastAppl),
+                             {Mod, LastAppl, S, MacSt, [], #{}, LastTs}
+                     end,
+                     State1, [])
+        catch throw:{delete_and_terminate,
+                     #{last_applied := DeleteIdx} = DelState, _Effs} ->
+                  %% The log contains a cluster delete command that had been
+                  %% applied before this server was last shut down but the
+                  %% deletion never completed, e.g. the server was restarted
+                  %% whilst it was waiting, as a terminating leader, for the
+                  %% command to be replicated to all members.
+                  %% Recovery cannot handle the delete_and_terminate condition
+                  %% itself so rewind last_applied to just before the delete
+                  %% command. It is then applied again as soon as the server
+                  %% is running, in a state where delete_and_terminate is
+                  %% handled and the server can terminate and delete itself,
+                  %% after replicating the command, as it would have done had
+                  %% it not been restarted.
+                  PrevIdx = DeleteIdx - 1,
+                  ?NOTICE("~ts: uncompleted cluster delete detected at index"
+                          " ~b during recovery, recovered to index ~b",
+                          [LogId, DeleteIdx, PrevIdx]),
+                  put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, PrevIdx),
+                  {DelState#{last_applied => PrevIdx,
+                             delete_after_recovery => true}, []}
+        end,
     After = erlang:system_time(millisecond),
     ?DEBUG("~ts: recovery of state machine version ~b:~b "
            "from index ~b to ~b took ~bms",
@@ -2048,6 +2077,23 @@ is_fully_replicated(#{commit_index := CI} = State) ->
             MinCI = lists:min([M || #{commit_index_sent := M} <- Peers]),
             MinMI >= CI andalso MinCI >= CI
     end.
+
+%% @doc Returns true if this server applied a cluster delete command whilst
+%% recovering, i.e. the command had already been applied before the server was
+%% last shut down but the deletion never completed. Such a server can never
+%% become fully replicated again as any member that did complete its deletion
+%% before the restart is gone for good and will never reply, so it has to
+%% complete its own deletion without waiting for all of its peers.
+-spec is_delete_after_recovery(ra_server_state()) -> boolean().
+is_delete_after_recovery(State) ->
+    maps:get(delete_after_recovery, State, false).
+
+%% @doc The peers that have not yet got all committed entries.
+-spec unreplicated_peers(ra_server_state()) -> [ra_server_id()].
+unreplicated_peers(#{commit_index := CI} = State) ->
+    maps:keys(maps:filter(fun (_, #{match_index := MI}) ->
+                                  MI < CI
+                          end, peers(State))).
 
 handle_aux(RaftState, Type, _Cmd,
            #{cfg := #cfg{effective_handle_aux_fun = undefined}} = State0) ->

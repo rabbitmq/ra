@@ -67,6 +67,9 @@
 -define(DEFAULT_ELECTION_MULT, 5).
 -define(TICK_INTERVAL_MS, 1000).
 -define(DEFAULT_AWAIT_CONDITION_TIMEOUT, 30000).
+%% the number of tick intervals a server that recovered with an already applied
+%% cluster delete command keeps trying to replicate it before deleting itself
+-define(DELETE_AFTER_RECOVERY_TICKS, 5).
 %% Utilisation average calculations are all in μs.
 -define(INSTALL_SNAP_RPC_TIMEOUT, 120 * 1000).
 
@@ -431,13 +434,30 @@ post_init(internal, {go, {ReplyToRef, ReplyToPid}}, Config) ->
 recover(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
-recover(internal, go, State = #state{server_state = ServerState0}) ->
+recover(internal, go,
+        State0 = #state{conf = #conf{tick_timeout = TickTimeout},
+                        server_state = ServerState0}) ->
     ServerState = ra_server:recover(ServerState0),
+    State = State0#state{server_state = ServerState},
     incr_counter(State#state.conf, ?C_RA_SRV_GCS, 1),
+    Actions = case ra_server:is_delete_after_recovery(ServerState) of
+                  true ->
+                      %% this server applied a cluster delete command before it
+                      %% was last shut down so it has to delete itself. Give it
+                      %% a bounded window to replicate the command to any member
+                      %% that has not got it yet, then delete regardless of
+                      %% whatever state it is in by then.
+                      %% NB: unlike a state timeout a named timeout is not
+                      %% cancelled when the server changes state
+                      [{{timeout, complete_delete},
+                        TickTimeout * ?DELETE_AFTER_RECOVERY_TICKS,
+                        complete_delete}];
+                  false ->
+                      []
+              end,
     %% we have to issue the next_event here so that the recovered state is
     %% only passed through very briefly
-    next_state(recovered, State#state{server_state = ServerState},
-               [{next_event, internal, next}]);
+    next_state(recovered, State, [{next_event, internal, next} | Actions]);
 recover(_, _, State) ->
     % all other events need to be postponed until we can return
     % `next_event` from init
@@ -610,6 +630,8 @@ leader(info, {unsuspend_peer, PeerId}, State0) ->
                     State0
             end,
     {keep_state, State, []};
+leader(_, complete_delete, State) ->
+    complete_delete_after_recovery(?FUNCTION_NAME, State);
 leader(_, tick_timeout,
        #state{conf = #conf{tick_timeout = TickTimeMs},
               commit_rate = CommitRate0} = State0) ->
@@ -708,6 +730,8 @@ candidate(info, {Status, Node, InfoList}, State0)
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
 candidate(info, {node_event, _Node, _Evt}, State) ->
     {keep_state, State};
+candidate(_, complete_delete, State) ->
+    complete_delete_after_recovery(?FUNCTION_NAME, State);
 candidate(_, tick_timeout,
           #state{conf = #conf{tick_timeout = TickTimeMs},
                  commit_rate = CommitRate0,
@@ -774,6 +798,8 @@ pre_vote(info, {Status, Node, InfoList}, State0)
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
 pre_vote(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
     handle_process_down(Pid, Info, ?FUNCTION_NAME, State0);
+pre_vote(_, complete_delete, State) ->
+    complete_delete_after_recovery(?FUNCTION_NAME, State);
 pre_vote(_, tick_timeout,
          #state{conf = #conf{tick_timeout = TickTimeMs},
                 commit_rate = CommitRate0,
@@ -920,6 +946,8 @@ follower(info, {node_event, Node, up}, State) ->
 follower(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
+follower(_, complete_delete, State) ->
+    complete_delete_after_recovery(?FUNCTION_NAME, State);
 follower(_, tick_timeout,
          #state{conf = #conf{tick_timeout = TickTimeMs},
                 commit_rate = CommitRate0,
@@ -968,6 +996,8 @@ receive_snapshot(enter, OldState, State0 = #state{conf = Conf}) ->
     {keep_state, State,
      [{state_timeout, ReceiveSnapshotTimeout, receive_snapshot_timeout}
       | Actions]};
+receive_snapshot(_, complete_delete, State) ->
+    complete_delete_after_recovery(?FUNCTION_NAME, State);
 receive_snapshot(_, tick_timeout,
                  #state{commit_rate = CommitRate0,
                         server_state = ServerState} = State0) ->
@@ -1059,6 +1089,8 @@ receive_snapshot(EventType, Msg, State00) ->
 terminating_leader(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
+terminating_leader(_, complete_delete, State) ->
+    complete_delete_after_recovery(?FUNCTION_NAME, State);
 terminating_leader(_EvtType, {command, _, _}, State0) ->
     % do not process any further commands
     {keep_state, State0, []};
@@ -1088,6 +1120,8 @@ terminating_leader(EvtType, Msg, State0) ->
 terminating_follower(enter, OldState, State0) ->
     {State, Actions} = handle_enter(?FUNCTION_NAME, OldState, State0),
     {keep_state, State, Actions};
+terminating_follower(_, complete_delete, State) ->
+    complete_delete_after_recovery(?FUNCTION_NAME, State);
 terminating_follower(EvtType, Msg, State0) ->
     % only process ra_log_events
     LogName = log_id(State0),
@@ -1184,6 +1218,8 @@ await_condition(info, {node_event, Node, down}, State) ->
 await_condition(info, {Status, Node, InfoList}, State0)
   when Status =:= nodedown orelse Status =:= nodeup ->
     handle_node_status_change(Node, Status, InfoList, ?FUNCTION_NAME, State0);
+await_condition(_, complete_delete, State) ->
+    complete_delete_after_recovery(?FUNCTION_NAME, State);
 await_condition(_, tick_timeout,
                 #state{conf = #conf{tick_timeout = TickTimeMs},
                        commit_rate = CommitRate0,
@@ -1948,6 +1984,30 @@ election_timeout_action(long, #conf{broadcast_time = Timeout,
     %% triggering elections
     T = rand:uniform(Timeout * ?DEFAULT_ELECTION_MULT * 2) + Poll,
     {state_timeout, T, election_timeout}.
+
+%% Completes a deletion that was interrupted by a restart. The delete command
+%% was applied before the server was last shut down so the server has to delete
+%% itself whatever state it is in by now: it may never be able to replicate the
+%% command to all of its peers as any member that completed its deletion before
+%% the restart is gone for good, and it may not even be able to reach a quorum.
+complete_delete_after_recovery(RaftState,
+                               #state{server_state = ServerState} = State)
+  when RaftState == leader orelse
+       RaftState == terminating_leader ->
+    case ra_server:unreplicated_peers(ServerState) of
+        [] ->
+            ok;
+        Peers ->
+            ?WARN("~ts: could not replicate the cluster delete command to ~w "
+                  "after recovery. Completing deletion, any member that did "
+                  "not receive the delete command has to be deleted manually",
+                  [log_id(State), Peers])
+    end,
+    {stop, {shutdown, delete}, State};
+complete_delete_after_recovery(RaftState, State) ->
+    ?NOTICE("~ts: completing cluster deletion after recovery in state ~s",
+            [log_id(State), RaftState]),
+    {stop, {shutdown, delete}, State}.
 
 % sets the tick timer for periodic actions such as sending rpcs to servers
 % that are stale to ensure liveness
