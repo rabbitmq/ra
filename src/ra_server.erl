@@ -3600,13 +3600,33 @@ append_cluster_change(Cluster, From, ReplyMode,
     % what happens if the write fails?
     try ra_log:append({NextIdx, Term, Command}, Log0) of
         Log ->
-            {ok, NextIdx, Term,
-             State#{log => Log,
-                    cluster => Cluster,
-                    cluster_change_permitted => false,
-                    cluster_index_term => IdxTerm,
-                    previous_cluster => {PrevCITIdx, PrevCITTerm, PrevCluster}},
-             Effects}
+            NewState = State#{log => Log,
+                              cluster => Cluster,
+                              cluster_change_permitted => false,
+                              cluster_index_term => IdxTerm,
+                              previous_cluster => {PrevCITIdx, PrevCITTerm,
+                                                   PrevCluster}},
+            %% A cluster change may unblock a machine version upgrade that
+            %% was being held back by a member that has since been removed:
+            %% a removed peer is no longer considered by
+            %% get_max_supported_machine_version/1. Without this, the
+            %% upgrade could stay stuck indefinitely, since a peer that has
+            %% already reported a machine version at parity with our own is
+            %% never re-queried again (see info_rpc_effects_for_peer/2) - so
+            %% simply removing the lagging peer would otherwise not by
+            %% itself produce a fresh `#info_reply{}' to trigger a recheck.
+            %% It is cheap and harmless to check on every cluster change
+            %% (joins included, since a newly added member has no cached
+            %% machine version yet and so can't raise the max supported
+            %% version) given how infrequently membership changes happen.
+            %%
+            %% It is safe to propose the upgrade noop here, ahead of the
+            %% cluster change itself being committed: the noop is appended
+            %% immediately after the cluster change entry, in the same
+            %% term, so - by the log matching property - it can only commit
+            %% if the cluster change commits too.
+            {_, UpgradeEffects} = determine_if_machine_upgrade_allowed(NewState),
+            {ok, NextIdx, Term, NewState, UpgradeEffects ++ Effects}
     catch error:wal_down ->
               {not_appended, wal_down, State, Effects}
     end.
