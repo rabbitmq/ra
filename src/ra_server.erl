@@ -595,7 +595,8 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                              next_index = PeerNextIdx,
                                              last_index = PeerLastIdx,
                                              last_term = PEER_LAST_TERM}},
-              #{cfg := #cfg{log_id = LogId} = Cfg,
+              #{cfg := #cfg{log_id = LogId,
+                            max_pipeline_count = MaxPipelineCount} = Cfg,
                 cluster := Nodes, log := Log0} = State0) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_AER_REPLIES_FAILED, 1),
     #{PeerId := #{match_index := MI,
@@ -647,7 +648,11 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                   NextIndex]),
                           {Peer0#{next_index => NextIndex}, Log1}
                   end,
-    State1 = State0#{cluster => Nodes#{PeerId => Peer}, log => Log},
+    %% any sign of trouble snaps this peer's pipeline window straight back
+    %% to the safe ceiling - see make_pipelined_rpc_effects for the
+    %% corresponding relative-lag based adaptation on success.
+    PeerReset = Peer#{pipeline_window => MaxPipelineCount},
+    State1 = State0#{cluster => Nodes#{PeerId => PeerReset}, log => Log},
     {State, _, Effects} = make_pipelined_rpc_effects(State1, []),
     {leader, State, Effects};
 handle_leader({command, Cmd}, #{cfg := #cfg{id = Self,
@@ -762,18 +767,23 @@ handle_leader({PeerId, #install_snapshot_result{term = Term}},
             {follower, update_term(Term, State0#{leader_id => undefined}), []}
     end;
 handle_leader({PeerId, #install_snapshot_result{last_index = LastIndex}},
-              #{cfg := #cfg{log_id = LogId}} = State0) ->
+              #{cfg := #cfg{log_id = LogId,
+                            max_pipeline_count = MaxPipelineCount}} = State0) ->
     case peer(PeerId, State0) of
         undefined ->
             ?WARN("~ts: saw install_snapshot_result from unknown peer ~tw",
                   [LogId, PeerId]),
             {leader, State0, []};
         Peer0 ->
+            %% peer just caught up from a snapshot install - give it a
+            %% fresh, safe pipeline window rather than trusting whatever it
+            %% had shrunk to before it fell behind.
             State1 = put_peer(PeerId,
                               Peer0#{status => normal,
                                      match_index => LastIndex,
                                      commit_index_sent => LastIndex,
-                                     next_index => LastIndex + 1},
+                                     next_index => LastIndex + 1,
+                                     pipeline_window => MaxPipelineCount},
                               State0),
 
             %% we can now demonitor the process
@@ -2291,6 +2301,20 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
                              cluster := Cluster} = State0,
                            Effects0, Force) ->
     NextLogIdx = ra_log:next_index(Log),
+    %% the fastest peer's match_index is used as the reference point for
+    %% each peer's pipeline window adaptation below - comparing a peer's
+    %% lag against this (rather than against NextLogIdx directly) means a
+    %% fast, healthy burst - which advances the fastest peer's match_index
+    %% too - doesn't look like a peer falling behind. only a peer that is
+    %% genuinely lagging relative to its cluster-mates shows a large
+    %% relative lag.
+    FastestMatch = maps:fold(
+                     fun (PeerId, #{match_index := MI}, Acc)
+                           when PeerId =/= Id ->
+                             max(MI, Acc);
+                         (_, _, Acc) ->
+                             Acc
+                     end, 0, Cluster),
     %% TODO: refactor this please, why does make_rpc_effect need to take the
     %% full state
     maps:fold(
@@ -2298,7 +2322,7 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
                      status := normal,
                      commit_index_sent := CI,
                      match_index := MatchIdx} = Peer0,
-           {S0, More0, Effs} = Acc)
+           {S0, More0, Effs})
             when PeerId =/= Id andalso
                  (NextIdx < NextLogIdx orelse CI < CommitIndex) ->
               % the status is normal and
@@ -2306,7 +2330,12 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
               % check if the match index isn't too far behind the
               % next index
               NumInFlight = NextIdx - MatchIdx - 1,
-              case NumInFlight < MaxPipelineCount orelse
+              RelativeLag = FastestMatch - MatchIdx,
+              PeerWindow = adapt_pipeline_window(
+                             RelativeLag,
+                             maps:get(pipeline_window, Peer0, MaxPipelineCount),
+                             MaxPipelineCount),
+              case NumInFlight < PeerWindow orelse
                    Force of
                   true ->
                       %% use the last list of entries as a cache
@@ -2321,29 +2350,61 @@ make_pipelined_rpc_effects(#{cfg := #cfg{id = Id,
                                            []
                                    end,
                       %% ensure we don't pass a batch size that would allow
-                      %% the peer to go over the max pipeline count
+                      %% the peer to go over its pipeline window
                       %% we'd only really get here if Force=true so setting
                       %% a single entry batch size should be fine
                       BatchSize = max(1,
                                       min(MaxBatchSize,
-                                          MaxPipelineCount - NumInFlight)),
+                                          PeerWindow - NumInFlight)),
                       {NewNextIdx, Eff, S} =
                           make_rpc_effect(PeerId, Peer0, BatchSize, S0,
                                           EntryCache),
                       ?assert(NewNextIdx >= NextIdx),
                       Peer = Peer0#{next_index => NewNextIdx,
-                                    commit_index_sent => CommitIndex},
+                                    commit_index_sent => CommitIndex,
+                                    pipeline_window => PeerWindow},
                       NewNumInFlight = NewNextIdx - MatchIdx - 1,
                       %% is there more potentially pipelining
                       More = More0 orelse (NewNextIdx < NextLogIdx andalso
-                                           NewNumInFlight < MaxPipelineCount),
+                                           NewNumInFlight < PeerWindow),
                       {put_peer(PeerId, Peer, S), More, [Eff | Effs]};
                   false ->
-                      Acc
+                      Peer = Peer0#{pipeline_window => PeerWindow},
+                      {put_peer(PeerId, Peer, S0), More0, Effs}
               end;
           (_, _, Acc) ->
               Acc
       end, {State0, false, Effects0}, Cluster).
+
+%% adapts a peer's pipeline window based on its lag relative to the
+%% fastest peer in the cluster (see FastestMatch above). grows towards the
+%% ceiling if the peer is genuinely falling behind its cluster-mates,
+%% shrinks towards the batching floor if it is keeping up, and leaves the
+%% window alone if lag is already within its current bucket (to avoid
+%% churning every fold pass).
+adapt_pipeline_window(RelativeLag, PipelineWindow, Ceiling)
+  when RelativeLag > PipelineWindow ->
+    min(Ceiling, next_pow2_at_or_above(RelativeLag));
+adapt_pipeline_window(RelativeLag, PipelineWindow, Ceiling)
+  when RelativeLag < PipelineWindow div 2 ->
+    %% never floor above the configured ceiling - a small max_pipeline_count
+    %% is a deliberate override and should still be respected as the max.
+    max(min(Ceiling, ?BATCHING_WINDOW_FLOOR),
+        prev_pow2_at_or_below(max(RelativeLag, 1)));
+adapt_pipeline_window(_RelativeLag, PipelineWindow, _Ceiling) ->
+    PipelineWindow.
+
+next_pow2_at_or_above(N) when N =< 1 -> 1;
+next_pow2_at_or_above(N) -> next_pow2_at_or_above(N, 1).
+
+next_pow2_at_or_above(N, P) when P >= N -> P;
+next_pow2_at_or_above(N, P) -> next_pow2_at_or_above(N, P * 2).
+
+prev_pow2_at_or_below(N) when N =< 1 -> 1;
+prev_pow2_at_or_below(N) -> prev_pow2_at_or_below(N, 1).
+
+prev_pow2_at_or_below(N, P) when P * 2 > N -> P;
+prev_pow2_at_or_below(N, P) -> prev_pow2_at_or_below(N, P * 2).
 
 make_rpcs(State) ->
     {State1, EffectsHR} = update_heartbeat_rpc_effects(State),
@@ -2608,12 +2669,21 @@ peer_snapshot_process_exited(SnapshotPid, #{cluster := Peers} = State) ->
     end.
 
 %% Set backoff status preserving attempt count from sending_snapshot
-peer_snapshot_process_exited_with_backoff(SnapshotPid, #{cluster := Peers} = State) ->
+peer_snapshot_process_exited_with_backoff(SnapshotPid,
+                                          #{cluster := Peers,
+                                            cfg := #cfg{max_pipeline_count =
+                                                        MaxPipelineCount}} = State) ->
     case find_peer_with_snapshot_pid(SnapshotPid, Peers) of
         {PeerId, #{status := {sending_snapshot, _, AttemptCount}} = Peer} ->
-            %% Increment count and set backoff status
+            %% Increment count and set backoff status. A peer that needed a
+            %% snapshot has fallen far behind - reset its pipeline window to
+            %% the safe ceiling rather than trusting whatever it had shrunk
+            %% to before it fell behind.
             NewCount = AttemptCount + 1,
-            NewState = put_peer(PeerId, Peer#{status => {snapshot_backoff, NewCount}}, State),
+            NewState = put_peer(PeerId,
+                                Peer#{status => {snapshot_backoff, NewCount},
+                                      pipeline_window => MaxPipelineCount},
+                                State),
             {NewState, PeerId, NewCount};
         _ ->
             {State, undefined, 0}
