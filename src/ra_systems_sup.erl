@@ -30,7 +30,6 @@ start_system(#{name := Name,
                data_dir := Dir} = Config) when is_atom(Name) ->
     ?INFO("starting Ra system: ~ts in directory: ~ts", [Name, Dir]),
     %% TODO: validate configuration
-    ok = ra_system:store(Config),
     RaSystemsSup = #{id => Name,
                      type => supervisor,
                      start => {ra_system_sup, start_link, [Config]}},
@@ -56,7 +55,6 @@ stop_system(Name) when is_atom(Name) ->
 
 cleanup(Name) when is_atom(Name) ->
     ?CATCH(supervisor:delete_child(?MODULE, Name)),
-    _ = persistent_term:erase({'$ra_system', Name}),
     ok.
 
 init([]) ->
