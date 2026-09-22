@@ -243,12 +243,33 @@
 -define(ERROR(Fmt, Args), ?DISPATCH_LOG(error, Fmt, Args)).
 
 -define(DISPATCH_LOG(Level, Fmt, Args),
-        %% same as OTP logger does when using the macro: gate on the level
-        %% first so that Fmt/Args are not evaluated (they may contain
-        %% arbitrarily expensive calls) when the event would be discarded
-        %% anyway
-        case logger:allow(Level, ?MODULE) of
+        %% When dispatching to the real OTP logger, gate on the level first,
+        %% same as OTP's own logger macros do, so that Fmt/Args are not
+        %% evaluated (they may contain arbitrarily expensive calls) when the
+        %% event would be discarded anyway - logger:log/4 would apply the
+        %% same logger:allow/2 filter internally, so this is equivalent.
+        %% A non-default logger_mod is responsible for its own filtering
+        %% (it may not be backed by OTP's logger config at all) and is
+        %% therefore always called.
+        case ra_env:logger_mod() =:= logger of
             true ->
+                case logger:allow(Level, ?MODULE) of
+                    true ->
+                        try
+                            logger:log(Level, Fmt, Args,
+                                      #{mfa => {?MODULE,
+                                                ?FUNCTION_NAME,
+                                                ?FUNCTION_ARITY},
+                                        file => ?FILE,
+                                        line => ?LINE,
+                                        domain => [ra]})
+                        catch
+                            _:_ -> ok
+                        end;
+                    false ->
+                        ok
+                end;
+            false ->
                 try
                     (ra_env:logger_mod()):log(Level, Fmt, Args,
                                               #{mfa => {?MODULE,
@@ -259,9 +280,7 @@
                                                 domain => [ra]})
                 catch
                     _:_ -> ok
-                end;
-            false ->
-                ok
+                end
         end,
         ok).
 
