@@ -10,7 +10,6 @@
 
 -export([start_link/1,
          accept_mem_tables/3,
-         truncate_segments/3,
          my_segments/2,
          await/1,
          overview/1
@@ -84,12 +83,6 @@ accept_mem_tables(_SegmentWriter, Tables, undefined)
 accept_mem_tables(SegmentWriter, UIdTidRanges, WalFile)
   when is_map(UIdTidRanges) ->
     gen_server:cast(SegmentWriter, {mem_tables, UIdTidRanges, WalFile}).
-
--spec truncate_segments(atom() | pid(), ra_uid(), ra_log:segment_ref()) -> ok.
-truncate_segments(SegWriter, Who, SegRef) ->
-    maybe_wait_for_segment_writer(SegWriter, ?SEGMENT_WRITER_RECOVERY_TIMEOUT),
-    % truncate all closed segment files
-    gen_server:cast(SegWriter, {truncate_segments, Who, SegRef}).
 
 -spec my_segments(atom() | pid(), ra_uid()) -> [file:filename()].
 my_segments(SegWriter, Who) ->
@@ -201,68 +194,7 @@ handle_cast({mem_tables, UIdTidRanges, WalFile},
     ?DEBUG("segment_writer in '~w': completed flush of ~b writers from wal file "
            "~s in ~bms",
           [System, length(RangesList), WalFile, Diff]),
-    {noreply, State};
-handle_cast({truncate_segments, Who, {Name, _Range} = SegRef},
-            #state{segment_conf = SegConf,
-                   seg_cache = Cache,
-                   system = System} = State0) ->
-    %% remove all segments below the provided SegRef
-    %% Also delete the segref if the file hasn't changed
-    %% this can replace the current segment so the cache has to be dropped
-    _ = ets:delete(Cache, Who),
-    T1 = erlang:monotonic_time(),
-    Files = segments_for(Who, State0),
-    {_Keep, Discard} = lists:splitwith(
-                         fun (F) ->
-                                 ra_lib:to_binary(filename:basename(F)) =/= Name
-                         end, lists:reverse(Files)),
-    case Discard of
-        [] ->
-            %% should this be possible?
-            {noreply, State0};
-        [Pivot | Remove] ->
-            %% remove all old files
-            _ = [_ = prim_file:delete(F) || F <- Remove],
-            %% check if the pivot has changed
-            case ra_log_segment:open(Pivot, #{mode => read}) of
-                {ok, Seg} ->
-                    case ra_log_segment:segref(Seg) of
-                        SegRef ->
-                            %% it has not changed - we can delete that too
-                            %% as we are deleting the last segment - create an empty
-                            %% successor
-                            T2 = erlang:monotonic_time(),
-                            Diff = erlang:convert_time_unit(T2 - T1, native,
-                                                            millisecond),
-                            ?DEBUG("segment_writer in '~w': ~s for ~s took ~bms",
-                                   [System, ?FUNCTION_NAME, Who, Diff]),
-                            case open_successor_segment(Seg, SegConf) of
-                                enoent ->
-                                    _ = prim_file:delete(Pivot),
-                                    %% directory must have been deleted after the pivot
-                                    %% segment was opened
-                                    {noreply, State0};
-                                Succ ->
-                                    _ = prim_file:delete(Pivot),
-                                    _ = ra_log_segment:close(Succ),
-                                    {noreply, State0}
-                            end;
-                        _ ->
-                            %% the segment has changed - leave it in place
-                            T2 = erlang:monotonic_time(),
-                            Diff = erlang:convert_time_unit(T2 - T1, native,
-                                                            millisecond),
-                            ?DEBUG("segment_writer in '~w': ~s for ~s took ~bms",
-                                   [System, ?FUNCTION_NAME, Who, Diff]),
-                            _ = ra_log_segment:close(Seg),
-                            {noreply, State0}
-                    end;
-                {error, enoent} ->
-                    %% concurrent deletion of segment - assume this ra server
-                    %% is gone
-                    {noreply, State0}
-            end
-    end.
+    {noreply, State}.
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -633,6 +565,7 @@ open_file_err(Dir, File, SegConf, Err) ->
             ?WARN("segment_writer: missing header in segment file ~ts "
                   "deleting file and retrying recovery", [File]),
             _ = prim_file:delete(File),
+            _ = ra_lib:sync_dir(Dir),
             open_file(Dir, SegConf);
         {error, enoent} ->
             ?DEBUG("segment_writer: failed to open segment file ~ts "
