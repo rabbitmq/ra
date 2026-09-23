@@ -41,12 +41,7 @@ configure_logger(Module) when is_atom(Module) ->
 
 -spec logger_mod() -> module().
 logger_mod() ->
-    case persistent_term:get('$ra_logger', undefined) of
-        M when is_atom(M) ->
-            M;
-        undefined ->
-            ?MODULE
-    end.
+    persistent_term:get('$ra_logger', ?MODULE).
 
 %% dummy log function
 log(_) -> ok.

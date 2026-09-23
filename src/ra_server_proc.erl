@@ -390,7 +390,6 @@ do_init(#{id := Id,
                       when is_pid(P) ->
                         P
                 end,
-    ra_env:configure_logger(logger),
     %% monitor worker process, it is easier to handle than linking as we're
     %% already processing all downs
     _ = monitor(process, WorkerPid),

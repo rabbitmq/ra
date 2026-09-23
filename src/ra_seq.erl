@@ -93,9 +93,10 @@ limit(_CeilIdxIncl, Seq) ->
     Seq.
 
 %% @doc adds two sequences together where To is
-%% the "lower" sequence
-%% TODO: optimise to avoid the fold which could be expensive
-%% for very large sequences containing large ranges
+%% the "lower" sequence.
+%% Runs in O(length(Add) + length(To)) where length is the number of
+%% elements (indexes or ranges) rather than the number of indexes, i.e.
+%% ranges are merged rather than expanded.
 -spec add(Add :: state(), To :: state()) -> state().
 add([], To) ->
     To;
@@ -103,7 +104,7 @@ add(Add, []) ->
     Add;
 add(Add, To) ->
     Fst = first0(Add),
-    fold(fun append/2, limit(Fst - 1, To), Add).
+    merge0(lists:reverse(Add), limit(Fst - 1, To)).
 
 -spec fold(fun ((ra:index(), Acc) -> Acc), Acc, state()) -> Acc.
 fold(Fun, Acc0, Seq)
@@ -139,12 +140,28 @@ last([]) ->
 last(Seq) ->
     last0(Seq).
 
+%% @doc Removes Prefix from the front of Seq.
+%% Prefix may contain indexes that are not in Seq (they have already been
+%% removed) but every index of Seq at or below `last(Prefix)' must be
+%% covered by Prefix, else `{error, not_prefix}' is returned.
+%% Runs in O(number of elements) rather than O(number of indexes).
 -spec remove_prefix(state(), state()) ->
     {ok, state()} | {error, not_prefix}.
+remove_prefix([], Seq) ->
+    {ok, Seq};
+remove_prefix(_Prefix, []) ->
+    {ok, []};
 remove_prefix(Prefix, Seq) ->
-    P = iterator(Prefix),
-    S = iterator(Seq),
-    drop_prefix(next(P), next(S)).
+    PrefLast = last0(Prefix),
+    %% only the part of Seq at or below the last prefix index needs to be
+    %% covered by the prefix, the rest is the remainder
+    case covers(lists:reverse(Prefix),
+                lists:reverse(limit(PrefLast, Seq))) of
+        true ->
+            {ok, floor(PrefLast + 1, Seq)};
+        false ->
+            {error, not_prefix}
+    end.
 
 -spec iterator(state()) -> iter().
 iterator(Seq) when is_list(Seq) ->
@@ -200,9 +217,17 @@ in(_Idx, []) ->
     false;
 in(Idx, [Idx | _]) ->
     true;
+in(Idx, [Next | _])
+  when is_integer(Next) andalso Next < Idx ->
+    %% sequences are ordered high -> low so nothing from here on can
+    %% match either
+    false;
 in(Idx, [Next | Rem])
  when is_integer(Next) ->
     in(Idx, Rem);
+in(Idx, [{_, End} | _])
+  when End < Idx ->
+    false;
 in(Idx, [Range | Rem]) ->
     case ra_range:in(Idx, Range) of
         true ->
@@ -275,20 +300,80 @@ has_overlap0(Start, End, [{RStart, REnd} | Rem]) ->
            true
     end.
 
-drop_prefix({IDX, PI}, {IDX, SI}) ->
-    drop_prefix(next(PI), next(SI));
-drop_prefix(_, end_of_seq) ->
-    %% TODO: is this always right as it includes the case where there is
-    %% more prefex left to drop but nothing in the target?
-    {ok, []};
-drop_prefix(end_of_seq, {Idx, #i{seq = RevSeq}}) ->
-    {ok, add(lists:reverse(RevSeq), [Idx])};
-drop_prefix({PrefIdx, PI}, {Idx, _SI} = I)
-  when PrefIdx < Idx ->
-    drop_prefix(next(PI), I);
-drop_prefix({PrefIdx, _PI}, {Idx, _SI})
-  when Idx < PrefIdx ->
-    {error, not_prefix}.
+%% Merges the elements of the ascending list Asc onto the high->low
+%% sequence Acc. The result is identical to folding append/2 over every
+%% index of Asc, canonical representation included, but ranges are merged
+%% rather than expanded.
+merge0([], Acc) ->
+    Acc;
+merge0([E | Rem], Acc) ->
+    merge0(Rem, push0(E, Acc)).
+
+push0(Idx, Acc) when is_integer(Idx) ->
+    push_range(Idx, Idx, Acc);
+push0({S, E}, Acc) ->
+    push_range(S, E, Acc).
+
+%% Appends the indexes S..E (S =< E) to Acc in closed form.
+%% NB: append/2 only compacts *three* consecutive singletons into a range
+%% and floor/2 and limit/2 split two element ranges back into singletons,
+%% so the canonical form never contains a range shorter than 3. The clauses
+%% below preserve that invariant.
+push_range(S, E, [{AS, AE} | Rem]) when S == AE + 1 ->
+    %% extend the leading range
+    [{AS, E} | Rem];
+push_range(S, E, [A, B | Rem]) when is_integer(A) andalso
+                                    is_integer(B) andalso
+                                    S == A + 1 andalso
+                                    S == B + 2 ->
+    %% three consecutive singletons compact into a range
+    [{B, E} | Rem];
+push_range(S, E, [A | Rem]) when is_integer(A) andalso S == A + 1 ->
+    case E > S of
+        true ->
+            %% A, S, S+1... is at least three consecutive indexes
+            [{A, E} | Rem];
+        false ->
+            [S, A | Rem]
+    end;
+push_range(S, E, Acc) ->
+    %% no adjacency with the head of Acc
+    if E >= S + 2 ->
+           [{S, E} | Acc];
+       E == S + 1 ->
+           [E, S | Acc];
+       true ->
+           [S | Acc]
+    end.
+
+%% True if every index in Sub appears in Sup. Both are in ascending order
+%% with non-overlapping elements, so a single merge pass suffices.
+covers(_Sup, []) ->
+    true;
+covers([], _Sub) ->
+    false;
+covers([SupE | SupRem] = Sup, [SubE | SubRem]) ->
+    {SupS, SupEnd} = as_range(SupE),
+    {SubS, SubEnd} = as_range(SubE),
+    if SupEnd < SubS ->
+           %% Sup element is entirely below Sub, skip it
+           covers(SupRem, [SubE | SubRem]);
+       SupS =< SubS andalso SupEnd >= SubEnd ->
+           %% Sub element fully covered, a single Sup element may cover
+           %% several Sub elements so do not advance Sup
+           covers(Sup, SubRem);
+       SupS =< SubS ->
+           %% partially covered, continue with the uncovered remainder
+           covers(SupRem, [{SupEnd + 1, SubEnd} | SubRem]);
+       true ->
+           %% SubS is below anything Sup can cover from here on
+           false
+    end.
+
+as_range({_, _} = R) ->
+    R;
+as_range(I) when is_integer(I) ->
+    {I, I}.
 
 
 

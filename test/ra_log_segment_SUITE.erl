@@ -38,6 +38,8 @@ all_tests() ->
      corrupted_segment,
      large_segment,
      segref,
+     segref_info,
+     segref_info_v1,
      info,
      info_2,
      versions_v1,
@@ -215,6 +217,63 @@ segref(Config) ->
     undefined = ra_log_segment:segref(Seg0),
     {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
     {<<"seg1.seg">>, {1, 1}} = ra_log_segment:segref(Seg1),
+    ok.
+
+segref_info(Config) ->
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    {ok, Seg0} = ra_log_segment:open(Fn, #{max_count => 128}),
+    ?assertMatch(#{ref := undefined, file_type := regular},
+                 ra_log_segment:segref_info(Fn)),
+    {ok, Seg1} = ra_log_segment:append(Seg0, 1, 2, <<"Adsf">>),
+    {ok, Seg2} = ra_log_segment:append(Seg1, 2, 2, <<"Adsf">>),
+    _ = ra_log_segment:flush(Seg2),
+    ?assertMatch(#{ref := {<<"seg1.seg">>, {1, 2}}, file_type := regular},
+                 ra_log_segment:segref_info(Fn)),
+    %% must always agree with info/1's ref for the same file
+    ?assertEqual(maps:get(ref, ra_log_segment:info(Fn)),
+                 maps:get(ref, ra_log_segment:segref_info(Fn))),
+    ok.
+
+segref_info_v1(Config) ->
+    %% segref_info/1 has its own record scan per index version, exercise
+    %% the v1 path directly as append/4 only ever writes the current
+    %% version. Two real records so a wrong v1 record width would land the
+    %% second record's Idx on the wrong bytes rather than accidentally
+    %% still reading correctly off the front of the index.
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "seg1.seg"),
+    Data1 = make_data(64),
+    Data2 = make_data(64),
+    Crc1 = erlang:crc32(Data1),
+    Crc2 = erlang:crc32(Data2),
+    NumEntries = 4,
+    Term = 2,
+    Version = 1,
+    %% v1 index record size was 28, header size is 8
+    DataOffset1 = 8 + (NumEntries * 28),
+    DataOffset2 = DataOffset1 + byte_size(Data1),
+    %% in v1 the offset was 32 bit
+    IndexData = <<1:64/unsigned, Term:64/unsigned,
+                  DataOffset1:32/unsigned,
+                  (byte_size(Data1)):32/unsigned,
+                  Crc1:32/unsigned,
+                  5:64/unsigned, Term:64/unsigned,
+                  DataOffset2:32/unsigned,
+                  (byte_size(Data2)):32/unsigned,
+                  Crc2:32/unsigned>>,
+    Header = <<"RASG", Version:16/unsigned, NumEntries:16/unsigned>>,
+    {ok, Fd} = file:open(Fn, [write, raw, binary]),
+    ok = file:pwrite(Fd, [{0, Header},
+                     {8, IndexData},
+                     {DataOffset1, Data1},
+                     {DataOffset2, Data2}]),
+    ok = file:sync(Fd),
+    ok = file:close(Fd),
+    ?assertMatch(#{ref := {<<"seg1.seg">>, {1, 5}}, file_type := regular},
+                 ra_log_segment:segref_info(Fn)),
+    ?assertEqual(maps:get(ref, ra_log_segment:info(Fn)),
+                 maps:get(ref, ra_log_segment:segref_info(Fn))),
     ok.
 
 info(Config) ->
