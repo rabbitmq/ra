@@ -481,51 +481,54 @@ recover(#{cfg := #cfg{log_id = LogId,
            [LogId, Cfg#cfg.effective_machine_version, MacVer,
             LastApplied1, CommitIndex]),
     Before = erlang:system_time(millisecond),
-    {#{log := Log0,
-       cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State2, _} =
-        apply_to(CommitIndex,
-                 fun({_Idx, _, _} = E, S0) ->
-                         %% Clear out the effects and notifies map
-                         %% to avoid memory explosion
-                         {Mod, LastAppl, S, MacSt, _E, _N, LastTs} =
-                             apply_with(E, S0),
-                         put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, LastAppl),
-                         {Mod, LastAppl, S, MacSt, [], #{}, LastTs}
-                 end,
-                 State1, []),
-    After = erlang:system_time(millisecond),
-    ?DEBUG("~ts: recovery of state machine version ~b:~b "
-           "from index ~b to ~b took ~bms",
-           [LogId, EffMacVerAfter, MacVer, LastApplied1, CommitIndex,
-            After - Before]),
-    %% scan from CommitIndex + 1 until NextIndex - 1 to see if there are
-    %% any further cluster changes
-    FromScan = CommitIndex + 1,
-    {ToScan, _} = ra_log:last_index_term(Log0),
-    ?DEBUG("~ts: scanning for cluster changes ~b:~b ",
-           [LogId, FromScan, ToScan]),
-    %% if we're recovering after a partial sparse write phase this will fail
-    {{LastScannedIdx, State3}, Log1} = ra_log:fold(fun cluster_scan_fun/2,
-                                                   FromScan, ToScan,
-                                                   {CommitIndex, State2}, Log0,
-                                                   return),
-
-    State = case LastScannedIdx < ToScan of
-                true ->
-                    ?DEBUG("~ts: scan detected sparse log last scanned ~b:~b "
-                           "resetting log to last contiguous index ~b",
-                           [LogId, LastScannedIdx, ToScan, LastScannedIdx]),
-                    %% the end of the log is sparse and needs to be reset
-                    {ok, Log2} = ra_log:set_last_index(LastScannedIdx, Log1),
-                    State3#{log => Log2};
-                false ->
-                    State3
-            end,
-
-    put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
-    State#{
-           %% reset commit latency as recovery may calculate a very old value
-           commit_latency => 0}.
+    try
+        {#{log := Log0,
+           cfg := #cfg{effective_machine_version = EffMacVerAfter}} = State2, _} =
+            apply_to(CommitIndex,
+                     fun({_Idx, _, _} = E, S0) ->
+                             %% Clear out the effects and notifies map
+                             %% to avoid memory explosion
+                             {Mod, LastAppl, S, MacSt, _E, _N, LastTs} =
+                                 apply_with(E, S0),
+                             put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED,
+                                         LastAppl),
+                             {Mod, LastAppl, S, MacSt, [], #{}, LastTs}
+                     end,
+                     State1, []),
+        After = erlang:system_time(millisecond),
+        ?DEBUG("~ts: recovery of state machine version ~b:~b "
+               "from index ~b to ~b took ~bms",
+               [LogId, EffMacVerAfter, MacVer, LastApplied1, CommitIndex,
+                After - Before]),
+        %% scan from CommitIndex + 1 until NextIndex - 1 to see if there are
+        %% any further cluster changes
+        FromScan = CommitIndex + 1,
+        {ToScan, _} = ra_log:last_index_term(Log0),
+        ?DEBUG("~ts: scanning for cluster changes ~b:~b ",
+               [LogId, FromScan, ToScan]),
+        %% if we're recovering after a partial sparse write phase this will fail
+        {{LastScannedIdx, State3}, Log1} = ra_log:fold(fun cluster_scan_fun/2,
+                                                       FromScan, ToScan,
+                                                       {CommitIndex, State2},
+                                                       Log0, return),
+        State = case LastScannedIdx < ToScan of
+                    true ->
+                        ?DEBUG("~ts: scan detected sparse log last scanned ~b:~b "
+                               "resetting log to last contiguous index ~b",
+                               [LogId, LastScannedIdx, ToScan, LastScannedIdx]),
+                        %% the end of the log is sparse and needs to be reset
+                        {ok, Log2} = ra_log:set_last_index(LastScannedIdx, Log1),
+                        State3#{log => Log2};
+                    false ->
+                        State3
+                end,
+        put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_LATENCY, 0),
+        %% reset commit latency as recovery may calculate a very old value
+        State#{commit_latency => 0}
+    catch
+        throw:{delete_and_terminate, State4, _Effects} ->
+            {delete_and_terminate, State4}
+    end.
 
 -spec handle_leader(ra_msg(), ra_server_state()) ->
     {ra_state(), ra_server_state(), effects()}.
