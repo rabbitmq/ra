@@ -2413,7 +2413,7 @@ sparse_write(Config) ->
     run_effs(AEffs),
     Log3 = ra_log:set_snapshot_state(SnapState, Log2),
     {ok, Log4, _} = ra_log:install_snapshot({15, 2}, ?MODULE,
-                                            LiveIndexes, Log3),
+                                            LiveIndexesSeq, Log3),
 
     ct:pal("overview Log4 ~p", [ra_log:overview(Log4)]),
     ?assertEqual(16, ra_log:next_index(Log4)),

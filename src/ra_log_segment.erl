@@ -24,6 +24,7 @@
          data_size/1,
          filename/1,
          segref/1,
+         segref_info/1,
          info/1,
          info/2,
          is_same_as/2,
@@ -99,6 +100,9 @@
                                     compute_checksums => boolean(),
                                     mode => append | read,
                                     index_mode => index_mode(),
+                                    %% in append mode, fail with enoent rather
+                                    %% than creating the file if it is missing
+                                    must_exist => boolean(),
                                     access_pattern => sequential | random,
                                     file_advise => posix_file_advise()}.
 -opaque state() :: #state{}.
@@ -145,10 +149,20 @@ open(Filename, Options) ->
                 read ->
                     [read, raw, binary]
             end,
-    case file:open(Filename, Modes) of
-        {ok, Fd} ->
-            process_file(FileExists, Mode, Filename, Fd, Options);
-        Err -> Err
+    case not FileExists andalso maps:get(must_exist, Options, false) of
+        true ->
+            %% the caller reached us via a cached filename and needs to know
+            %% the file has gone, rather than have an empty one created in
+            %% its place. NB: this reuses the read_file_info above so it
+            %% costs no extra syscall.
+            {error, enoent};
+        false ->
+            case file:open(Filename, Modes) of
+                {ok, Fd} ->
+                    process_file(FileExists, Mode, Filename, Fd, Options);
+                Err ->
+                    Err
+            end
     end.
 
 process_file(true, Mode, Filename, Fd, Options) ->
@@ -665,6 +679,9 @@ fold0(#state{cfg = Cfg, cache = Cache0} = State, Idx, FinalIdx, Fun, AccFun,
       Acc0, MissingKeyStrat) ->
     case lookup_index(State, Idx) of
         {ok, {Term, Offset, Length, Crc} = IdxRec} ->
+            %% a fold walks Idx .. FinalIdx contiguously by construction,
+            %% so it always uses pread/4's read-ahead cache regardless of
+            %% the segment's declared access pattern
             case pread(Cfg, Cache0, Offset, Length) of
                 {ok, Data, Cache} ->
                     case validate_checksum(Crc, Data) of
@@ -725,7 +742,6 @@ segref(Filename) ->
                    links => non_neg_integer(),
                    num_entries => non_neg_integer(),
                    ref => option(ra_log:segment_ref()),
-                   indexes => ra_seq:state(),
                    live_size => non_neg_integer()
                   }.
 
@@ -748,13 +764,9 @@ info(Filename, Live0)
         IndexRecordSize = index_record_size(Version),
         IndexSize = MaxCount * IndexRecordSize,
         DataStart = ?HEADER_SIZE + IndexSize,
-        %% Pass Live0 directly - ra_seq:in/2 is used for membership checks
-        %% This avoids expanding the sequence to a set which could be expensive
-        %% for large sequences. ra_seq:in/2 is efficient for compact sequences
-        %% with ranges.
         case file:pread(Fd, ?HEADER_SIZE, IndexSize) of
             {ok, Data} ->
-                {NumEntries, DataOffset, Range, IndexesSeq, LiveSize} =
+                {NumEntries, DataOffset, Range, LiveSize} =
                     parse_index_info(Version, Data, DataStart, Live0),
                 Ref = case Range of
                           undefined -> undefined;
@@ -768,8 +780,7 @@ info(Filename, Live0)
                   max_count => MaxCount,
                   num_entries => NumEntries,
                   ref => Ref,
-                  live_size => LiveSize,
-                  indexes => IndexesSeq};
+                  live_size => LiveSize};
             eof ->
                 %% Empty segment
                 #{size => DataStart,
@@ -780,12 +791,68 @@ info(Filename, Live0)
                   max_count => MaxCount,
                   num_entries => 0,
                   ref => undefined,
-                  live_size => 0,
-                  indexes => []}
+                  live_size => 0}
         end
     after
         _ = file:close(Fd)
     end.
+
+%% @doc Like info/1 but for a caller that only needs the segref and file
+%% type (e.g. ra_log:my_segrefs/2): skips num_entries, live_size and the
+%% ctime/links stat fields entirely.
+-spec segref_info(file:filename_all()) ->
+    #{ref => option(ra_log:segment_ref()),
+      file_type => regular | symlink}.
+segref_info(Filename)
+  when not is_tuple(Filename) ->
+    {ok, #file_info{type = Type}} =
+        prim_file:read_link_info(Filename, [raw, {time, posix}]),
+    {ok, Fd} = file:open(Filename, [read, raw, binary]),
+    try
+        {ok, Version, MaxCount} = read_header(Fd),
+        IndexSize = MaxCount * index_record_size(Version),
+        Ref = case file:pread(Fd, ?HEADER_SIZE, IndexSize) of
+                  {ok, Data} ->
+                      case scan_range(Version, Data) of
+                          undefined ->
+                              undefined;
+                          Range ->
+                              {ra_lib:to_binary(filename:basename(Filename)),
+                               Range}
+                      end;
+                  eof ->
+                      undefined
+              end,
+        #{ref => Ref, file_type => Type}
+    after
+        _ = file:close(Fd)
+    end.
+
+%% Index parsing for segref_info/1: only the index range is needed. Written
+%% as a directly-recursing binary match (rather than reusing
+%% decode_index_record/3's by-offset lookup) so the emulator can keep a
+%% single match context across the whole scan instead of re-deriving a
+%% sub-binary for every record.
+scan_range(2, Bin) ->
+    scan_range_v2(Bin, undefined);
+scan_range(1, Bin) ->
+    scan_range_v1(Bin, undefined).
+
+scan_range_v2(<<0:64, 0:64, 0:64, 0:32, 0:32/integer, _/binary>>, Range) ->
+    Range;
+scan_range_v2(<<Idx:64/unsigned, _Term:64/unsigned, _DataOffset:64/unsigned,
+                _Length:32/unsigned, _Crc:32/integer, Rest/binary>>, Range) ->
+    scan_range_v2(Rest, update_range(Range, Idx));
+scan_range_v2(_, Range) ->
+    Range.
+
+scan_range_v1(<<0:64, 0:64, 0:32, 0:32, 0:32/integer, _/binary>>, Range) ->
+    Range;
+scan_range_v1(<<Idx:64/unsigned, _Term:64/unsigned, _DataOffset:32/unsigned,
+                _Length:32/unsigned, _Crc:32/integer, Rest/binary>>, Range) ->
+    scan_range_v1(Rest, update_range(Range, Idx));
+scan_range_v1(_, Range) ->
+    Range.
 
 -spec is_same_as(state(), file:filename_all()) -> boolean().
 is_same_as(#state{cfg = #cfg{filename = Fn0}}, Fn) ->
@@ -1074,46 +1141,87 @@ parse_index_data_loop(Fmt, Bin, ByteOffset, Num, LastIdx, DataOffset, Range, Ind
                                   Index1#{Idx => {Term, Offset, Length, Crc}})
     end.
 
-%% Optimized index parsing for info/2 that computes stats in a single pass
-%% without building a full index map. Returns:
-%% {NumEntries, DataOffset, Range, IndexesSeq, LiveSize}
+%% Index parsing for info/2 that computes stats in a single pass without
+%% building a full index map. Returns {NumEntries, DataOffset, Range, LiveSize}.
+%%
+%% Index records are appended in index order and LiveSeq is ordered
+%% high -> low, so both sides are sorted and can be walked together with a
+%% cursor. Doing a ra_seq:in/2 membership test per record instead would be
+%% O(records * runs), which for a sparse live sequence - exactly the case
+%% where major compaction is worth running - is pathological.
 parse_index_info(Version, Data, DataOffset, LiveSeq) ->
     Fmt = idx_fmt(Version),
-    parse_index_info_loop(Fmt, Data, 0, 0, 0, DataOffset, undefined, [], 0, LiveSeq).
+    %% undefined means "no live sequence supplied", i.e. count everything
+    Live = case LiveSeq of
+               undefined ->
+                   undefined;
+               _ ->
+                   lists:reverse(LiveSeq)
+           end,
+    parse_index_info_loop(Fmt, Data, 0, 0, 0, DataOffset, undefined, 0,
+                          Live, Live).
 
 parse_index_info_loop(Fmt, Bin, ByteOffset, Num, LastIdx, DataOffset, Range,
-                      IdxAcc, LiveSize, LiveSeq) ->
+                      LiveSize, Cur0, Live) ->
     case decode_index_record(Fmt, Bin, ByteOffset) of
         eof ->
             %% End of data or partially written index
-            {Num, DataOffset, Range, ra_seq:from_list(lists:reverse(IdxAcc)),
-             LiveSize};
+            {Num, DataOffset, Range, LiveSize};
         {ok, {Idx, _Term, Offset, Length, _Crc}} ->
-            %% Handle index going backwards (trim entries)
-            IdxAcc1 = case Idx < LastIdx of
-                          true ->
-                              lists:dropwhile(fun(I) -> I > Idx end, IdxAcc);
-                          false ->
-                              IdxAcc
-                      end,
-            %% Compute live size: if LiveSeq is undefined, all entries are live
-            LiveSize1 = case LiveSeq of
-                            undefined ->
-                                LiveSize + Length;
-                            _ ->
-                                case ra_seq:in(Idx, LiveSeq) of
-                                    true ->
-                                        LiveSize + Length;
-                                    false ->
-                                        LiveSize
-                                end
-                        end,
+            {LiveSize1, Cur} = live_size_add(Idx, Length, LastIdx, LiveSize,
+                                             Cur0, Live),
             RecSize = Fmt#idx_fmt.record_size,
             parse_index_info_loop(Fmt, Bin, ByteOffset + RecSize, Num + 1, Idx,
                                   Offset + Length,
                                   update_range(Range, Idx),
-                                  [Idx | IdxAcc1], LiveSize1, LiveSeq)
+                                  LiveSize1, Cur, Live)
     end.
+
+live_size_add(_Idx, Length, _LastIdx, LiveSize, Cur, undefined) ->
+    %% no live sequence, every entry counts
+    {LiveSize + Length, Cur};
+live_size_add(Idx, Length, LastIdx, LiveSize, Cur0, Live) ->
+    %% an index going backwards means the segment contains overwrites, so the
+    %% cursor has to restart. Overwrites are one off truncation points so this
+    %% stays effectively O(records + runs).
+    %% NB: as before, a live index appearing twice in an overwritten segment
+    %% contributes its length twice.
+    Cur1 = case Idx < LastIdx of
+               true -> Live;
+               false -> Cur0
+           end,
+    Cur = live_advance(Idx, Cur1),
+    case live_holds(Idx, Cur) of
+        true ->
+            {LiveSize + Length, Cur};
+        false ->
+            {LiveSize, Cur}
+    end.
+
+%% drop live runs that end below Idx
+live_advance(Idx, [E | Rem] = Cur) ->
+    case live_end(E) < Idx of
+        true ->
+            live_advance(Idx, Rem);
+        false ->
+            Cur
+    end;
+live_advance(_Idx, []) ->
+    [].
+
+%% after live_advance/2 the leading run ends at or above Idx, so Idx is live
+%% exactly when that run also starts at or below it
+live_holds(_Idx, []) ->
+    false;
+live_holds(Idx, [{Start, _} | _]) ->
+    Start =< Idx;
+live_holds(Idx, [I | _]) when is_integer(I) ->
+    I =< Idx.
+
+live_end({_, End}) ->
+    End;
+live_end(I) when is_integer(I) ->
+    I.
 
 write_header(MaxCount, Fd) ->
     Header = <<?MAGIC, ?VERSION:16/unsigned, MaxCount:16/unsigned>>,
@@ -1137,23 +1245,15 @@ read_header(Fd) ->
             Err
     end.
 
-pread(#cfg{access_pattern = random,
-           fd = Fd}, Cache, Pos, Length) ->
-    %% no cache
-    {ok, Data} = file:pread(Fd, Pos, Length),
-    case byte_size(Data)  of
-        Length ->
-            {ok, Data, Cache};
-        _ ->
-            {error, partial_data}
-    end;
 pread(#cfg{}, {CPos, CLen, Bin} = Cache, Pos, Length)
   when Pos >= CPos andalso
        Pos + Length =< (CPos + CLen) ->
     %% read fits inside cache
     {ok, binary:part(Bin, Pos - CPos, Length), Cache};
-pread(#cfg{access_pattern = sequential,
-           fd = Fd} = Cfg, undefined, Pos, Length) ->
+pread(#cfg{fd = Fd} = Cfg, undefined, Pos, Length) ->
+    %% pread/4's only caller is fold0/7, which always wants read-ahead
+    %% caching regardless of the segment's declared access pattern (a fold
+    %% is sequential by construction), so this always builds a cache
     CacheLen = max(Length, ?READ_AHEAD_B),
     {ok, CacheData} = file:pread(Fd, Pos, CacheLen),
     case byte_size(CacheData) >= Length  of
