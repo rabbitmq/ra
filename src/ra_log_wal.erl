@@ -699,13 +699,14 @@ roll_over(#state{wal = Wal0, file_num = Num0,
                                       [{Tid, ra_seq:floor(SmallestIdx, Seq)}
                                        || {Tid, Seq} <- TidRanges]
                               end, Ranges),
+                %% persist writers map before handing the mem tables to the
+                %% segment writer: accept_mem_tables is async and the segment
+                %% writer deletes Filename once flushed, so the snapshot must
+                %% be written first or a crash could lose both
+                ok = persist_writers(Dir, Writers),
                 ok = ra_log_segment_writer:accept_mem_tables(SegWriter,
                                                              MemTables,
                                                              Filename),
-                %% persist writers map after handing the mem tables to the
-                %% segment writer so it can start flushing sooner, rather
-                %% than waiting behind this write+rename
-                ok = persist_writers(Dir, Writers),
                 MaxBytes
         end,
 
