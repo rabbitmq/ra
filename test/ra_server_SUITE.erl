@@ -24,6 +24,7 @@ all() ->
     [
      init_test,
      recover_restores_cluster_changes,
+     recovered_follower_completes_delete,
      election_timeout,
      follower_aer_diverged,
      follower_aer_term_mismatch,
@@ -333,6 +334,42 @@ recover_restores_cluster_changes(_Config) ->
                 end),
 
     #{cluster := #{?N1 := _, N2 := _}} = ra_server_init(InitConf),
+    ok.
+
+recovered_follower_completes_delete(_Config) ->
+    %% A server that is not the leader can also be restarted after it applied
+    %% a '$ra_cluster' delete command but before the deletion completed.
+    %% Recovery leaves the delete command unapplied so that it is applied
+    %% again as soon as the leader commits it, where delete_and_terminate is
+    %% handled and the server can delete itself.
+    N1 = ?N1, N2 = ?N2, N3 = ?N3,
+    #{log := Log0} = Base = base_state(3, ?FUNCTION_NAME),
+    UId = ra_server:uid(Base),
+    DeleteCmd = {'$ra_cluster', meta(), delete, await_consensus},
+    Log = ra_log:append_sync({4, 5, DeleteCmd}, Log0),
+    meck:expect(ra_log, init, fun (_) -> Log end),
+    ok = ra_log_meta:store(ra_log_meta, UId, current_term, 5),
+    %% the delete command had been applied before the restart
+    ok = ra_log_meta:store(ra_log_meta, UId, last_applied, 4),
+    InitConf = #{cluster_name => ?FUNCTION_NAME,
+                 id => N1,
+                 uid => UId,
+                 log_init_args => #{uid => UId},
+                 machine => {module, ?FUNCTION_NAME, #{}},
+                 initial_members => [N1, N2, N3]},
+    State0 = ra_server:init(InitConf),
+    ?assertMatch(#{commit_index := 4, last_applied := 0}, State0),
+    %% recovery does not throw, it rewinds to just before the delete command
+    State = ra_server:recover(State0),
+    ?assertMatch(#{last_applied := 3}, State),
+    ?assert(ra_server:is_delete_after_recovery(State)),
+    %% when the leader commits the delete command the recovered follower
+    %% terminates and deletes itself
+    AER = #append_entries_rpc{term = 5, leader_id = N2,
+                              prev_log_index = 4, prev_log_term = 5,
+                              leader_commit = 4, entries = []},
+    ?assertMatch({delete_and_terminate, _, _},
+                 ra_server:handle_follower(AER, State)),
     ok.
 
 election_timeout(_Config) ->
