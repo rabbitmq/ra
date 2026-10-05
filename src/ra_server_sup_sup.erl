@@ -191,6 +191,13 @@ delete_server_rpc(System, RaName) ->
             Dir = ra_env:server_data_dir(System, UId),
             _ = supervisor:terminate_child(SrvSup, UId),
             _ = delete_data_directory(Dir),
+            %% snapshots kept in the shared snapshot log, if there is one
+            case Names of
+                #{snap_store := SnapStore} ->
+                    ?CATCH(ra_log_snap_store:delete(SnapStore, UId, any));
+                _ ->
+                    ok
+            end,
             _ = ra_directory:unregister_name(Names, UId),
             %% forcefully clean up ETS tables
             ?CATCH(ets:delete(ra_log_metrics, UId)),

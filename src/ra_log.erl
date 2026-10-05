@@ -1546,8 +1546,10 @@ read_config(Dir) ->
 delete_everything(#?MODULE{cfg = #cfg{uid = UId,
                                       names = Names,
                                       directory = Dir},
-                           snapshot_state = _SnapState} = Log) ->
+                           snapshot_state = SnapState} = Log) ->
     _ = close(Log),
+    %% snapshots that do not live in the member's directory
+    ?CATCH(ra_snapshot:delete_all(SnapState)),
     %% if there is a snapshot process pending it could cause the directory
     %% deletion to fail, best kill the snapshot process first
     ok = ra_log_ets:delete_mem_tables(Names, UId),

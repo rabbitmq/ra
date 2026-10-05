@@ -206,7 +206,7 @@ release(Name, UId, Idx) ->
 %% @doc Drops the entry of a deleted member incarnation. Not durable: the
 %% durable marker of deletion is the member's directory being gone, which
 %% live_fun checks on recovery and when retiring files.
--spec delete(atom(), uid(), epoch()) -> ok.
+-spec delete(atom(), uid(), epoch() | any) -> ok.
 delete(Name, UId, Epoch) ->
     gen_batch_server:call(Name, {delete, UId, Epoch}, infinity).
 
@@ -495,7 +495,8 @@ run_others(Others, State) ->
               end;
           ({delete, From, UId, Epoch}, {Acc, S}) ->
               S1 = case ets:lookup(S#?MODULE.tid, UId) of
-                       [{UId, Epoch, _, _, _, _, _, _, _, _}] ->
+                       [{UId, EntryEpoch, _, _, _, _, _, _, _, _}]
+                         when Epoch == any orelse Epoch == EntryEpoch ->
                            remove_entry(UId, S);
                        _ ->
                            S
