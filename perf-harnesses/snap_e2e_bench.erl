@@ -12,7 +12,13 @@
 %%     halt().'
 %%
 %% Reports commands/s, snapshots/s (sum of the snapshots_written counters),
-%% and with `device' the block layer writes/flushes/MB written over the run.
+%% how many of the snapshots the workload asked for were taken (a snapshot is
+%% skipped if the previous one is still being written), and with `device' the
+%% block layer writes/flushes/MB written over the run.
+%%
+%% Modes: directories (a directory per snapshot), log (the snapshot log) and
+%% none (no snapshots at all, the baseline of WAL and segment writes to
+%% subtract from the others).
 -module(snap_e2e_bench).
 
 -export([run/1, run/2]).
@@ -27,21 +33,26 @@ run(Dir0, Opts) ->
     {ok, _} = application:ensure_all_started(ra),
     Modes = maps:get(modes, Opts, [directories, log]),
     Rows = [bench(Dir, Mode, Opts) || Mode <- Modes],
-    io:format("~n~-12s ~8s ~10s ~10s ~9s ~9s ~9s ~9s ~9s~n",
-              ["mode", "members", "cmds/s", "snaps/s", "snaps", "wall s",
-               "disk wr", "flushes", "MB wr"]),
-    [io:format("~-12s ~8b ~10.1f ~10.1f ~9b ~9.2f ~9b ~9b ~9.1f~n",
-               [Mode, N, CmdsS, SnapsS, Snaps, Wall, W, F, MB])
+    io:format("~n~-12s ~8s ~10s ~10s ~9s ~7s ~9s ~9s ~9s ~9s~n",
+              ["mode", "members", "cmds/s", "snaps/s", "snaps", "done %",
+               "wall s", "disk wr", "flushes", "MB wr"]),
+    [io:format("~-12s ~8b ~10.1f ~10.1f ~9b ~7.1f ~9.2f ~9b ~9b ~9.1f~n",
+               [Mode, N, CmdsS, SnapsS, Snaps, Done, Wall, W, F, MB])
      || #{mode := Mode, members := N, cmds_s := CmdsS, snaps_s := SnapsS,
-          snaps := Snaps, wall := Wall, writes := W, flushes := F,
-          mb := MB} <- Rows],
+          snaps := Snaps, done := Done, wall := Wall, writes := W,
+          flushes := F, mb := MB} <- Rows],
     ok.
 
 bench(Dir, Mode, Opts) ->
     N = maps:get(members, Opts, 1000),
     Size = maps:get(state_size, Opts, 1024),
     Cmds = maps:get(commands, Opts, 100),
-    Every = maps:get(snapshot_every, Opts, 5),
+    Every0 = maps:get(snapshot_every, Opts, 5),
+    %% no snapshots for the baseline
+    Every = case Mode of
+                none -> 1000000000;
+                _ -> Every0
+            end,
     Sys = list_to_atom("e2e_" ++ atom_to_list(Mode)),
     DataDir = filename:join(Dir, atom_to_list(Mode)),
     _ = file:del_dir_r(DataDir),
@@ -55,7 +66,7 @@ bench(Dir, Mode, Opts) ->
                                   #{max_size => 16384,
                                     min_file_bytes => maps:get(min_file_bytes,
                                                                Opts, 64 * 1024 * 1024)}};
-                 directories ->
+                 _ ->
                      SysCfg0
              end,
     {ok, _} = ra_system:start(SysCfg),
@@ -100,6 +111,7 @@ bench(Dir, Mode, Opts) ->
                            cmds_s => N * Cmds / Wall,
                            snaps_s => Snaps / Wall,
                            snaps => Snaps, wall => Wall,
+                           done => 100 * Snaps / max(1, N * (Cmds div Every0)),
                            writes => delta(writes, D0, D1),
                            flushes => delta(flushes, D0, D1),
                            mb => delta(sectors, D0, D1) * 512 / 1048576},

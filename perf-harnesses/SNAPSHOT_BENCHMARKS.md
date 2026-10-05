@@ -92,3 +92,10 @@ erl -noshell -pa /tmp -pa ../_build/default/lib/*/ebin -eval '
 
 Every command emits a `release_cursor`, so with `snapshot_every => 5` each
 member snapshots every 5 commands. `state_size` sets the snapshot size.
+
+`done %` is how many of the snapshots the workload asked for were taken: Ra
+skips a snapshot if the previous one is still being written, so a slow
+snapshot path takes fewer rather than slowing the commands down. Add `none` to
+`modes` for a run with no snapshots at all: its device writes, flushes and MB
+are the WAL and segment baseline to subtract from the other modes. Use enough
+`commands` for runs of tens of seconds and repeat them, short runs are noisy.
