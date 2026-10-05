@@ -9,11 +9,16 @@
 
 -behaviour(ra_snapshot).
 
+-include("ra.hrl").
 -include_lib("kernel/include/file.hrl").
 
 -export([
          prepare/2,
          write/4,
+         write/5,
+         list/1,
+         delete/1,
+         indexes/1,
          encode/3,
          decode_image/1,
          meta_from_image/1,
@@ -32,6 +37,7 @@
 
 -define(MAGIC, "RASN").
 -define(VERSION, 1).
+-define(STORE_EPOCH, <<"1">>).
 -define(ALIGN, 4096).
 
 -type file_err() :: ra_snapshot:file_err().
@@ -63,6 +69,118 @@ write(Dir, Meta, MacState, Sync) ->
             Err
     end.
 
+%% @doc The ra_snapshot write/5 callback. Small snapshots are appended to the
+%% shared snapshot log of the system (see ra_log_snap_store) if one is running,
+%% which makes them durable without creating any files of their own. Anything
+%% else, including when the log fails, is written to the `Location' directory
+%% as usual.
+-spec write(file:filename(), meta(), term(), ra_seq:state(),
+            Sync :: boolean()) ->
+    {ok, non_neg_integer(), durable | directory} | {error, file_err()}.
+write(Location, #{index := Idx, term := Term} = Meta, MacState, Indexes,
+      Sync) ->
+    case store_location(Location) of
+        {ok, #{name := Name, uid := UId, max_size := MaxSize}, _} ->
+            {Data, Size0} = encode_data(Meta, MacState),
+            IndexesBin = term_to_binary(Indexes),
+            case Size0 + byte_size(IndexesBin) =< MaxSize of
+                true ->
+                    {Image, Size} = finish_image(Data, Size0, false),
+                    case store_put(Name, UId, {Idx, Term},
+                                   iolist_to_binary(Image), IndexesBin) of
+                        ok ->
+                            {ok, Size, durable};
+                        {error, Reason} ->
+                            ?WARN("ra_log_snapshot: ~ts: could not store "
+                                  "snapshot ~b in the snapshot log: ~w, "
+                                  "writing a directory instead",
+                                  [UId, Idx, Reason]),
+                            write_directory(Location, Data, Size0, Sync)
+                    end;
+                false ->
+                    write_directory(Location, Data, Size0, Sync)
+            end;
+        undefined ->
+            {Data, Size0} = encode_data(Meta, MacState),
+            write_directory(Location, Data, Size0, Sync)
+    end.
+
+store_put(Name, UId, IdxTerm, Image, IndexesBin) ->
+    try
+        ra_log_snap_store:put_bin(Name, UId, ?STORE_EPOCH, IdxTerm, Image,
+                                  IndexesBin)
+    catch
+        exit:Reason ->
+            {error, Reason}
+    end.
+
+write_directory(Location, Data, Size0, Sync) ->
+    ok = ra_lib:make_dir(Location),
+    {Image, Bytes} = finish_image(Data, Size0, true),
+    case ra_lib:write_file(filename(Location), Image, Sync) of
+        ok -> {ok, Bytes, directory};
+        Err -> Err
+    end.
+
+%% @doc The ra_snapshot list/1 callback: the snapshot directories plus the
+%% member's snapshot in the snapshot log, if it has one.
+-spec list(file:filename()) -> [file:filename()].
+list(SnapshotsDir) ->
+    {ok, Names} = prim_file:list_dir(SnapshotsDir),
+    case store_for_dir(SnapshotsDir) of
+        {ok, #{name := Name, uid := UId}} ->
+            case store_reconcile(Name, UId) of
+                {ok, #{idx := Idx, term := Term}} ->
+                    Virtual = binary_to_list(
+                                ra_snapshot:snapshot_name(Idx, Term)),
+                    case lists:member(Virtual, Names) of
+                        true -> Names;
+                        false -> [Virtual | Names]
+                    end;
+                not_found ->
+                    Names
+            end;
+        undefined ->
+            Names
+    end.
+
+store_reconcile(Name, UId) ->
+    try
+        ra_log_snap_store:reconcile(Name, UId, ?STORE_EPOCH)
+    catch
+        exit:Reason ->
+            ?WARN("ra_log_snapshot: ~ts: snapshot log unavailable: ~w",
+                  [UId, Reason]),
+            not_found
+    end.
+
+%% @doc The ra_snapshot delete/1 callback.
+-spec delete(file:filename()) -> ok.
+delete(Location) ->
+    case store_location(Location) of
+        {ok, #{name := Name, uid := UId}, {Idx, _Term}} ->
+            %% the snapshot log entry is dead if it is not newer than this
+            ra_log_snap_store:release(Name, UId, Idx);
+        undefined ->
+            ok
+    end,
+    ra_lib:recursive_delete(Location).
+
+%% @doc The ra_snapshot indexes/1 callback.
+-spec indexes(file:filename()) ->
+    {ok, ra_seq:state()} | {error, term()}.
+indexes(Location) ->
+    case ra_lib:is_dir(Location) of
+        true ->
+            ra_snapshot:indexes(Location);
+        false ->
+            case store_read(Location) of
+                {ok, _Image, Indexes} -> {ok, Indexes};
+                {error, enoent} -> {ok, []};
+                {error, _} = Err -> Err
+            end
+    end.
+
 %% @doc encodes the complete snapshot file image (header, checksum, meta and
 %% machine state) without writing it anywhere. Returns the image and its size
 %% in bytes. When `Pad' is true the image is zero padded to a multiple of
@@ -72,12 +190,19 @@ write(Dir, Meta, MacState, Sync) ->
 -spec encode(meta(), term(), Pad :: boolean()) ->
     {iodata(), non_neg_integer()}.
 encode(Meta, MacState, Pad) ->
+    {Data, Size} = encode_data(Meta, MacState),
+    finish_image(Data, Size, Pad).
+
+%% serialises the body of the image, the expensive part
+encode_data(Meta, MacState) ->
     %% no compression on meta data to make sure reading it is as fast
     %% as possible
     MetaBin = term_to_binary(Meta),
     IOVec = term_to_iovec(MacState),
-    Data0 = [<<(byte_size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
-    Bytes0 = 9 + iolist_size(Data0),
+    Data = [<<(byte_size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
+    {Data, 9 + iolist_size(Data)}.
+
+finish_image(Data0, Bytes0, Pad) ->
     PadBytes = case Pad of
                    true -> (?ALIGN - (Bytes0 rem ?ALIGN)) rem ?ALIGN;
                    false -> 0
@@ -174,6 +299,13 @@ complete_accept(Chunk, St0) ->
 begin_read(Dir, Context) ->
     File = filename(Dir),
     case file:open(File, [read, binary, raw]) of
+        {error, enoent} = Err ->
+            case store_read(Dir) of
+                {ok, Image, _} ->
+                    begin_read_image(Image, Context);
+                {error, _} ->
+                    Err
+            end;
         {ok, Fd} ->
             case read_meta_internal(Fd) of
                 {ok, Meta, _Crc}
@@ -192,6 +324,15 @@ begin_read(Dir, Context) ->
             Err
     end.
 
+read_chunk({mem, Image, Pos}, Size, _Dir) ->
+    Eof = byte_size(Image),
+    Data = binary:part(Image, Pos, min(Size, Eof - Pos)),
+    case Pos + Size >= Eof of
+        true ->
+            {ok, Data, last};
+        false ->
+            {ok, Data, {next, {mem, Image, Pos + Size}}}
+    end;
 read_chunk({Crc, ReadState}, Size, Dir) when is_integer(Crc) ->
     %% this the compatibility read mode for old snapshot receivers
     case read_chunk(ReadState, Size - 4, Dir) of
@@ -227,15 +368,33 @@ recover(Dir) ->
     case prim_file:read_file(File) of
         {ok, Image} ->
             decode_image(Image);
+        {error, enoent} = Err ->
+            case store_read(Dir) of
+                {ok, Image, _} ->
+                    decode_image(Image);
+                {error, _} ->
+                    Err
+            end;
         {error, _} = Err ->
             Err
     end.
 
 
 validate(Dir) ->
-    case recover(Dir) of
-        {ok, _, _} -> ok;
-        Err -> Err
+    case prim_file:read_file(filename(Dir)) of
+        {ok, Image} ->
+            case decode_image(Image) of
+                {ok, _, _} -> ok;
+                Err -> Err
+            end;
+        {error, enoent} = Err ->
+            %% the snapshot log checks the checksum of every record it reads
+            case store_read(Dir) of
+                {ok, _, _} -> ok;
+                {error, _} -> Err
+            end;
+        {error, _} = Err ->
+            Err
     end.
 
 %% @doc reads the index and term from the snapshot file without reading the
@@ -256,7 +415,16 @@ read_meta(Dir) ->
                 Err ->
                     _ = file:close(Fd),
                     Err
-            end
+            end;
+        {error, enoent} = Err ->
+            case store_read(Dir) of
+                {ok, Image, _} ->
+                    meta_from_image(Image);
+                {error, _} ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
     end.
 
 -spec get_size(file:filename()) ->
@@ -266,6 +434,18 @@ get_size(Dir) ->
     case prim_file:read_file_info(File) of
         {ok, #file_info{size = Size}} ->
             {ok, Size};
+        {error, enoent} = Err ->
+            case store_location(Dir) of
+                {ok, #{name := Name, uid := UId}, {Idx, Term}} ->
+                    case ra_log_snap_store:lookup(Name, UId) of
+                        {ok, #{idx := Idx, term := Term, size := Size}} ->
+                            {ok, Size};
+                        _ ->
+                            Err
+                    end;
+                undefined ->
+                    Err
+            end;
         {error, _} = Err ->
             Err
     end.
@@ -275,6 +455,72 @@ context() ->
     #{can_accept_full_file => true}.
 
 %% Internal
+
+begin_read_image(<<?MAGIC, ?VERSION:8/unsigned, Crc:32/integer,
+                   MetaSize:32/unsigned, MetaBin:MetaSize/binary,
+                   _/binary>> = Image, Context) ->
+    Meta = binary_to_term(MetaBin),
+    case maps:get(can_accept_full_file, Context, false) of
+        true ->
+            {ok, Meta, {mem, Image, 0}};
+        false ->
+            {ok, Meta, {Crc, {mem, Image, 9 + 4 + MetaSize}}}
+    end;
+begin_read_image(_, _) ->
+    {error, invalid_format}.
+
+%% Snapshot locations are <data_dir>/<uid>/snapshots/<term>_<index>. If a
+%% snapshot log is running for the system that owns <data_dir> the snapshot of
+%% the location may be held in it rather than in a directory.
+store_location(Location) ->
+    case ra_snapshot:parse_snapshot_name(filename:basename(Location)) of
+        {ok, IdxTerm} ->
+            case store_for_dir(filename:dirname(Location)) of
+                {ok, Store} ->
+                    {ok, Store, IdxTerm};
+                undefined ->
+                    undefined
+            end;
+        error ->
+            undefined
+    end.
+
+store_for_dir(SnapshotsDir) ->
+    case unicode:characters_to_binary(filename:basename(SnapshotsDir)) of
+        <<"snapshots">> ->
+            ServerDir = filename:dirname(SnapshotsDir),
+            UId = unicode:characters_to_binary(filename:basename(ServerDir)),
+            Key = ra_log_snap_store:registry_key(filename:dirname(ServerDir)),
+            case persistent_term:get(Key, undefined) of
+                undefined ->
+                    undefined;
+                Store ->
+                    {ok, Store#{uid => UId}}
+            end;
+        _ ->
+            undefined
+    end.
+
+%% reads a snapshot held in the snapshot log, errors are as if the file did
+%% not exist unless the log itself failed
+store_read(Location) ->
+    case store_location(Location) of
+        {ok, #{name := Name, uid := UId}, IdxTerm} ->
+            try ra_log_snap_store:read(Name, UId, IdxTerm) of
+                {ok, _, _} = Ok ->
+                    Ok;
+                {error, Reason}
+                  when Reason == not_found orelse Reason == superseded ->
+                    {error, enoent};
+                {error, _} = Err ->
+                    Err
+            catch
+                exit:Reason ->
+                    {error, Reason}
+            end;
+        undefined ->
+            {error, enoent}
+    end.
 
 read_meta_internal(Fd) ->
     HeaderSize = 9 + 4,

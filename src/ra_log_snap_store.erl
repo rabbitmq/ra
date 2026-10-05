@@ -49,8 +49,10 @@
 
 -export([start_link/1,
          put/6,
+         put_bin/6,
          lookup/2,
          read/3,
+         registry_key/1,
          reconcile/3,
          release/3,
          delete/3,
@@ -96,6 +98,7 @@
          retire_chunk :: pos_integer(),
          live_fun :: fun((uid(), epoch()) -> boolean()),
          io = #{} :: #{io_fun() => fun()},
+         registry_key :: undefined | term(),
          %% active file, undefined fd when no usable file (after an error)
          no :: non_neg_integer(),
          fd :: undefined | file:fd(),
@@ -119,6 +122,9 @@
 %%   name := atom(), registered process name and ETS table name
 %%   dir := directory the files live in
 %%   min_file_bytes, retire_chunk_bytes
+%%   registry := {Key, Value}, stored in a persistent term while the store is
+%%               running so that code that only knows where a member's data
+%%               lives can find the store (see ra_log_snapshot)
 %%   live_fun := fun(UId, Epoch) -> boolean(), says whether the member
 %%               incarnation that wrote a record still exists
 %%   io := #{pwrite | sync | create => fun()}, overrides for fault injection
@@ -137,10 +143,26 @@ stop(Name) ->
 -spec put(atom(), uid(), epoch(), {ra:index(), ra_term()},
           iodata(), ra_seq:state()) ->
     ok | {error, term()}.
-put(Name, UId, Epoch, {Idx, Term}, Image, Indexes) ->
-    Req = {put, UId, Epoch, Idx, Term, iolist_to_binary(Image),
-           term_to_binary(Indexes)},
-    gen_batch_server:call(Name, Req, infinity).
+put(Name, UId, Epoch, IdxTerm, Image, Indexes) ->
+    put_bin(Name, UId, Epoch, IdxTerm, iolist_to_binary(Image),
+            term_to_binary(Indexes)).
+
+%% @doc as put/6 but with the image and the encoded indexes (the term_to_binary
+%% of a ra_seq:state()) already binaries.
+-spec put_bin(atom(), uid(), epoch(), {ra:index(), ra_term()},
+              binary(), binary()) ->
+    ok | {error, term()}.
+put_bin(Name, UId, Epoch, {Idx, Term}, Image, IndexesBin)
+  when is_binary(Image) andalso is_binary(IndexesBin) ->
+    gen_batch_server:call(Name, {put, UId, Epoch, Idx, Term, Image,
+                                 IndexesBin}, infinity).
+
+%% @doc The persistent term key a store registers itself under (see the
+%% `registry' config), given the data directory of the members it holds
+%% snapshots for.
+-spec registry_key(file:filename_all()) -> {?MODULE, binary()}.
+registry_key(DataDir) ->
+    {?MODULE, unicode:characters_to_binary(filename:join([DataDir]))}.
 
 %% @doc Looks up the current entry for a member without going through the
 %% writer. May return a snapshot that is superseded a moment later.
@@ -201,6 +223,13 @@ init(#{name := Name, dir := Dir} = Config) ->
     Tid = ets:new(Name, [named_table, protected, set,
                          {read_concurrency, true}]),
     true = ets:insert(Tid, {?DIR_KEY, Dir}),
+    Registry = maps:get(registry, Config, undefined),
+    case Registry of
+        {Key, Value} ->
+            persistent_term:put(Key, Value);
+        undefined ->
+            ok
+    end,
     State0 = #?MODULE{name = Name,
                       dir = Dir,
                       tid = Tid,
@@ -211,6 +240,10 @@ init(#{name := Name, dir := Dir} = Config) ->
                       live_fun = maps:get(live_fun, Config,
                                           fun (_, _) -> true end),
                       io = maps:get(io, Config, #{}),
+                      registry_key = case Registry of
+                                         {K, _} -> K;
+                                         undefined -> undefined
+                                     end,
                       no = 0},
     State1 = recover(State0),
     case new_active(State1) of
@@ -231,7 +264,9 @@ handle_batch(Ops, State0) ->
     {Replies2, State4} = run_others(Others, State3),
     {ok, Replies ++ Replies2, maybe_roll(schedule_retire(State4))}.
 
-terminate(_Reason, #?MODULE{fd = Fd, retire = Retire}) ->
+terminate(_Reason, #?MODULE{fd = Fd, retire = Retire,
+                            registry_key = RegKey}) ->
+    RegKey == undefined orelse persistent_term:erase(RegKey),
     _ = close(Fd),
     case Retire of
         #retire{fd = RFd} -> _ = close(RFd);
