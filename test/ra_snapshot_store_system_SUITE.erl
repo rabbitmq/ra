@@ -27,6 +27,7 @@ all_tests() ->
      system_restart_recovers_from_the_store,
      large_snapshots_use_directories,
      delete_server_removes_store_entry,
+     disabling_the_store_moves_snapshots_back_to_directories,
      lagging_follower_installs_snapshot_from_the_store
     ].
 
@@ -130,6 +131,24 @@ delete_server_removes_store_entry(Config) ->
     wait_for(fun () -> store_idx(Sys, UId) == -1 end),
     ok.
 
+disabling_the_store_moves_snapshots_back_to_directories(Config) ->
+    Sys = ?config(sys, Config),
+    {ok, _} = start_system(Config),
+    [Id] = start_members(Config, [a], #{blob_size => 1000}),
+    ok = send_commands(Id, 30),
+    UId = uid(a),
+    wait_for(fun () -> store_idx(Sys, UId) >= 5 end),
+    ?assertEqual({ok, []}, file:list_dir(snapshots_dir(Config, a))),
+    ok = ra_system:stop(Sys),
+    %% started again without the snapshot store
+    {ok, _} = start_system_without_store(Config),
+    ok = ra:restart_server(Sys, Id),
+    ?assertEqual(30, count(Id)),
+    ?assertMatch({ok, [_ | _]}, file:list_dir(snapshots_dir(Config, a))),
+    StoreDir = filename:join(?config(data_dir, Config), "snapshot_store"),
+    ?assertNot(ra_log_snap_store:has_files(StoreDir)),
+    ok.
+
 lagging_follower_installs_snapshot_from_the_store(Config) ->
     Sys = ?config(sys, Config),
     {ok, _} = start_system(Config),
@@ -164,6 +183,12 @@ start_system(Config) ->
                       data_dir => ?config(data_dir, Config),
                       snapshot_store => #{max_size => ?MAX_SIZE,
                                           min_file_bytes => 64 * 1024}}).
+
+start_system_without_store(Config) ->
+    Sys = ?config(sys, Config),
+    ra_system:start(#{name => Sys,
+                      names => ra_system:derive_names(Sys),
+                      data_dir => ?config(data_dir, Config)}).
 
 start_members(Config, Names, MachineConf) ->
     Sys = ?config(sys, Config),

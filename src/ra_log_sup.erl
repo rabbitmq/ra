@@ -53,6 +53,7 @@ init([#{data_dir := DataDir,
                             [SegWriterConf]},
                   shutdown => 30_000},
     WalConf = make_wal_conf(Cfg),
+    ok = maybe_migrate_snapshot_store(Cfg),
     SnapStore = snap_store_children(Cfg),
     SupFlags = #{strategy => one_for_all,
                  intensity => 5,
@@ -64,6 +65,39 @@ init([#{data_dir := DataDir,
     %% member's snapshot state (PreInit included) may read from it
     {ok, {SupFlags, SnapStore ++ [PreInit, Meta] ++ LogSyncWorkers ++
               [SegWriter, WalSup]}}.
+
+%% When the snapshot store is not configured but files from an earlier run
+%% with it are there, the snapshots in them are moved back to directories
+%% before anything reads a member's snapshots, otherwise members would start
+%% without the snapshots their (truncated) logs depend on.
+maybe_migrate_snapshot_store(#{snapshot_store := _}) ->
+    ok;
+maybe_migrate_snapshot_store(#{data_dir := DataDir}) ->
+    Dir = filename:join(DataDir, "snapshot_store"),
+    case ra_log_snap_store:has_files(Dir) of
+        true ->
+            ?INFO("ra_log_sup: the snapshot store is not configured but ~ts "
+                  "has snapshot files, moving them to snapshot directories",
+                  [Dir]),
+            LiveFun = fun (UId, _Epoch) ->
+                              ra_lib:is_dir(filename:join(DataDir,
+                                                          ra_lib:to_list(UId)))
+                      end,
+            case ra_log_snap_store:migrate_out(#{dir => Dir,
+                                                 data_dir => DataDir,
+                                                 live_fun => LiveFun}) of
+                ok ->
+                    ok;
+                {error, Reason} ->
+                    %% carrying on would start members without the snapshots
+                    %% their logs depend on
+                    ?ERROR("ra_log_sup: could not move snapshots out of the "
+                           "snapshot store: ~p", [Reason]),
+                    exit({snapshot_store_migration_failed, Reason})
+            end;
+        false ->
+            ok
+    end.
 
 snap_store_children(#{snapshot_store := StoreCfg,
                       data_dir := DataDir,

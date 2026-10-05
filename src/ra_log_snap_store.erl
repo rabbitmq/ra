@@ -53,6 +53,8 @@
          lookup/2,
          read/3,
          registry_key/1,
+         migrate_out/1,
+         has_files/1,
          reconcile/3,
          release/3,
          delete/3,
@@ -163,6 +165,103 @@ put_bin(Name, UId, Epoch, {Idx, Term}, Image, IndexesBin)
 -spec registry_key(file:filename_all()) -> {?MODULE, binary()}.
 registry_key(DataDir) ->
     {?MODULE, unicode:characters_to_binary(filename:join([DataDir]))}.
+
+%% @doc True if the directory holds snapshot log files.
+-spec has_files(file:filename_all()) -> boolean().
+has_files(Dir) ->
+    case prim_file:list_dir(Dir) of
+        {ok, Files} ->
+            lists:any(fun (F) -> filename:extension(F) == ".snap" end, Files);
+        {error, _} ->
+            false
+    end.
+
+%% @doc Turns the snapshots held in a snapshot log back into the snapshot
+%% directories that members use when no snapshot log is configured, then
+%% removes the log. Needed when the feature is switched off, since snapshots
+%% that only exist in the log would otherwise be invisible while the logs of
+%% their members have already been truncated.
+%%
+%% Config:
+%%   dir := the directory of the snapshot log files
+%%   data_dir := the directory holding the member directories
+%%   live_fun := fun(UId, Epoch) -> boolean(), as for start_link/1
+%%
+%% It is safe to run again if interrupted: the log is only removed once every
+%% snapshot has been written to, and synced in, a directory, and a snapshot
+%% that already has a directory of the same or a newer index is left alone.
+-spec migrate_out(map()) -> ok | {error, term()}.
+migrate_out(#{dir := Dir, data_dir := DataDir} = Config) ->
+    Tid = ets:new(snap_store_migration, [set, private]),
+    try
+        State = recover(#?MODULE{name = migration,
+                                 dir = Dir,
+                                 tid = Tid,
+                                 min_file_bytes = 1,
+                                 retire_chunk = ?DEFAULT_RETIRE_CHUNK,
+                                 live_fun = maps:get(live_fun, Config,
+                                                     fun (_, _) -> true end),
+                                 no = 0}),
+        Entries = [E || E <- ets:tab2list(Tid), element(1, E) =/= ?DIR_KEY],
+        Results = [migrate_entry(Dir, DataDir, E) || E <- Entries],
+        case [R || {error, _} = R <- Results] of
+            [] ->
+                %% everything is durable in its directory
+                ?INFO("ra_log_snap_store: moved ~b snapshots out of the "
+                      "snapshot log in ~ts", [length(Entries), Dir]),
+                _ = [file:delete(file_name(Dir, No))
+                     || {No, _} <- State#?MODULE.rolled],
+                _ = ra_lib:sync_dir(Dir),
+                ok;
+            [Error | _] ->
+                Error
+        end
+    after
+        ets:delete(Tid)
+    end.
+
+migrate_entry(Dir, DataDir,
+              {UId, _Epoch, Idx, Term, _Seq, No, Off, TL, ImgLen, IdxLen}) ->
+    SnapshotsDir = filename:join([DataDir, ra_lib:to_list(UId), "snapshots"]),
+    SnapDir = ra_snapshot:make_snapshot_dir(SnapshotsDir, Idx, Term),
+    case have_snapshot_at_least(SnapshotsDir, Idx) of
+        true ->
+            ok;
+        false ->
+            case read_record(Dir, No, Off, TL, ImgLen, IdxLen) of
+                {ok, Image, IndexesBin} ->
+                    Indexes = binary_to_term(IndexesBin),
+                    try
+                        ok = ra_lib:make_dir(SnapshotsDir),
+                        ok = ra_lib:make_dir(SnapDir),
+                        SnapFile = filename:join(SnapDir, "snapshot.dat"),
+                        ok = ra_lib:write_file(SnapFile, Image, true),
+                        Indexes == [] orelse
+                            (ok = ra_snapshot:write_indexes(SnapDir, Indexes)),
+                        _ = ra_lib:sync_dir(SnapDir),
+                        _ = ra_lib:sync_dir(SnapshotsDir),
+                        ok
+                    catch
+                        _:Reason ->
+                            {error, {migrate_snapshot, UId, Reason}}
+                    end;
+                {error, Reason} ->
+                    {error, {read_snapshot, UId, Reason}}
+            end
+    end.
+
+have_snapshot_at_least(SnapshotsDir, Idx) ->
+    case prim_file:list_dir(SnapshotsDir) of
+        {ok, Names} ->
+            lists:any(fun (Name) ->
+                              case ra_snapshot:parse_snapshot_name(Name) of
+                                  {ok, {I, _}} -> I >= Idx;
+                                  error -> false
+                              end
+                      end, Names);
+        {error, _} ->
+            false
+    end.
 
 %% @doc Looks up the current entry for a member without going through the
 %% writer. May return a snapshot that is superseded a moment later.

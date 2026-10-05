@@ -34,7 +34,9 @@ all_tests() ->
      restart_after_retire,
      write_error_fails_batch_and_is_not_visible,
      fsync_error_unacked_record_ignored_after_restart,
-     cannot_create_file_recovers
+     cannot_create_file_recovers,
+     migrate_out_creates_snapshot_directories,
+     migrate_out_skips_newer_directories_and_dead_members
     ].
 
 groups() ->
@@ -419,9 +421,84 @@ cannot_create_file_recovers(Config) ->
     {ok, Img, []} = ra_log_snap_store:read(N, <<"a">>, {4, 1}),
     ok.
 
+migrate_out_creates_snapshot_directories(Config) ->
+    N = start(Config, #{min_file_bytes => 32 * 1024,
+                        retire_chunk_bytes => 8 * 1024}),
+    DataDir = filename:join(?config(priv_dir, Config), "data"),
+    Members = [<<"m1">>, <<"m2">>, <<"m3">>],
+    [ok = ra_lib:make_dir(filename:join(DataDir, M)) || M <- Members],
+    E = <<"e">>,
+    %% several rounds so the files have been rolled and retired
+    Expected =
+        lists:foldl(
+          fun (R, Acc) ->
+                  lists:foldl(
+                    fun (M, A) ->
+                            MacState = crypto:strong_rand_bytes(1500),
+                            Meta = snapshot_meta(R, 2),
+                            {Image, _} = ra_log_snapshot:encode(Meta, MacState,
+                                                                false),
+                            Indexes = ra_seq:from_list([R, R + 3]),
+                            ok = ra_log_snap_store:put(N, M, E, {R, 2}, Image,
+                                                       Indexes),
+                            A#{M => {Meta, MacState, Indexes}}
+                    end, Acc, Members)
+          end, #{}, lists:seq(1, 40)),
+    wait_quiescent(N),
+    ok = ra_log_snap_store:stop(N),
+    StoreDir = ?config(store_dir, Config),
+    ?assert(ra_log_snap_store:has_files(StoreDir)),
+    ok = ra_log_snap_store:migrate_out(#{dir => StoreDir,
+                                         data_dir => DataDir}),
+    ?assertNot(ra_log_snap_store:has_files(StoreDir)),
+    maps:foreach(
+      fun (M, {Meta, MacState, Indexes}) ->
+              SnapDir = ra_snapshot:make_snapshot_dir(
+                          filename:join([DataDir, M, "snapshots"]), 40, 2),
+              ?assertEqual({ok, Meta, MacState},
+                           ra_log_snapshot:recover(SnapDir)),
+              ?assertEqual({ok, Indexes}, ra_snapshot:indexes(SnapDir))
+      end, Expected),
+    %% running it again changes nothing
+    ok = ra_log_snap_store:migrate_out(#{dir => StoreDir,
+                                         data_dir => DataDir}),
+    ok.
+
+migrate_out_skips_newer_directories_and_dead_members(Config) ->
+    N = start(Config, #{}),
+    DataDir = filename:join(?config(priv_dir, Config), "data2"),
+    %% m1 has a newer snapshot directory already, m2's directory is gone
+    [ok = ra_lib:make_dir(filename:join(DataDir, M)) || M <- [<<"m1">>, <<"m3">>]],
+    NewerDir = ra_snapshot:make_snapshot_dir(
+                 filename:join([DataDir, <<"m1">>, "snapshots"]), 90, 2),
+    ok = ra_lib:make_dir(filename:join([DataDir, <<"m1">>, "snapshots"])),
+    ok = ra_lib:make_dir(NewerDir),
+    E = <<"e">>,
+    [begin
+         {Image, _} = ra_log_snapshot:encode(snapshot_meta(50, 2), M, false),
+         ok = ra_log_snap_store:put(N, M, E, {50, 2}, Image, [])
+     end || M <- [<<"m1">>, <<"m2">>, <<"m3">>]],
+    ok = ra_log_snap_store:stop(N),
+    StoreDir = ?config(store_dir, Config),
+    Live = fun (UId, _) -> ra_lib:is_dir(filename:join(DataDir, UId)) end,
+    ok = ra_log_snap_store:migrate_out(#{dir => StoreDir, data_dir => DataDir,
+                                         live_fun => Live}),
+    ?assertNot(ra_log_snap_store:has_files(StoreDir)),
+    %% m1 is untouched, m2 was not recreated, m3 was moved out
+    ?assertEqual({ok, []}, file:list_dir(NewerDir)),
+    ?assertNot(filelib:is_dir(filename:join(DataDir, <<"m2">>))),
+    ?assertMatch({ok, #{index := 50}, <<"m3">>},
+                 ra_log_snapshot:recover(
+                   ra_snapshot:make_snapshot_dir(
+                     filename:join([DataDir, <<"m3">>, "snapshots"]), 50, 2))),
+    ok.
+
 %%%===================================================================
 %%% Helpers
 %%%===================================================================
+
+snapshot_meta(Idx, Term) ->
+    #{index => Idx, term => Term, cluster => #{}, machine_version => 1}.
 
 start(Config, Opts) ->
     Name = ?config(store_name, Config),
