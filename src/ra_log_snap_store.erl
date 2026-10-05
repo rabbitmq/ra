@@ -740,12 +740,13 @@ run_others(Others, State) ->
     {lists:reverse(Replies), State1}.
 
 do_info(#?MODULE{live_bytes = Live, off = Off, no = No, rolled = Rolled,
-                 counters = Counters, retire = Retire}) ->
+                 counters = Counters, retire = Retire, fd = Fd}) ->
     Counters#{live_bytes => Live,
               active_file => No,
               active_offset => Off,
               rolled_files => length(Rolled),
-              retiring => Retire =/= undefined}.
+              retiring => Retire =/= undefined,
+              has_active_file => Fd =/= undefined}.
 
 %%%===================================================================
 %%% rolling and retiring
