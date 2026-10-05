@@ -35,6 +35,8 @@ all_tests() ->
      write_error_fails_batch_and_is_not_visible,
      fsync_error_unacked_record_ignored_after_restart,
      cannot_create_file_recovers,
+     reconcile_is_ordered_after_puts_in_flight,
+     delete_is_ordered_after_puts_in_flight,
      migrate_out_creates_snapshot_directories,
      migrate_out_skips_newer_directories_and_dead_members
     ].
@@ -60,9 +62,11 @@ init_per_testcase(TestCase, Config) ->
     Dir = filename:join([?config(priv_dir, Config), TestCase, "store"]),
     Name = list_to_atom("snap_store_" ++ atom_to_list(TestCase)),
     persistent_term:erase({?MODULE, fail}),
+    persistent_term:erase({?MODULE, block_sync}),
     [{store_dir, Dir}, {store_name, Name} | Config].
 
 end_per_testcase(_TestCase, Config) ->
+    persistent_term:erase({?MODULE, block_sync}),
     catch ra_log_snap_store:stop(?config(store_name, Config)),
     persistent_term:erase({?MODULE, fail}),
     ok.
@@ -419,6 +423,82 @@ cannot_create_file_recovers(Config) ->
     Img = image(100),
     ok = ra_log_snap_store:put(N, <<"a">>, E, {4, 1}, Img, []),
     {ok, Img, []} = ra_log_snap_store:read(N, <<"a">>, {4, 1}),
+    ok.
+
+%% A put that was sent before a reconcile, e.g. by a worker that died with its
+%% member and was then restarted, is applied before the reconcile answers. The
+%% store is held in the fsync of the batch that has the put.
+reconcile_is_ordered_after_puts_in_flight(Config) ->
+    Self = self(),
+    N = start(Config, #{io => io_blocking_sync(Self)}),
+    E = <<"e">>,
+    %% the first sync (the new file's header) is not blocked
+    ok = ra_log_snap_store:put(N, <<"a">>, E, {1, 1}, image(10), []),
+    block_syncs(),
+    Worker = spawn(fun () ->
+                           Self ! {put_result,
+                                   ra_log_snap_store:put(N, <<"a">>, E, {300, 1},
+                                                         image(10), [])}
+                   end),
+    receive in_sync -> ok after 5000 -> ct:fail(put_not_in_sync) end,
+    %% the member and its worker are gone, the member starts again
+    exit(Worker, kill),
+    _ = spawn(fun () ->
+                               Self ! {reconciled,
+                                       ra_log_snap_store:reconcile(N, <<"a">>, E)}
+                       end),
+    timer:sleep(100),
+    unblock_syncs(),
+    receive
+        {reconciled, Res} ->
+            ?assertEqual({ok, #{idx => 300, term => 1}}, Res)
+    after 5000 ->
+              ct:fail(reconcile_timeout)
+    end,
+    ok.
+
+delete_is_ordered_after_puts_in_flight(Config) ->
+    Self = self(),
+    N = start(Config, #{io => io_blocking_sync(Self)}),
+    E = <<"e">>,
+    ok = ra_log_snap_store:put(N, <<"a">>, E, {1, 1}, image(10), []),
+    block_syncs(),
+    _ = spawn(fun () ->
+                      ra_log_snap_store:put(N, <<"a">>, E, {300, 1}, image(10), [])
+              end),
+    receive in_sync -> ok after 5000 -> ct:fail(put_not_in_sync) end,
+    %% the member is deleted whilst a put from it is being written
+    _ = spawn(fun () ->
+                      Self ! {deleted, ra_log_snap_store:delete(N, <<"a">>, any)}
+              end),
+    timer:sleep(100),
+    unblock_syncs(),
+    receive {deleted, ok} -> ok after 5000 -> ct:fail(delete_timeout) end,
+    ?assertEqual(not_found, ra_log_snap_store:lookup(N, <<"a">>)),
+    ok.
+
+io_blocking_sync(Test) ->
+    #{sync => fun (Fd) ->
+                      case persistent_term:get({?MODULE, block_sync}, false) of
+                          true ->
+                              Test ! in_sync,
+                              receive unblock -> ok after 10000 -> ok end;
+                          false ->
+                              ok
+                      end,
+                      ra_file:sync(Fd)
+              end}.
+
+block_syncs() ->
+    persistent_term:put({?MODULE, block_sync}, true).
+
+%% lets the blocked sync (if any) and later ones through
+unblock_syncs() ->
+    persistent_term:put({?MODULE, block_sync}, false),
+    Store = [P || P <- processes(),
+                  {registered_name, Name} <- [process_info(P, registered_name)],
+                  lists:prefix("snap_store_", atom_to_list(Name))],
+    [P ! unblock || P <- Store],
     ok.
 
 migrate_out_creates_snapshot_directories(Config) ->
