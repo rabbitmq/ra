@@ -714,6 +714,12 @@ begin_snapshot(#{index := Idx,
                                                   LI
                                           end;
                                       false ->
+                                          %% the machine state was not what
+                                          %% was written so the indexes have
+                                          %% been calculated up front
+                                          LiveIndexes0 == [] orelse
+                                              (ok = write_indexes(SnapDir,
+                                                                  LiveIndexes0)),
                                           LiveIndexes0
                                   end,
                             {Size, LI1, false}
@@ -914,6 +920,9 @@ complete_accept(Chunk, Num, Machine,
     AcceptMarker = filename:join(SnapDir, <<"accepting">>),
     _ = prim_file:delete(AcceptMarker),
     _ = ra_lib:sync_dir(SnapDir),
+    %% the old snapshot is deleted after this, make sure the entry of the new
+    %% one is durable first
+    _ = ra_lib:sync_dir(Dir),
     %% assert accepting marker is no longer there
     ?assertNot(filelib:is_file(AcceptMarker)),
     SmallestIdx = case ra_seq:first(LiveIndexes) of
