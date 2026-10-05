@@ -144,23 +144,25 @@ list(SnapshotsDir) ->
             Names
     end.
 
+%% The snapshot log is configured for this member's data dir but not
+%% answering (e.g. it is restarting). Carrying on as if it held nothing would
+%% start the member without a snapshot its (truncated) log depends on, so this
+%% crashes and leaves it to the supervisor to try again.
 store_reconcile(Name, UId) ->
     try
         ra_log_snap_store:reconcile(Name, UId, ?STORE_EPOCH)
     catch
         exit:Reason ->
-            ?WARN("ra_log_snapshot: ~ts: snapshot log unavailable: ~w",
-                  [UId, Reason]),
-            not_found
+            error({snapshot_store_unavailable, UId, Reason})
     end.
 
 %% @doc The ra_snapshot delete/1 callback.
 -spec delete(file:filename()) -> ok.
 delete(Location) ->
     case store_location(Location) of
-        {ok, #{name := Name, uid := UId}, {Idx, _Term}} ->
-            %% the snapshot log entry is dead if it is not newer than this
-            ra_log_snap_store:release(Name, UId, Idx);
+        {ok, #{name := Name, uid := UId}, IdxTerm} ->
+            %% the snapshot log entry is dropped only if it is this snapshot
+            ra_log_snap_store:release(Name, UId, IdxTerm);
         undefined ->
             ok
     end,
@@ -176,7 +178,8 @@ indexes(Location) ->
         false ->
             case store_read(Location) of
                 {ok, _Image, Indexes} -> {ok, Indexes};
-                {error, enoent} -> {ok, []};
+                {error, {store_unavailable, _, _} = Reason} ->
+                    error(Reason);
                 {error, _} = Err -> Err
             end
     end.
@@ -303,8 +306,10 @@ begin_read(Dir, Context) ->
             case store_read(Dir) of
                 {ok, Image, _} ->
                     begin_read_image(Image, Context);
-                {error, _} ->
-                    Err
+                {error, enoent} ->
+                    Err;
+                {error, _} = StoreErr ->
+                    StoreErr
             end;
         {ok, Fd} ->
             case read_meta_internal(Fd) of
@@ -372,8 +377,10 @@ recover(Dir) ->
             case store_read(Dir) of
                 {ok, Image, _} ->
                     decode_image(Image);
-                {error, _} ->
-                    Err
+                {error, enoent} ->
+                    Err;
+                {error, _} = StoreErr ->
+                    StoreErr
             end;
         {error, _} = Err ->
             Err
@@ -391,6 +398,8 @@ validate(Dir) ->
             %% the snapshot log checks the checksum of every record it reads
             case store_read(Dir) of
                 {ok, _, _} -> ok;
+                {error, enoent} -> Err;
+                {error, {store_unavailable, _, _} = Reason} -> error(Reason);
                 {error, _} -> Err
             end;
         {error, _} = Err ->
@@ -420,6 +429,10 @@ read_meta(Dir) ->
             case store_read(Dir) of
                 {ok, Image, _} ->
                     meta_from_image(Image);
+                {error, enoent} ->
+                    Err;
+                {error, {store_unavailable, _, _} = Reason} ->
+                    error(Reason);
                 {error, _} ->
                     Err
             end;
@@ -472,7 +485,8 @@ begin_read_image(_, _) ->
 %% Snapshot locations are <data_dir>/<uid>/snapshots/<term>_<index>. If a
 %% snapshot log is running for the system that owns <data_dir> the snapshot of
 %% the location may be held in it rather than in a directory.
-store_location(Location) ->
+store_location(Location0) ->
+    Location = filename:join([Location0]),
     case ra_snapshot:parse_snapshot_name(filename:basename(Location)) of
         {ok, IdxTerm} ->
             case store_for_dir(filename:dirname(Location)) of
@@ -485,7 +499,8 @@ store_location(Location) ->
             undefined
     end.
 
-store_for_dir(SnapshotsDir) ->
+store_for_dir(SnapshotsDir0) ->
+    SnapshotsDir = filename:join([SnapshotsDir0]),
     case unicode:characters_to_binary(filename:basename(SnapshotsDir)) of
         <<"snapshots">> ->
             ServerDir = filename:dirname(SnapshotsDir),
@@ -512,11 +527,13 @@ store_read(Location) ->
                 {error, Reason}
                   when Reason == not_found orelse Reason == superseded ->
                     {error, enoent};
+                {error, store_unavailable} ->
+                    {error, {store_unavailable, UId, store_unavailable}};
                 {error, _} = Err ->
                     Err
             catch
                 exit:Reason ->
-                    {error, Reason}
+                    {error, {store_unavailable, UId, Reason}}
             end;
         undefined ->
             {error, enoent}

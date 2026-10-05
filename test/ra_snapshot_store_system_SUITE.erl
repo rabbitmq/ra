@@ -41,6 +41,8 @@ init_per_suite(Config) ->
     Config.
 
 end_per_suite(_Config) ->
+    %% other suites create the ets tables of the default system
+    _ = application:stop(ra),
     ok.
 
 init_per_group(_Group, Config) ->

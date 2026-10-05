@@ -54,6 +54,7 @@ init([#{data_dir := DataDir,
                   shutdown => 30_000},
     WalConf = make_wal_conf(Cfg),
     ok = maybe_migrate_snapshot_store(Cfg),
+    ok = snap_store_registry(Cfg),
     SnapStore = snap_store_children(Cfg),
     SupFlags = #{strategy => one_for_all,
                  intensity => 5,
@@ -80,8 +81,8 @@ maybe_migrate_snapshot_store(#{data_dir := DataDir}) ->
                   "has snapshot files, moving them to snapshot directories",
                   [Dir]),
             LiveFun = fun (UId, _Epoch) ->
-                              ra_lib:is_dir(filename:join(DataDir,
-                                                          ra_lib:to_list(UId)))
+                              ra_log_snap_store:member_dir_exists(
+                                filename:join(DataDir, ra_lib:to_list(UId)))
                       end,
             case ra_log_snap_store:migrate_out(#{dir => Dir,
                                                  data_dir => DataDir,
@@ -99,25 +100,40 @@ maybe_migrate_snapshot_store(#{data_dir := DataDir}) ->
             ok
     end.
 
-snap_store_children(#{snapshot_store := StoreCfg,
+%% How ra_log_snapshot finds out that a snapshot store is configured for the
+%% members in a data dir. Owned here, and not by the store process, so that it
+%% is still there while the store is restarting: members that start then must
+%% wait for it, not carry on without.
+snap_store_registry(#{snapshot_store := StoreCfg,
                       data_dir := DataDir,
                       name := System,
                       names := Names}) ->
     Name = maps:get(snap_store, Names,
                     maps:get(snap_store, ra_system:derive_names(System))),
     MaxSize = maps:get(max_size, StoreCfg, ?SNAPSHOT_STORE_MAX_SIZE),
+    persistent_term:put(ra_log_snap_store:registry_key(DataDir),
+                        #{name => Name, max_size => MaxSize});
+snap_store_registry(#{data_dir := DataDir}) ->
+    _ = persistent_term:erase(ra_log_snap_store:registry_key(DataDir)),
+    ok.
+
+snap_store_children(#{snapshot_store := StoreCfg,
+                      data_dir := DataDir,
+                      name := System,
+                      names := Names}) ->
+    Name = maps:get(snap_store, Names,
+                    maps:get(snap_store, ra_system:derive_names(System))),
     MinFileBytes = maps:get(min_file_bytes, StoreCfg,
                             ?SNAPSHOT_STORE_MIN_FILE_BYTES),
     %% a snapshot is dead when its member's directory is gone
     LiveFun = fun (UId, _Epoch) ->
-                      ra_lib:is_dir(filename:join(DataDir, ra_lib:to_list(UId)))
+                      ra_log_snap_store:member_dir_exists(
+                        filename:join(DataDir, ra_lib:to_list(UId)))
               end,
     Conf = #{name => Name,
              dir => filename:join(DataDir, "snapshot_store"),
              min_file_bytes => MinFileBytes,
-             live_fun => LiveFun,
-             registry => {ra_log_snap_store:registry_key(DataDir),
-                          #{name => Name, max_size => MaxSize}}},
+             live_fun => LiveFun},
     [#{id => ra_log_snap_store,
        start => {ra_log_snap_store, start_link, [Conf]},
        shutdown => 30_000}];

@@ -46,6 +46,7 @@
 -behaviour(gen_batch_server).
 
 -include("ra.hrl").
+-include_lib("kernel/include/file.hrl").
 
 -export([start_link/1,
          put/6,
@@ -55,6 +56,7 @@
          registry_key/1,
          migrate_out/1,
          has_files/1,
+         member_dir_exists/1,
          reconcile/3,
          release/3,
          delete/3,
@@ -76,8 +78,11 @@
 -define(UNKNOWN_LEN, 16#FFFFFFFFFFFFFFFF).
 -define(DIR_KEY, '$dir').
 
+-define(MIN_FILE_BYTES, 4 * ?ALIGN).
 -define(DEFAULT_MIN_FILE_BYTES, 64 * 1024 * 1024).
 -define(DEFAULT_RETIRE_CHUNK, 1024 * 1024).
+-define(MIN_RETIRE_CHUNK, 4096).
+-define(RETIRE_RETRY_MS, 1000).
 -define(DEFAULT_MAX_BATCH, 1024).
 
 %% ETS entry, key is the UId
@@ -85,7 +90,7 @@
 
 -type uid() :: binary().
 -type epoch() :: binary().
--type io_fun() :: pwrite | sync | create.
+-type io_fun() :: pwrite | sync | create | open_read.
 
 -record(retire, {no :: non_neg_integer(),
                  fd :: file:fd(),
@@ -176,6 +181,19 @@ has_files(Dir) ->
             false
     end.
 
+%% @doc True unless the member directory is known not to exist. Used as the
+%% liveness check: an error that is not "it does not exist" (e.g. a transient
+%% I/O error) must not make a snapshot look dead.
+-spec member_dir_exists(file:filename_all()) -> boolean().
+member_dir_exists(Dir) ->
+    case file:read_file_info(Dir) of
+        {ok, #file_info{type = directory}} -> true;
+        {ok, _} -> false;
+        {error, enoent} -> false;
+        {error, enotdir} -> false;
+        {error, _} -> true
+    end.
+
 %% @doc Turns the snapshots held in a snapshot log back into the snapshot
 %% directories that members use when no snapshot log is configured, then
 %% removes the log. Needed when the feature is switched off, since snapshots
@@ -187,9 +205,13 @@ has_files(Dir) ->
 %%   data_dir := the directory holding the member directories
 %%   live_fun := fun(UId, Epoch) -> boolean(), as for start_link/1
 %%
-%% It is safe to run again if interrupted: the log is only removed once every
-%% snapshot has been written to, and synced in, a directory, and a snapshot
-%% that already has a directory of the same or a newer index is left alone.
+%% Each snapshot is written to a temporary directory, synced and renamed into
+%% place so an interrupted run never leaves a partial snapshot where a member
+%% looks for one. It is safe to run again: the log is only removed once every
+%% snapshot is durable in its directory, and a snapshot that already has a
+%% valid directory of the same or a newer index is left alone. A snapshot in
+%% the log that is itself damaged is reported and skipped (it is lost either
+%% way), any other failure leaves the log in place and is returned.
 -spec migrate_out(map()) -> ok | {error, term()}.
 migrate_out(#{dir := Dir, data_dir := DataDir} = Config) ->
     Tid = ets:new(snap_store_migration, [set, private]),
@@ -206,9 +228,10 @@ migrate_out(#{dir := Dir, data_dir := DataDir} = Config) ->
         Results = [migrate_entry(Dir, DataDir, E) || E <- Entries],
         case [R || {error, _} = R <- Results] of
             [] ->
-                %% everything is durable in its directory
+                Lost = [L || {lost, L} <- Results],
                 ?INFO("ra_log_snap_store: moved ~b snapshots out of the "
-                      "snapshot log in ~ts", [length(Entries), Dir]),
+                      "snapshot log in ~ts, ~b could not be read",
+                      [length(Entries) - length(Lost), Dir, length(Lost)]),
                 _ = [file:delete(file_name(Dir, No))
                      || {No, _} <- State#?MODULE.rolled],
                 _ = ra_lib:sync_dir(Dir),
@@ -216,49 +239,83 @@ migrate_out(#{dir := Dir, data_dir := DataDir} = Config) ->
             [Error | _] ->
                 Error
         end
+    catch
+        Class:Reason ->
+            {error, {migrate_out, Class, Reason}}
     after
         ets:delete(Tid)
     end.
 
 migrate_entry(Dir, DataDir,
               {UId, _Epoch, Idx, Term, _Seq, No, Off, TL, ImgLen, IdxLen}) ->
-    SnapshotsDir = filename:join([DataDir, ra_lib:to_list(UId), "snapshots"]),
+    ServerDir = filename:join(DataDir, ra_lib:to_list(UId)),
+    SnapshotsDir = filename:join(ServerDir, "snapshots"),
     SnapDir = ra_snapshot:make_snapshot_dir(SnapshotsDir, Idx, Term),
-    case have_snapshot_at_least(SnapshotsDir, Idx) of
+    case have_valid_snapshot_at_least(SnapshotsDir, Idx) of
         true ->
             ok;
         false ->
             case read_record(Dir, No, Off, TL, ImgLen, IdxLen) of
                 {ok, Image, IndexesBin} ->
-                    Indexes = binary_to_term(IndexesBin),
-                    try
-                        ok = ra_lib:make_dir(SnapshotsDir),
-                        ok = ra_lib:make_dir(SnapDir),
-                        SnapFile = filename:join(SnapDir, "snapshot.dat"),
-                        ok = ra_lib:write_file(SnapFile, Image, true),
-                        Indexes == [] orelse
-                            (ok = ra_snapshot:write_indexes(SnapDir, Indexes)),
-                        _ = ra_lib:sync_dir(SnapDir),
-                        _ = ra_lib:sync_dir(SnapshotsDir),
-                        ok
-                    catch
-                        _:Reason ->
-                            {error, {migrate_snapshot, UId, Reason}}
-                    end;
+                    write_migrated(ServerDir, SnapshotsDir, SnapDir, UId,
+                                   Image, binary_to_term(IndexesBin));
+                {error, Reason}
+                  when Reason == checksum_error orelse
+                       Reason == invalid_record orelse Reason == eof ->
+                    ?ERROR("ra_log_snap_store: snapshot ~b of ~ts in file ~b "
+                           "is damaged (~w), it cannot be moved out",
+                           [Idx, UId, No, Reason]),
+                    {lost, {UId, Idx, Reason}};
                 {error, Reason} ->
                     {error, {read_snapshot, UId, Reason}}
             end
     end.
 
-have_snapshot_at_least(SnapshotsDir, Idx) ->
+write_migrated(ServerDir, SnapshotsDir, SnapDir, UId, Image, Indexes) ->
+    Staging = filename:join(ServerDir, "snapshot_migrating"),
+    Tmp = filename:join(Staging, filename:basename(SnapDir)),
+    try
+        _ = ra_lib:recursive_delete(Tmp),
+        ok = ra_lib:make_dir(Staging),
+        ok = ra_lib:make_dir(Tmp),
+        ok = ra_lib:write_file(filename:join(Tmp, "snapshot.dat"), Image, true),
+        case Indexes of
+            [] ->
+                ok;
+            _ ->
+                ok = ra_snapshot:write_indexes(Tmp, Indexes),
+                ok = ra_lib:sync_file(filename:join(Tmp, "indexes"))
+        end,
+        ok = sync_dir_strict(Tmp),
+        ok = ra_lib:make_dir(SnapshotsDir),
+        %% anything already there under this name did not validate
+        _ = ra_lib:recursive_delete(SnapDir),
+        ok = prim_file:rename(Tmp, SnapDir),
+        ok = sync_dir_strict(SnapshotsDir),
+        ok = sync_dir_strict(Staging),
+        _ = file:del_dir(Staging),
+        ok
+    catch
+        Class:Reason ->
+            {error, {migrate_snapshot, UId, Class, Reason}}
+    end.
+
+%% a snapshot directory counts only if it is complete and intact
+have_valid_snapshot_at_least(SnapshotsDir, Idx) ->
     case prim_file:list_dir(SnapshotsDir) of
         {ok, Names} ->
-            lists:any(fun (Name) ->
-                              case ra_snapshot:parse_snapshot_name(Name) of
-                                  {ok, {I, _}} -> I >= Idx;
-                                  error -> false
-                              end
-                      end, Names);
+            lists:any(
+              fun (Name) ->
+                      case ra_snapshot:parse_snapshot_name(Name) of
+                          {ok, {I, _}} when I >= Idx ->
+                              Snap = filename:join(SnapshotsDir, Name),
+                              not filelib:is_file(
+                                    filename:join(Snap, "accepting")) andalso
+                                  ra_log_snapshot:validate(Snap) == ok;
+                          _ ->
+                              false
+                      end
+              end, Names);
         {error, _} ->
             false
     end.
@@ -296,11 +353,13 @@ read(Name, UId, IdxTerm) ->
 reconcile(Name, UId, Epoch) ->
     gen_batch_server:call(Name, {reconcile, UId, Epoch}, infinity).
 
-%% @doc Tells the store the member now has a durable snapshot elsewhere with
-%% an index at least `Idx' so its entry (if not newer) is dead. Not durable.
--spec release(atom(), uid(), ra:index()) -> ok.
-release(Name, UId, Idx) ->
-    gen_batch_server:cast(Name, {release, UId, Idx}).
+%% @doc Tells the store that the snapshot with the given index and term is no
+%% longer needed (it was deleted, or superseded by a snapshot held elsewhere).
+%% Its entry is dropped only if it is that exact snapshot: deleting a snapshot
+%% that failed to be written must not drop the current one. Not durable.
+-spec release(atom(), uid(), {ra:index(), ra_term()}) -> ok.
+release(Name, UId, {_Idx, _Term} = IdxTerm) ->
+    gen_batch_server:cast(Name, {release, UId, IdxTerm}).
 
 %% @doc Drops the entry of a deleted member incarnation. Not durable: the
 %% durable marker of deletion is the member's directory being gone, which
@@ -318,24 +377,23 @@ info(Name) ->
 %%%===================================================================
 
 init(#{name := Name, dir := Dir} = Config) ->
+    process_flag(trap_exit, true),
     ok = ra_lib:make_dir(Dir),
-    Tid = ets:new(Name, [named_table, protected, set,
-                         {read_concurrency, true}]),
-    true = ets:insert(Tid, {?DIR_KEY, Dir}),
+    %% recovery fills a private table, readers only get to see the named table
+    %% once it is complete
+    RecTid = ets:new(snap_store_recovery, [set, private]),
     Registry = maps:get(registry, Config, undefined),
-    case Registry of
-        {Key, Value} ->
-            persistent_term:put(Key, Value);
-        undefined ->
-            ok
-    end,
     State0 = #?MODULE{name = Name,
                       dir = Dir,
-                      tid = Tid,
-                      min_file_bytes = maps:get(min_file_bytes, Config,
-                                                ?DEFAULT_MIN_FILE_BYTES),
-                      retire_chunk = maps:get(retire_chunk_bytes, Config,
-                                              ?DEFAULT_RETIRE_CHUNK),
+                      tid = RecTid,
+                      %% never so small that copying the live data forward
+                      %% would roll the file again
+                      min_file_bytes = max(?MIN_FILE_BYTES,
+                                           maps:get(min_file_bytes, Config,
+                                                    ?DEFAULT_MIN_FILE_BYTES)),
+                      retire_chunk = max(?MIN_RETIRE_CHUNK,
+                                         maps:get(retire_chunk_bytes, Config,
+                                                  ?DEFAULT_RETIRE_CHUNK)),
                       live_fun = maps:get(live_fun, Config,
                                           fun (_, _) -> true end),
                       io = maps:get(io, Config, #{}),
@@ -345,23 +403,70 @@ init(#{name := Name, dir := Dir} = Config) ->
                                      end,
                       no = 0},
     State1 = recover(State0),
-    case new_active(State1) of
-        {ok, State2} ->
-            {ok, schedule_retire(State2)};
+    Tid = ets:new(Name, [named_table, protected, set,
+                         {read_concurrency, true}]),
+    true = ets:insert(Tid, ets:tab2list(RecTid)),
+    true = ets:insert(Tid, {?DIR_KEY, Dir}),
+    true = ets:delete(RecTid),
+    case Registry of
+        {Key, Value} ->
+            persistent_term:put(Key, Value);
+        undefined ->
+            ok
+    end,
+    State2 = State1#?MODULE{tid = Tid},
+    case new_active(State2) of
+        {ok, State3} ->
+            {ok, schedule_retire(State3)};
         {error, Reason, _} ->
             {stop, {cannot_create_snapshot_store_file, Reason}}
     end.
 
 handle_batch(Ops, State0) ->
-    {Puts, Others, State1} = classify(Ops, State0, [], [], #{}),
+    {Replies, State} =
+        lists:foldl(
+          fun (Group, {Acc, S0}) ->
+                  {R, S1} = handle_group(Group, S0),
+                  {[R | Acc], S1}
+          end, {[], State0}, split_at_barriers(Ops)),
+    {ok, lists:append(lists:reverse(Replies)),
+     schedule_retire(maybe_roll(State))}.
+
+%% Reconciling and deleting a member are answered in order with the puts that
+%% came before, and not after any that came later, so the operations of a batch
+%% are handled in groups that end at one.
+split_at_barriers(Ops) ->
+    split_at_barriers(Ops, [], []).
+
+split_at_barriers([], [], Groups) ->
+    lists:reverse(Groups);
+split_at_barriers([], Acc, Groups) ->
+    lists:reverse([lists:reverse(Acc) | Groups]);
+split_at_barriers([{call, _, {Barrier, _, _}} = Op | Rem], Acc, Groups)
+  when Barrier == reconcile orelse Barrier == delete ->
+    split_at_barriers(Rem, [], [lists:reverse([Op | Acc]) | Groups]);
+split_at_barriers([Op | Rem], Acc, Groups) ->
+    split_at_barriers(Rem, [Op | Acc], Groups).
+
+handle_group(Ops, State0) ->
+    {Puts, Others, Followers, State1} = classify(Ops, State0, [], [], [], #{}),
     %% without a usable file there is nowhere to copy to
     {Copies, State2} = case State1#?MODULE.fd of
                            undefined -> {[], State1};
                            _ -> retire_scan(State1)
                        end,
-    {Replies, State3} = write_batch(Copies, Puts, State2),
+    {Replies0, State3} = write_batch(Copies, Puts, State2),
+    %% a repeat of a put in the same batch gets the outcome of the put
+    Outcomes = maps:from_list([{From, Reply}
+                               || {reply, From, Reply} <- Replies0]),
+    Replies1 = [{reply, From, case Outcomes of
+                                 #{Leader := ok} -> Reply;
+                                 #{Leader := Error} -> Error;
+                                 _ -> Reply
+                             end}
+                || {Leader, From, Reply} <- Followers],
     {Replies2, State4} = run_others(Others, State3),
-    {ok, Replies ++ Replies2, maybe_roll(schedule_retire(State4))}.
+    {Replies0 ++ Replies1 ++ Replies2, State4}.
 
 terminate(_Reason, #?MODULE{fd = Fd, retire = Retire,
                             registry_key = RegKey}) ->
@@ -380,45 +485,65 @@ format_status(State) ->
 %%% batch handling
 %%%===================================================================
 
-%% Splits the batch in arrival order into puts (that need to be written) and
-%% other operations that are answered after the puts have been applied. Puts
-%% that are already known to be stale are answered immediately.
-classify([], State, Puts, Others, _Pending) ->
-    {lists:reverse(Puts), lists:reverse(Others), State};
+%% Splits a group of operations, in arrival order, into the puts that need to
+%% be written and the other operations that are answered after them. A put
+%% that repeats, or is stale compared to, one earlier in the same batch is a
+%% "follower" of it: it is answered with the outcome of the earlier one, as
+%% nothing is durable yet.
+classify([], State, Puts, Others, Followers, _Pending) ->
+    {lists:reverse(Puts), lists:reverse(Others), lists:reverse(Followers),
+     State};
 classify([{call, From, {put, UId, Epoch, Idx, Term, Image, Indexes}} | Rem],
-         State, Puts, Others, Pending) ->
-    Current = case Pending of
-                  #{UId := P} -> P;
-                  _ -> current(UId, State)
-              end,
+         State, Puts, Others, Followers, Pending) ->
+    {Current, Leader} = case Pending of
+                            #{UId := {E, I, T, L}} -> {{E, I, T}, L};
+                            _ -> {current(UId, State), undefined}
+                        end,
     case put_decision(Current, Epoch, Idx, Term) of
         write ->
             Item = {put, From, UId, Epoch, Idx, Term, Image, Indexes},
-            classify(Rem, State, [Item | Puts], Others,
-                     Pending#{UId => {Epoch, Idx, Term}});
+            classify(Rem, State, [Item | Puts], Others, Followers,
+                     Pending#{UId => {Epoch, Idx, Term, From}});
+        ok when Leader == undefined ->
+            classify(Rem, State, Puts, [{reply, From, ok} | Others],
+                     Followers, Pending);
         ok ->
-            classify(Rem, State, Puts,
-                     [{reply, From, ok} | Others], Pending);
-        stale ->
+            classify(Rem, State, Puts, Others,
+                     [{Leader, From, ok} | Followers], Pending);
+        stale when Leader == undefined ->
             classify(Rem, incr(stale_puts, State), Puts,
-                     [{reply, From, {error, stale}} | Others], Pending)
+                     [{reply, From, {error, stale}} | Others], Followers,
+                     Pending);
+        stale ->
+            classify(Rem, incr(stale_puts, State), Puts, Others,
+                     [{Leader, From, {error, stale}} | Followers], Pending)
     end;
 classify([{call, From, {reconcile, UId, Epoch}} | Rem], State, Puts,
-         Others, Pending) ->
+         Others, Followers, Pending) ->
     classify(Rem, State, Puts,
-             [{reconcile, From, UId, Epoch} | Others], Pending);
+             [{reconcile, From, UId, Epoch} | Others], Followers, Pending);
 classify([{call, From, {delete, UId, Epoch}} | Rem], State, Puts,
-         Others, Pending) ->
+         Others, Followers, Pending) ->
     classify(Rem, State, Puts,
-             [{delete, From, UId, Epoch} | Others], maps:remove(UId, Pending));
-classify([{call, From, info} | Rem], State, Puts, Others, Pending) ->
-    classify(Rem, State, Puts, [{info, From} | Others], Pending);
-classify([{cast, {release, UId, Idx}} | Rem], State, Puts, Others, Pending) ->
-    classify(Rem, State, Puts, [{release, UId, Idx} | Others], Pending);
-classify([{info, retire_step} | Rem], State, Puts, Others, Pending) ->
-    classify(Rem, State#?MODULE{retire_token = false}, Puts, Others, Pending);
-classify([_ | Rem], State, Puts, Others, Pending) ->
-    classify(Rem, State, Puts, Others, Pending).
+             [{delete, From, UId, Epoch} | Others], Followers,
+             maps:remove(UId, Pending));
+classify([{call, From, info} | Rem], State, Puts, Others, Followers,
+         Pending) ->
+    classify(Rem, State, Puts, [{info, From} | Others], Followers, Pending);
+classify([{call, From, _Unknown} | Rem], State, Puts, Others, Followers,
+         Pending) ->
+    classify(Rem, State, Puts, [{reply, From, {error, unknown_request}} | Others],
+             Followers, Pending);
+classify([{cast, {release, UId, IdxTerm}} | Rem], State, Puts, Others,
+         Followers, Pending) ->
+    classify(Rem, State, Puts, [{release, UId, IdxTerm} | Others], Followers,
+             Pending);
+classify([{info, retire_step} | Rem], State, Puts, Others, Followers,
+         Pending) ->
+    classify(Rem, State#?MODULE{retire_token = false}, Puts, Others,
+             Followers, Pending);
+classify([_ | Rem], State, Puts, Others, Followers, Pending) ->
+    classify(Rem, State, Puts, Others, Followers, Pending).
 
 current(UId, #?MODULE{tid = Tid}) ->
     case ets:lookup(Tid, UId) of
@@ -601,9 +726,9 @@ run_others(Others, State) ->
                            S
                    end,
               {[{reply, From, ok} | Acc], S1};
-          ({release, UId, Idx}, {Acc, S}) ->
+          ({release, UId, {Idx, Term}}, {Acc, S}) ->
               S1 = case ets:lookup(S#?MODULE.tid, UId) of
-                       [{UId, _, EIdx, _, _, _, _, _, _, _}] when EIdx =< Idx ->
+                       [{UId, _, Idx, Term, _, _, _, _, _, _}] ->
                            remove_entry(UId, S);
                        _ ->
                            S
@@ -676,8 +801,13 @@ create_file(State, Dir, No, Seq, PrevLen) ->
                 ok ->
                     case io_sync(State, Fd) of
                         ok ->
-                            _ = ra_lib:sync_dir(Dir),
-                            {ok, Fd};
+                            case sync_dir_strict(Dir) of
+                                ok ->
+                                    {ok, Fd};
+                                Err ->
+                                    _ = close(Fd),
+                                    Err
+                            end;
                         Err ->
                             _ = close(Fd),
                             Err
@@ -690,10 +820,24 @@ create_file(State, Dir, No, Seq, PrevLen) ->
             Err
     end.
 
-abandon_file(State, AckedLen) ->
-    case new_active(close_active(State, AckedLen)) of
+abandon_file(#?MODULE{dir = Dir, no = No} = State, AckedLen) ->
+    State1 = close_active(State, AckedLen),
+    %% best effort: the next file's header says where the valid data ends but
+    %% if that file cannot be created it is not there to say it
+    _ = truncate_file(file_name(Dir, No), AckedLen),
+    case new_active(State1) of
         {ok, State1} -> State1;
         {error, _Reason, State1} -> State1
+    end.
+
+truncate_file(Path, Len) ->
+    case file:open(Path, [read, write, raw, binary]) of
+        {ok, Fd} ->
+            _ = file:position(Fd, Len),
+            _ = file:truncate(Fd),
+            file:close(Fd);
+        Err ->
+            Err
     end.
 
 schedule_retire(#?MODULE{retire_token = true} = State) ->
@@ -713,7 +857,7 @@ retire_scan(#?MODULE{retire = undefined, rolled = []} = State) ->
     {[], State};
 retire_scan(#?MODULE{retire = undefined, rolled = [{No, Limit} | _],
                      dir = Dir} = State) ->
-    case file:open(file_name(Dir, No), [read, raw, binary]) of
+    case io_open_read(State, file_name(Dir, No)) of
         {ok, Fd} ->
             retire_scan(State#?MODULE{retire = #retire{no = No, fd = Fd,
                                                        off = ?HDR_SIZE,
@@ -722,9 +866,9 @@ retire_scan(#?MODULE{retire = undefined, rolled = [{No, Limit} | _],
             %% already gone
             retire_scan(State#?MODULE{rolled = tl(State#?MODULE.rolled)});
         {error, Reason} ->
-            ?ERROR("ra_log_snap_store: ~ts: cannot open file ~b to retire: ~w",
-                   [State#?MODULE.name, No, Reason]),
-            {[], State}
+            ?ERROR("ra_log_snap_store: ~ts: cannot open file ~b to retire: ~w, "
+                   "will try again", [State#?MODULE.name, No, Reason]),
+            {[], retire_later(State)}
     end;
 retire_scan(#?MODULE{retire = #retire{no = No, fd = Fd, off = Off,
                                       limit = Limit} = R,
@@ -752,23 +896,50 @@ retire_scan(#?MODULE{retire = #retire{no = No, fd = Fd, off = Off,
     State2 = case Status of
                  cont ->
                      State1#?MODULE{retire = R#retire{off = Next}};
+                 io_error ->
+                     %% could not read, try again from the same place later
+                     ?ERROR("ra_log_snap_store: ~ts: read error retiring file "
+                            "~b at offset ~b, will try again",
+                            [State#?MODULE.name, No, Off]),
+                     retire_later(State1);
                  _ ->
-                     %% reached the end of the file (or the first invalid
-                     %% record), it is deleted once the copies are durable
+                     %% reached the end of the file (or an invalid record we
+                     %% cannot get past). It is deleted once the copies are
+                     %% durable, if nothing still refers to it
                      State1#?MODULE{retire = R#retire{off = Next,
                                                       limit = done}}
              end,
     {lists:reverse(Copies), State2}.
 
+%% back off rather than retrying in a loop
+retire_later(#?MODULE{retire_token = true} = State) ->
+    State;
+retire_later(State) ->
+    erlang:send_after(?RETIRE_RETRY_MS, self(), retire_step),
+    State#?MODULE{retire_token = true}.
+
 %% Called once a batch (including any copies) is durable.
 finish_retire(#?MODULE{retire = #retire{no = No, fd = Fd, limit = done},
-                       dir = Dir, rolled = Rolled} = State) ->
+                       dir = Dir, rolled = Rolled, tid = Tid} = State) ->
     _ = close(Fd),
-    _ = file:delete(file_name(Dir, No)),
-    _ = ra_lib:sync_dir(Dir),
-    incr(retired_files,
-         State#?MODULE{retire = undefined,
-                       rolled = lists:keydelete(No, 1, Rolled)});
+    Rolled1 = lists:keydelete(No, 1, Rolled),
+    Refs = ets:select_count(Tid, [{{'_', '_', '_', '_', '_', No,
+                                    '_', '_', '_', '_'}, [], [true]}]),
+    case Refs of
+        0 ->
+            _ = file:delete(file_name(Dir, No)),
+            _ = ra_lib:sync_dir(Dir),
+            incr(retired_files,
+                 State#?MODULE{retire = undefined, rolled = Rolled1});
+        _ ->
+            %% a record we could not get past (and so could not copy) is
+            %% still in use. Keep the file, it is no longer retired.
+            ?ERROR("ra_log_snap_store: ~ts: file ~b has ~b snapshots that "
+                   "could not be copied out of it, keeping it",
+                   [State#?MODULE.name, No, Refs]),
+            incr(retire_blocked,
+                 State#?MODULE{retire = undefined, rolled = Rolled1})
+    end;
 finish_retire(State) ->
     State.
 
@@ -802,9 +973,21 @@ recover(#?MODULE{dir = Dir, tid = Tid} = State0) ->
                   {[{No, Valid} | RAcc], max(No, MaxN),
                    lists:max([MaxS, NextSeq, Seen + 1])};
               ({No, {error, Reason}}, {RAcc, MaxN, MaxS}) ->
-                  ?ERROR("ra_log_snap_store: invalid header in file ~b: ~w, "
-                         "ignoring it", [No, Reason]),
-                  {[{No, 0} | RAcc], max(No, MaxN), MaxS}
+                  %% only the newest file can have been left half created,
+                  %% anything else is damage and is set aside, not deleted
+                  File = file_name(Dir, No),
+                  case No == lists:last(Nos) andalso file_size(Dir, No) < ?ALIGN of
+                      true ->
+                          ?WARN("ra_log_snap_store: file ~b has an invalid "
+                                "header (~w), deleting it", [No, Reason]),
+                          _ = file:delete(File);
+                      false ->
+                          ?ERROR("ra_log_snap_store: invalid header in file "
+                                 "~b: ~w, setting it aside as ~ts.bad",
+                                 [No, Reason, File]),
+                          _ = file:rename(File, [File, ".bad"])
+                  end,
+                  {RAcc, max(No, MaxN), MaxS}
           end, {[], 0, 1}, Headers),
     Live = ets:foldl(fun ({?DIR_KEY, _}, A) -> A;
                          (E, A) -> A + element(8, E)
@@ -848,7 +1031,10 @@ recover_loop(State, No, Fd, Off, Limit, MaxSeq) ->
         bad ->
             ?WARN("ra_log_snap_store: file ~b: invalid record at offset ~b, "
                   "ignoring the rest of the file", [No, Next]),
-            {Next, MaxSeq1}
+            {Next, MaxSeq1};
+        io_error ->
+            %% do not start with part of the data missing
+            error({snapshot_store_read_error, No, Next})
     end.
 
 recover_record(#?MODULE{tid = Tid, live_fun = LiveFun}, No, Off, TL,
@@ -977,7 +1163,7 @@ read_records(Fd, Off, Limit, Chunk) ->
         eof ->
             {[], Off, bad};
         {error, _} ->
-            {[], Off, bad}
+            {[], Off, io_error}
     end.
 
 parse_records(Bin, Rel, Base, Limit, Acc) ->
@@ -996,6 +1182,13 @@ parse_records(Bin, Rel, Base, Limit, Acc) ->
                             parse_records(Bin, Rel + TL, Base, Limit,
                                           [{Abs, TL, Fields} | Acc]);
                         pad ->
+                            parse_records(Bin, Rel + TL, Base, Limit, Acc);
+                        bad when Type == ?PUT ->
+                            %% a record that does not validate but whose
+                            %% length fits: skip it, the ones after it are
+                            %% independent
+                            ?WARN("ra_log_snap_store: skipping invalid "
+                                  "record at offset ~b", [Abs]),
                             parse_records(Bin, Rel + TL, Base, Limit, Acc);
                         bad ->
                             {lists:reverse(Acc), Abs, bad}
@@ -1036,9 +1229,15 @@ file_name(Dir, No) ->
     filename:join(Dir, io_lib:format("~8..0b.snap", [No])).
 
 file_numbers(Dir) ->
-    {ok, Files} = prim_file:list_dir(Dir),
-    lists:sort([list_to_integer(filename:rootname(F))
-                || F <- Files, filename:extension(F) == ".snap"]).
+    case prim_file:list_dir(Dir) of
+        {ok, Files} ->
+            lists:sort([N || F <- Files,
+                             filename:extension(F) == ".snap",
+                             {N, []} <- [string:to_integer(
+                                           filename:rootname(F))]]);
+        {error, Reason} ->
+            error({snapshot_store_cannot_list_files, Dir, Reason})
+    end.
 
 file_size(Dir, No) ->
     case prim_file:read_file_info(file_name(Dir, No)) of
@@ -1072,6 +1271,19 @@ read_header(Dir, No) ->
             Err
     end.
 
+%% a directory sync that failed means a file in it may not be there after a
+%% crash. Not all platforms can sync a directory.
+sync_dir_strict(Dir) ->
+    case ra_lib:sync_dir(Dir) of
+        ok ->
+            ok;
+        {error, _} = Err ->
+            case os:type() of
+                {win32, _} -> ok;
+                _ -> Err
+            end
+    end.
+
 close(undefined) ->
     ok;
 close(Fd) ->
@@ -1079,6 +1291,9 @@ close(Fd) ->
 
 io_create(#?MODULE{io = #{create := F}}, Path) -> F(Path);
 io_create(_, Path) -> file:open(Path, [write, raw, binary]).
+
+io_open_read(#?MODULE{io = #{open_read := F}}, Path) -> F(Path);
+io_open_read(_, Path) -> file:open(Path, [read, raw, binary]).
 
 io_pwrite(#?MODULE{io = #{pwrite := F}}, Fd, Off, IO) -> F(Fd, Off, IO);
 io_pwrite(_, Fd, Off, IO) -> file:pwrite(Fd, Off, IO).

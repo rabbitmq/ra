@@ -34,7 +34,10 @@ all_tests() ->
      delete_releases_logged_snapshot,
      delete_all,
      write_error_falls_back_to_directory,
-     log_not_running_falls_back_to_directory,
+     log_not_running_falls_back_to_directory_for_writes,
+     unavailable_log_is_not_taken_for_an_empty_one,
+     failed_snapshot_does_not_drop_the_current_logged_snapshot,
+     failed_snapshot_that_was_logged_is_released,
      no_log_configured_uses_directories,
      send_logged_snapshot_full_file,
      send_logged_snapshot_compat,
@@ -242,20 +245,91 @@ write_error_falls_back_to_directory(Config) ->
     ?assertMatch({ok, #{index := 55}, MacState}, ra_snapshot:recover(State)),
     ok.
 
-log_not_running_falls_back_to_directory(Config) ->
-    %% registered, but nothing is running (e.g. it is restarting)
+log_not_running_falls_back_to_directory_for_writes(Config) ->
+    %% configured, but not running (e.g. it is restarting): a member that is
+    %% already running still takes its snapshot, as a directory
     Name = ?config(store_name, Config),
+    State0 = init_state(Config),
     ra_log_snap_store:stop(Name),
     persistent_term:put(registry_key(Config),
                         #{name => Name, max_size => ?MAX_SIZE}),
-    State0 = init_state(Config),
     MacState = crypto:strong_rand_bytes(500),
     State = take(State0, 55, 2, MacState, snapshot),
     ?assertEqual({55, 2}, ra_snapshot:current(State)),
     ?assertMatch({ok, [_]}, file:list_dir(?config(snap_dir, Config))),
     ?assertMatch({ok, #{index := 55}, MacState}, ra_snapshot:recover(State)),
+    %% and is picked up when the store is back
+    start_store(Config, #{}),
     State2 = init_state(Config),
     ?assertEqual({55, 2}, ra_snapshot:current(State2)),
+    ok.
+
+%% A member that starts while the snapshot log is down must not start without
+%% the snapshot that is in it: its log is truncated up to that snapshot.
+unavailable_log_is_not_taken_for_an_empty_one(Config) ->
+    UId = ?config(uid, Config),
+    Name = ?config(store_name, Config),
+    State0 = init_state(Config),
+    MacState = crypto:strong_rand_bytes(500),
+    _ = take(State0, 55, 2, MacState, snapshot),
+    ?assertMatch({ok, #{idx := 55}}, ra_log_snap_store:lookup(Name, UId)),
+    ra_log_snap_store:stop(Name),
+    %% the registry is owned by whoever started the store and stays
+    persistent_term:put(registry_key(Config),
+                        #{name => Name, max_size => ?MAX_SIZE}),
+    ?assertError({snapshot_store_unavailable, UId, _}, init_state(Config)),
+    %% once it is back the member starts with its snapshot
+    start_store(Config, #{}),
+    persistent_term:put(registry_key(Config),
+                        #{name => Name, max_size => ?MAX_SIZE}),
+    State = init_state(Config),
+    ?assertEqual({55, 2}, ra_snapshot:current(State)),
+    ?assertMatch({ok, #{index := 55}, MacState}, ra_snapshot:recover(State)),
+    ok.
+
+%% handle_error deletes the snapshot that was being written, which must not
+%% take the current snapshot with it
+failed_snapshot_does_not_drop_the_current_logged_snapshot(Config) ->
+    UId = ?config(uid, Config),
+    Name = ?config(store_name, Config),
+    State0 = init_state(Config),
+    MacState = crypto:strong_rand_bytes(500),
+    State1 = take(State0, 55, 2, MacState, snapshot),
+    Meta = #{index => 60, term => 2, cluster => [node()], machine_version => 1},
+    {State2, [{bg_work, _Fun, ErrFun}]} =
+        ra_snapshot:begin_snapshot(Meta, ?MACMOD, crypto:strong_rand_bytes(500),
+                                   snapshot, State1),
+    ErrFun({error, enospc}),
+    receive
+        {ra_log_event, {snapshot_error, {60, 2} = IdxTerm, snapshot, Err}} ->
+            State3 = ra_snapshot:handle_error(IdxTerm, Err, State2),
+            ?assertEqual({55, 2}, ra_snapshot:current(State3)),
+            _ = ra_log_snap_store:info(Name),
+            ?assertMatch({ok, #{idx := 55}}, ra_log_snap_store:lookup(Name, UId)),
+            ?assertMatch({ok, #{index := 55}, MacState},
+                         ra_snapshot:recover(State3)),
+            ?assertMatch({ok, #{index := 55}, _},
+                         ra_snapshot:begin_read(State3,
+                                                ra_log_snapshot:context()))
+    after 5000 ->
+              ct:fail(no_snapshot_error)
+    end,
+    ok.
+
+%% ...but when it had been written to the log it is released
+failed_snapshot_that_was_logged_is_released(Config) ->
+    UId = ?config(uid, Config),
+    Name = ?config(store_name, Config),
+    State0 = init_state(Config),
+    Meta = #{index => 60, term => 2, cluster => [node()], machine_version => 1},
+    {State1, [{bg_work, Fun, _}]} =
+        ra_snapshot:begin_snapshot(Meta, ?MACMOD, crypto:strong_rand_bytes(500),
+                                   snapshot, State0),
+    Fun(),
+    ?assertMatch({ok, #{idx := 60}}, ra_log_snap_store:lookup(Name, UId)),
+    State2 = ra_snapshot:handle_error({60, 2}, {error, blah}, State1),
+    ?assertEqual(undefined, ra_snapshot:pending(State2)),
+    wait_for(fun () -> ra_log_snap_store:lookup(Name, UId) == not_found end),
     ok.
 
 no_log_configured_uses_directories(Config) ->
