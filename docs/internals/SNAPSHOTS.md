@@ -227,11 +227,30 @@ directory), nothing is published, the fsync is not retried, and a new file is
 started. The header of the new file records how much of the previous one was
 acknowledged so that anything written after that is ignored when recovering.
 - On start the files are scanned in order and the newest record of each member
-is kept. A record is dead if its member's directory is gone. An invalid record
-ends the scan of that file only; a file is never appended to after a restart.
+is kept. A record is dead if its member's directory is gone (any other error
+looking for it counts as alive). A record whose contents do not validate is
+skipped, the ones after it are independent; one whose length cannot be trusted
+ends the scan of that file. A file with a damaged header is set aside as
+`.bad`, not deleted, unless it is the newest and tiny (a file that was being
+created when the node stopped). A file is never appended to after a restart.
+- The file being retired is never deleted while a member's snapshot still points
+into it. If part of it can not be read the file is kept and an error is logged.
+Read errors are retried after a delay.
+- Deleting a snapshot (`release`) removes a member's entry only if it is that
+exact snapshot (index and term). The snapshot being written when a failure
+happens is deleted by `ra_snapshot`, which must not take the current one.
 - Reads (recovery, validation, sending a snapshot to a follower) go through the
 ETS table, with the whole snapshot read into memory. A snapshot that has been
 superseded since it was looked up gives `{error, superseded}`.
+- The ETS table only becomes visible once recovery of the files is complete.
+- Whether a snapshot log is configured is recorded by `ra_log_sup` (not by the
+log process) so that it is known while the log is restarting. A member that
+starts while the log is not answering fails to start, and is retried by its
+supervisor, rather than start without a snapshot that its (truncated) log
+depends on. Taking a snapshot while the log is not answering writes a directory
+instead.
+- `min_file_bytes` is raised to at least four blocks (16KB): with less, copying
+the live data of a file forward could make the next file roll immediately.
 
 ### Turning it off
 
@@ -239,7 +258,13 @@ Snapshots that exist only in the log would be invisible without it while their
 members' logs are already truncated. So when a system starts without
 `snapshot_store` and snapshot log files from an earlier run exist, the live
 snapshots in them are first written back as ordinary snapshot directories (and
-synced) and then the log files are removed. Startup fails if this fails.
+synced) and then the log files are removed. Each snapshot is written to a
+staging directory in the member's directory and renamed into place, so an
+interrupted move never leaves a partial snapshot where the member looks for
+one, and it can safely be run again. A snapshot directory that is already there
+only counts if it validates. A snapshot in the log that is itself damaged is
+reported and skipped; any other failure leaves the log in place and startup
+fails.
 
 Older versions of Ra do not know about the log. To downgrade, disable the
 feature, restart the system so that its snapshots are moved out, then
