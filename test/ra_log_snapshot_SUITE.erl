@@ -274,7 +274,9 @@ encode_decode_image(_Config) ->
          ?assertEqual({ok, Meta, State}, ra_log_snapshot:decode_image(Bin)),
          ?assertEqual({ok, Meta}, ra_log_snapshot:meta_from_image(Bin)),
          %% corrupting the body is detected
-         Bad = <<Bin:(byte_size(Bin) - 1)/binary, 255>>,
+         Skip = byte_size(Bin) - 1,
+         <<Head:Skip/binary, Last>> = Bin,
+         Bad = <<Head/binary, (Last bxor 16#FF)>>,
          ?assertEqual({error, checksum_error},
                       ra_log_snapshot:decode_image(Bad))
      end || Pad <- [true, false]],
