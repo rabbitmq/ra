@@ -14,6 +14,9 @@
 -export([
          prepare/2,
          write/4,
+         encode/3,
+         decode_image/1,
+         meta_from_image/1,
          sync/1,
          begin_accept/2,
          accept_chunk/2,
@@ -51,31 +54,67 @@ prepare(_Index, State) -> State.
 -spec write(file:filename(), meta(), term(), Sync :: boolean()) ->
     {ok, non_neg_integer()} | {error, file_err()}.
 write(Dir, Meta, MacState, Sync) ->
-    %% no compression on meta data to make sure reading it is as fast
-    %% as possible
-    MetaBin = term_to_binary(Meta),
-    IOVec = term_to_iovec(MacState),
-    Data0 = [<<(byte_size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
-    %% pad the file with trailing zeros up to a multiple of ?ALIGN so that
-    %% many parallel writers do not leave partial tail pages that the
-    %% file system / device has to merge. binary_to_term/1 ignores the
-    %% trailing bytes and the checksum covers them so no format change is
-    %% needed.
-    Bytes0 = 9 + iolist_size(Data0),
-    PadBytes = (?ALIGN - (Bytes0 rem ?ALIGN)) rem ?ALIGN,
-    Data = [Data0, <<0:(PadBytes * 8)>>],
-    Checksum = erlang:crc32(Data),
+    {Image, Bytes} = encode(Meta, MacState, true),
     File = filename(Dir),
-    Bytes = Bytes0 + PadBytes,
-    case ra_lib:write_file(File, [<<?MAGIC,
-                                    ?VERSION:8/unsigned,
-                                    Checksum:32/integer>>,
-                                  Data], Sync) of
+    case ra_lib:write_file(File, Image, Sync) of
         ok ->
             {ok, Bytes};
         Err ->
             Err
     end.
+
+%% @doc encodes the complete snapshot file image (header, checksum, meta and
+%% machine state) without writing it anywhere. Returns the image and its size
+%% in bytes. When `Pad' is true the image is zero padded to a multiple of
+%% 4096 bytes so that many parallel writers do not leave partial tail pages
+%% that the file system / device has to merge. binary_to_term/1 ignores the
+%% trailing bytes and the checksum covers them so no format change is needed.
+-spec encode(meta(), term(), Pad :: boolean()) ->
+    {iodata(), non_neg_integer()}.
+encode(Meta, MacState, Pad) ->
+    %% no compression on meta data to make sure reading it is as fast
+    %% as possible
+    MetaBin = term_to_binary(Meta),
+    IOVec = term_to_iovec(MacState),
+    Data0 = [<<(byte_size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
+    Bytes0 = 9 + iolist_size(Data0),
+    PadBytes = case Pad of
+                   true -> (?ALIGN - (Bytes0 rem ?ALIGN)) rem ?ALIGN;
+                   false -> 0
+               end,
+    Data = [Data0, <<0:(PadBytes * 8)>>],
+    Checksum = erlang:crc32(Data),
+    {[<<?MAGIC, ?VERSION:8/unsigned, Checksum:32/integer>>, Data],
+     Bytes0 + PadBytes}.
+
+%% @doc validates and decodes a snapshot file image held in memory. The
+%% counterpart of recover/1 for images that did not come from a file.
+-spec decode_image(binary()) ->
+    {ok, meta(), term()} |
+    {error, invalid_format |
+     {invalid_version, integer()} |
+     checksum_error}.
+decode_image(<<?MAGIC, ?VERSION:8/unsigned, Crc:32/integer, Data/binary>>) ->
+    validate(Crc, Data);
+decode_image(<<?MAGIC, Version:8/unsigned, _:32/integer, _/binary>>) ->
+    {error, {invalid_version, Version}};
+decode_image(_) ->
+    {error, invalid_format}.
+
+%% @doc reads the meta data from a snapshot file image held in memory. NB: as
+%% with read_meta/1 this does not do checksum validation.
+-spec meta_from_image(binary()) ->
+    {ok, meta()} |
+    {error, invalid_format | {invalid_version, integer()}}.
+meta_from_image(<<?MAGIC, ?VERSION:8/unsigned, _Crc:32/integer,
+                  MetaSize:32/unsigned, MetaBin:MetaSize/binary,
+                  _/binary>>) ->
+    {ok, binary_to_term(MetaBin)};
+meta_from_image(<<?MAGIC, Version:8/unsigned, _:32/integer, _/binary>>)
+  when Version =/= ?VERSION ->
+    {error, {invalid_version, Version}};
+meta_from_image(_) ->
+    {error, invalid_format}.
 
 -spec sync(file:filename()) ->
     ok | {error, file_err()}.
@@ -186,12 +225,8 @@ read_chunk({Pos, Eof, Fd}, Size, _Dir) ->
 recover(Dir) ->
     File = filename(Dir),
     case prim_file:read_file(File) of
-        {ok, <<?MAGIC, ?VERSION:8/unsigned, Crc:32/integer, Data/binary>>} ->
-            validate(Crc, Data);
-        {ok, <<?MAGIC, Version:8/unsigned, _:32/integer, _/binary>>} ->
-            {error, {invalid_version, Version}};
-        {ok, _} ->
-            {error, invalid_format};
+        {ok, Image} ->
+            decode_image(Image);
         {error, _} = Err ->
             Err
     end.

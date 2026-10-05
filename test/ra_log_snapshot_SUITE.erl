@@ -40,7 +40,8 @@ all_tests() ->
      padded_aligned,
      padded_boundary,
      recover_unpadded_file,
-     padding_checksum_error
+     padding_checksum_error,
+     encode_decode_image
     ].
 
 groups() ->
@@ -259,6 +260,39 @@ padding_checksum_error(Config) ->
     ok = file:pwrite(Fd, 4095, <<1>>),
     ok = file:close(Fd),
     ?assertEqual({error, checksum_error}, ra_log_snapshot:recover(Dir)),
+    ok.
+
+encode_decode_image(_Config) ->
+    Meta = meta(33, 94, [{banana, node@jungle}]),
+    State = crypto:strong_rand_bytes(5000),
+    %% padded and unpadded images both round trip in memory
+    [begin
+         {Image, Size} = ra_log_snapshot:encode(Meta, State, Pad),
+         Bin = iolist_to_binary(Image),
+         ?assertEqual(Size, byte_size(Bin)),
+         ?assertEqual(Pad, Size rem 4096 == 0),
+         ?assertEqual({ok, Meta, State}, ra_log_snapshot:decode_image(Bin)),
+         ?assertEqual({ok, Meta}, ra_log_snapshot:meta_from_image(Bin)),
+         %% corrupting the body is detected
+         Bad = <<Bin:(byte_size(Bin) - 1)/binary, 255>>,
+         ?assertEqual({error, checksum_error},
+                      ra_log_snapshot:decode_image(Bad))
+     end || Pad <- [true, false]],
+    ?assertEqual({error, invalid_format},
+                 ra_log_snapshot:decode_image(<<"nope">>)),
+    ?assertEqual({error, invalid_format},
+                 ra_log_snapshot:meta_from_image(<<"nope">>)),
+    ?assertEqual({error, {invalid_version, 9}},
+                 ra_log_snapshot:decode_image(<<"RASN", 9, 0:32, 1>>)),
+    ?assertEqual({error, {invalid_version, 9}},
+                 ra_log_snapshot:meta_from_image(<<"RASN", 9, 0:32, 1>>)),
+    %% an image written by encode is byte-identical to the file write/4 makes
+    Dir = ?config(dir, _Config),
+    {ok, Bytes} = ra_log_snapshot:write(Dir, Meta, State, false),
+    {ok, OnDisk} = file:read_file(filename:join(Dir, "snapshot.dat")),
+    ?assertEqual(Bytes, byte_size(OnDisk)),
+    {PaddedImage, _} = ra_log_snapshot:encode(Meta, State, true),
+    ?assertEqual(iolist_to_binary(PaddedImage), OnDisk),
     ok.
 
 %% Utility
