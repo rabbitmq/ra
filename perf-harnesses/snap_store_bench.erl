@@ -44,14 +44,19 @@ run(Dir0, Opts) ->
               "B/put is bytes appended per snapshot (the snapshot, its record~n"
               "header, padding and records copied forward when files are~n"
               "retired).~n"
-              "busy % is the part of the run the store spent writing and "
-              "syncing, near 100 means it is saturated.~n"),
+              "in sync % is the part of the run the store spent writing and "
+              "syncing. A store under any real load starts its next batch as "
+              "soon as the last fsync returns, so it is high (70-90) whatever "
+              "the load and does not mean saturated.~n"
+              "It is saturated when put/bat reaches 1024, the most a batch "
+              "can have, or when done/s falls short of offered or the "
+              "latencies climb with the load.~n"),
     ok.
 
 header() ->
     io:format("~n~8s ~9s ~9s ~8s ~8s ~9s ~8s ~9s ~8s ~7s ~8s ~9s ~8s ~7s ~8s~n",
               ["offered", "done/s", "puts", "p50 ms", "p99 ms", "max ms",
-               "put/bat", "fsync ms", "busy %", "B/put", "files", "disk wr",
+               "put/bat", "fsync ms", "in sync %", "B/put", "files", "disk wr",
                "flushes", "MB wr", "wal p99"]).
 
 bench(Dir, Rate, Opts) ->

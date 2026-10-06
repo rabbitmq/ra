@@ -107,8 +107,15 @@ load, to find out what one store process can take. Each of `clients` members
 puts a snapshot of `size` bytes every `clients * 1000 / rate` ms for `duration`
 seconds, whilst a WAL-like writer (4KB append + fdatasync) shares the file
 system. The first row of the output has no snapshots, it is the WAL writer's
-fsync latency on its own to compare with. `busy %` near 100 means the store is
-saturated; `done/s` below `offered` means it did not keep up.
+fsync latency on its own to compare with.
+
+`in sync %` is high (70 to 90) at any real load and does not mean the store is
+saturated: a group commit store starts its next batch as soon as the last fsync
+returns, so it is always mostly in fsync and what grows with the load is the
+number of puts per batch (`put/bat`). It is saturated when `put/bat` reaches 1024
+(the most a batch can have), when `done/s` falls short of `offered`, or when the
+latencies climb with the load. `fsync ms` is the cost of one batch and sets the
+latency floor (a put waits for the batch in progress and then its own).
 
 ```sh
 erlc -o /tmp snap_store_bench.erl
@@ -118,4 +125,23 @@ erl -noshell -pa /tmp -pa ../_build/default/lib/*/ebin -eval '
                        #{rates => [1000, 5000, 10000, 20000],
                          clients => 10000, size => 1024, duration => 30,
                          device => "nvme0n1"}), halt().'
+```
+
+## `snap_env_probe` and `run_snapshot_benchmarks.sh`
+
+`snap_env_probe` measures the raw cost of what snapshots are made of on the
+machine: append + fdatasync (what the log and the WAL pay), and a directory
+snapshot (mkdir, two files, fsync, directory syncs, delete the previous one)
+alone and 8 and 32 at once. Consumer NVMe, enterprise NVMe with power loss
+protection, and network volumes differ by orders of magnitude here, which is
+why the other results can only be read against it.
+
+`run_snapshot_benchmarks.sh` runs all of it and collects the environment (cpu,
+file system and mount options, device, kernel, ra commit) in one directory to
+send back:
+
+```sh
+rebar3 compile
+perf-harnesses/run_snapshot_benchmarks.sh /mnt/ext4/bench nvme0n1 quick   # about 20 min
+perf-harnesses/run_snapshot_benchmarks.sh /mnt/ext4/bench nvme0n1 full    # about 1.5 h
 ```
