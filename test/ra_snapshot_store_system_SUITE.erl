@@ -90,6 +90,8 @@ server_restart_recovers_from_the_store(Config) ->
     ok = ra:stop_server(Sys, Id),
     ok = ra:restart_server(Sys, Id),
     ?assertEqual(30, count(Id)),
+    %% it started from the snapshot in the store
+    ?assert(snapshot_index(Id) >= 5),
     ok = send_commands(Id, 5),
     ?assertEqual(35, count(Id)),
     ?assertEqual({ok, []}, file:list_dir(snapshots_dir(Config, a))),
@@ -108,6 +110,7 @@ system_restart_recovers_from_the_store(Config) ->
     {ok, _} = start_system(Config),
     ok = ra:restart_server(Sys, Id),
     ?assertEqual(30, count(Id)),
+    ?assert(snapshot_index(Id) >= 5),
     ?assert(store_idx(Sys, UId) >= 5),
     ok.
 
@@ -359,6 +362,10 @@ wait_for(Fun, N) ->
             timer:sleep(100),
             wait_for(Fun, N - 1)
     end.
+
+snapshot_index(Id) ->
+    {ok, #{log := #{snapshot_index := Idx}}, _} = ra:member_overview(Id),
+    Idx.
 
 get_count(#{count := Count}) ->
     Count.

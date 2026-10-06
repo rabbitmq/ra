@@ -37,6 +37,9 @@
 
 -define(MAGIC, "RASN").
 -define(VERSION, 1).
+%% The store keeps an epoch with each snapshot so that the snapshot of an
+%% earlier incarnation of a member with the same UId can be told from the
+%% current one. UIds are not reused so it is a constant for now.
 -define(STORE_EPOCH, <<"1">>).
 
 -type file_err() :: ra_snapshot:file_err().
@@ -148,10 +151,47 @@ list(SnapshotsDir) ->
 %% crashes and leaves it to the supervisor to try again.
 store_reconcile(Name, UId) ->
     try
-        ra_log_snap_store:reconcile(Name, UId, ?STORE_EPOCH)
+        store_wait(fun () ->
+                           {ok, ra_log_snap_store:reconcile(Name, UId,
+                                                            ?STORE_EPOCH)}
+                   end)
+    of
+        {ok, Res} ->
+            Res
     catch
         exit:Reason ->
             error({snapshot_store_unavailable, UId, Reason})
+    end.
+
+%% A snapshot log that is restarting is not there for a moment. Wait for it
+%% rather than fail at once, members that give up too often are not started
+%% again. How long is in the `snapshot_store_wait_ms' app env of ra.
+store_wait(Fun) ->
+    Wait = application:get_env(ra, snapshot_store_wait_ms,
+                               ?SNAPSHOT_STORE_WAIT_MS),
+    store_wait(Fun, erlang:monotonic_time(millisecond) + Wait).
+
+store_wait(Fun, Deadline) ->
+    try Fun() of
+        {error, store_unavailable} = Err ->
+            store_retry(Fun, Deadline, Err);
+        Res ->
+            Res
+    catch
+        exit:{noproc, _} = Reason ->
+            store_retry(Fun, Deadline, {exit, Reason})
+    end.
+
+store_retry(Fun, Deadline, Failure) ->
+    case erlang:monotonic_time(millisecond) >= Deadline of
+        true ->
+            case Failure of
+                {exit, Reason} -> exit(Reason);
+                Err -> Err
+            end;
+        false ->
+            timer:sleep(100),
+            store_wait(Fun, Deadline)
     end.
 
 %% @doc The ra_snapshot delete/1 callback.
@@ -176,7 +216,7 @@ indexes(Location) ->
         false ->
             case store_read(Location) of
                 {ok, _Image, Indexes} -> {ok, Indexes};
-                {error, {store_unavailable, _, _} = Reason} ->
+                {error, {snapshot_store_unavailable, _, _} = Reason} ->
                     error(Reason);
                 {error, _} = Err -> Err
             end
@@ -368,6 +408,11 @@ recover(Dir) ->
                     decode_image(Image);
                 {error, enoent} ->
                     Err;
+                {error, {snapshot_store_unavailable, _, _} = Reason} ->
+                    %% not a snapshot that is not there. A member that
+                    %% recovered nothing would start from the initial state of
+                    %% its machine with the log up to the snapshot truncated.
+                    error(Reason);
                 {error, _} = StoreErr ->
                     StoreErr
             end;
@@ -388,7 +433,7 @@ validate(Dir) ->
             case store_read(Dir) of
                 {ok, _, _} -> ok;
                 {error, enoent} -> Err;
-                {error, {store_unavailable, _, _} = Reason} -> error(Reason);
+                {error, {snapshot_store_unavailable, _, _} = Reason} -> error(Reason);
                 {error, _} -> Err
             end;
         {error, _} = Err ->
@@ -420,7 +465,7 @@ read_meta(Dir) ->
                     meta_from_image(Image);
                 {error, enoent} ->
                     Err;
-                {error, {store_unavailable, _, _} = Reason} ->
+                {error, {snapshot_store_unavailable, _, _} = Reason} ->
                     error(Reason);
                 {error, _} ->
                     Err
@@ -510,19 +555,21 @@ store_for_dir(SnapshotsDir0) ->
 store_read(Location) ->
     case store_location(Location) of
         {ok, #{name := Name, uid := UId}, IdxTerm} ->
-            try ra_log_snap_store:read(Name, UId, IdxTerm) of
+            try store_wait(fun () ->
+                                   ra_log_snap_store:read(Name, UId, IdxTerm)
+                           end) of
                 {ok, _, _} = Ok ->
                     Ok;
                 {error, Reason}
                   when Reason == not_found orelse Reason == superseded ->
                     {error, enoent};
                 {error, store_unavailable} ->
-                    {error, {store_unavailable, UId, store_unavailable}};
+                    {error, {snapshot_store_unavailable, UId, store_unavailable}};
                 {error, _} = Err ->
                     Err
             catch
                 exit:Reason ->
-                    {error, {store_unavailable, UId, Reason}}
+                    {error, {snapshot_store_unavailable, UId, Reason}}
             end;
         undefined ->
             {error, enoent}

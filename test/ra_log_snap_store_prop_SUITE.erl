@@ -35,6 +35,7 @@ init_per_testcase(TestCase, Config) ->
 
 end_per_testcase(_TestCase, _Config) ->
     persistent_term:erase({?MODULE, fail}),
+    persistent_term:erase({?MODULE, open_fail}),
     ok.
 
 %%%===================================================================
@@ -55,7 +56,8 @@ model(Config) ->
                            run(Name, Dir, Ops)
                        after
                            catch ra_log_snap_store:stop(Name),
-                           persistent_term:erase({?MODULE, fail})
+                           persistent_term:erase({?MODULE, fail}),
+                           persistent_term:erase({?MODULE, open_fail})
                        end
                    end),
     ?assertEqual(true,
@@ -105,7 +107,16 @@ readers_during_rolls_and_retires(Config) ->
 
 op() ->
     frequency([{12, {put, range(1, ?UIDS), range(-1, 3), range(10, 3000),
-                     oneof([none, none, none, pwrite, sync])}},
+                     oneof([none, none, none, pwrite, sync, create])}},
+               %% several puts at once so that a batch has more than one
+               {5, {burst, list({range(1, ?UIDS), range(-1, 3),
+                                 range(10, 3000)}),
+                    oneof([none, none, pwrite, sync, create])}},
+               %% the same put twice at once
+               {2, {dup, range(1, ?UIDS), range(-1, 3), range(10, 3000),
+                    oneof([none, none, pwrite, sync])}},
+               %% retiring can not open the file for a while
+               {2, {open_fail, range(1, 3)}},
                {2, restart},
                {1, wait},
                {1, {release, range(1, ?UIDS)}},
@@ -122,41 +133,48 @@ run(Name, Dir, Ops) ->
                        #m{name = Name, dir = Dir}, Ops),
     true.
 
-step({put, I, Delta, Size, Fault}, #m{name = Name, model = Model,
-                                      unsure = Unsure, n = N} = M) ->
-    UId = uid(I),
-    Known = case Model of
-                #{UId := {Idx0, _}} -> Idx0;
-                _ -> -1
-            end,
-    %% a member that may have an entry we do not know about (and must be
-    %% allowed to replace) starts again well above anything before
-    Idx = case Unsure of
-              #{UId := _} -> 100000 + N;
-              _ -> max(0, Known + Delta)
-          end,
-    Image = image(UId, Idx, Size),
+step({put, I, Delta, Size, Fault}, #m{name = Name} = M0) ->
+    {UId, Idx, Image, Known, M} = prepare_put(I, Delta, Size, M0),
     Fault == none orelse inject_failure(Fault),
     Res = ra_log_snap_store:put(Name, UId, ?EPOCH, {Idx, 1}, Image, []),
     clear_failure(),
-    case Res of
-        ok ->
-            %% repeating the current snapshot is a no-op, otherwise it has to
-            %% be newer (or the member has nothing we know of)
-            case Model of
-                #{UId := {Known, _}} when Idx == Known ->
-                    M#m{n = N + 1};
-                _ when Idx > Known orelse is_map_key(UId, Unsure) ->
-                    M#m{model = Model#{UId => {Idx, Image}},
-                        unsure = maps:remove(UId, Unsure), n = N + 1}
-            end;
-        {error, stale} ->
-            true = Idx =< Known,
-            M#m{n = N + 1};
-        {error, _} ->
-            %% not acknowledged: whatever was there stays
-            M#m{n = N + 1}
-    end;
+    record_put(UId, Idx, Image, Known, Res, M);
+step({burst, Puts0, Fault}, #m{name = Name} = M0) ->
+    %% one put per member, all at the same time
+    Puts = lists:ukeysort(1, Puts0),
+    {Prepared, M1} =
+        lists:foldl(fun ({I, Delta, Size}, {Acc, M}) ->
+                            {UId, Idx, Image, Known, M2} =
+                                prepare_put(I, Delta, Size, M),
+                            {[{UId, Idx, Image, Known} | Acc], M2}
+                    end, {[], M0}, Puts),
+    Fault == none orelse inject_failure(Fault),
+    Results = concurrently(
+                [fun () ->
+                         ra_log_snap_store:put(Name, UId, ?EPOCH, {Idx, 1},
+                                               Image, [])
+                 end || {UId, Idx, Image, _} <- Prepared]),
+    clear_failure(),
+    lists:foldl(fun ({{UId, Idx, Image, Known}, Res}, M) ->
+                        record_put(UId, Idx, Image, Known, Res, M)
+                end, M1, lists:zip(Prepared, Results));
+step({dup, I, Delta, Size, Fault}, #m{name = Name} = M0) ->
+    {UId, Idx, Image, Known, M} = prepare_put(I, Delta, Size, M0),
+    Fault == none orelse inject_failure(Fault),
+    Put = fun () ->
+                  ra_log_snap_store:put(Name, UId, ?EPOCH, {Idx, 1}, Image, [])
+          end,
+    Results = concurrently([Put, Put]),
+    clear_failure(),
+    %% whatever was acknowledged to either is durable
+    Res = case lists:member(ok, Results) of
+              true -> ok;
+              false -> hd(Results)
+          end,
+    record_put(UId, Idx, Image, Known, Res, M);
+step({open_fail, Count}, M) ->
+    inject_open_failure(Count),
+    M;
 step(restart, #m{name = Name, dir = Dir} = M) ->
     ok = ra_log_snap_store:stop(Name),
     {ok, _} = start(Name, Dir),
@@ -179,6 +197,52 @@ step({delete, I}, #m{name = Name, model = Model, unsure = Unsure} = M) ->
     UId = uid(I),
     ok = ra_log_snap_store:delete(Name, UId, any),
     M#m{model = maps:remove(UId, Model), unsure = Unsure#{UId => true}}.
+
+prepare_put(I, Delta, Size, #m{model = Model, unsure = Unsure, n = N} = M) ->
+    UId = uid(I),
+    Known = case Model of
+                #{UId := {Idx0, _}} -> Idx0;
+                _ -> -1
+            end,
+    %% a member that may have an entry we do not know about (and must be
+    %% allowed to replace) starts again well above anything before
+    Idx = case Unsure of
+              #{UId := _} -> 100000 + N;
+              _ -> max(0, Known + Delta)
+          end,
+    {UId, Idx, image(UId, Idx, Size), Known, M#m{n = N + 1}}.
+
+record_put(UId, Idx, Image, Known, Res,
+           #m{model = Model, unsure = Unsure} = M) ->
+    case Res of
+        ok ->
+            %% repeating the current snapshot is a no-op, otherwise it has to
+            %% be newer (or the member has nothing we know of)
+            case Model of
+                #{UId := {Known, _}} when Idx == Known ->
+                    M;
+                _ when Idx > Known orelse is_map_key(UId, Unsure) ->
+                    M#m{model = Model#{UId => {Idx, Image}},
+                        unsure = maps:remove(UId, Unsure)}
+            end;
+        {error, stale} ->
+            true = Idx =< Known,
+            M;
+        {error, _} ->
+            %% not acknowledged: whatever was there stays
+            M
+    end.
+
+%% runs the funs at the same time and returns their results, in order
+concurrently(Funs) ->
+    Self = self(),
+    Refs = [begin
+                Ref = make_ref(),
+                spawn_link(fun () -> Self ! {Ref, Fun()} end),
+                Ref
+            end || Fun <- Funs],
+    [receive {Ref, Res} -> Res after 30000 -> exit(put_timeout) end
+     || Ref <- Refs].
 
 %% what the store says must match what has been acknowledged
 check(#m{name = Name, model = Model} = M) ->
@@ -271,7 +335,19 @@ reader_loop(Name, UId, Stop, Ok, Superseded) ->
     end.
 
 io_with_faults() ->
-    #{pwrite => fun (Fd, Off, IO) ->
+    #{create => fun (Path) ->
+                        case failing(create) of
+                            true -> {error, enospc};
+                            false -> file:open(Path, [write, raw, binary])
+                        end
+                end,
+      open_read => fun (Path) ->
+                           case take_open_failure() of
+                               true -> {error, eio};
+                               false -> file:open(Path, [read, raw, binary])
+                           end
+                   end,
+      pwrite => fun (Fd, Off, IO) ->
                         case failing(pwrite) of
                             true -> {error, eio};
                             false -> file:pwrite(Fd, Off, IO)
@@ -283,6 +359,19 @@ io_with_faults() ->
                           false -> ra_file:sync(Fd)
                       end
               end}.
+
+%% the next `Count' times retiring opens a file
+inject_open_failure(Count) ->
+    persistent_term:put({?MODULE, open_fail}, Count).
+
+take_open_failure() ->
+    case persistent_term:get({?MODULE, open_fail}, 0) of
+        0 ->
+            false;
+        N ->
+            persistent_term:put({?MODULE, open_fail}, N - 1),
+            true
+    end.
 
 inject_failure(What) ->
     persistent_term:put({?MODULE, fail}, What).

@@ -169,7 +169,6 @@
          retire_chunk :: pos_integer(),
          live_fun :: fun((uid(), epoch()) -> boolean()),
          io = #{} :: #{io_fun() => fun()},
-         registry_key :: undefined | term(),
          %% active file, undefined fd when no usable file (after an error)
          no :: non_neg_integer(),
          fd :: undefined | file:fd(),
@@ -205,9 +204,6 @@
 %%   name := atom(), registered process name and ETS table name
 %%   dir := directory the files live in
 %%   min_file_bytes, retire_chunk_bytes
-%%   registry := {Key, Value}, stored in a persistent term while the store is
-%%               running so that code that only knows where a member's data
-%%               lives can find the store (see ra_log_snapshot)
 %%   live_fun := fun(UId, Epoch) -> boolean(), says whether the member
 %%               incarnation that wrote a record still exists
 %%   io := #{pwrite | sync | create => fun()}, overrides for fault injection
@@ -479,7 +475,6 @@ init(#{name := Name, dir := Dir} = Config) ->
     %% recovery fills a private table, readers only get to see the named table
     %% once it is complete
     RecTid = ets:new(snap_store_recovery, [set, private]),
-    Registry = maps:get(registry, Config, undefined),
     CRef = new_counters(Name, maps:get(system, Config, undefined)),
     State0 = #?MODULE{name = Name,
                       cref = CRef,
@@ -494,10 +489,6 @@ init(#{name := Name, dir := Dir} = Config) ->
                       live_fun = maps:get(live_fun, Config,
                                           fun (_, _) -> true end),
                       io = maps:get(io, Config, #{}),
-                      registry_key = case Registry of
-                                         {K, _} -> K;
-                                         undefined -> undefined
-                                     end,
                       no = 0},
     RecoveryStart = erlang:monotonic_time(millisecond),
     State1 = recover(State0),
@@ -508,12 +499,6 @@ init(#{name := Name, dir := Dir} = Config) ->
     true = ets:insert(Tid, ets:tab2list(RecTid)),
     true = ets:insert(Tid, {?DIR_KEY, Dir}),
     true = ets:delete(RecTid),
-    case Registry of
-        {Key, Value} ->
-            persistent_term:put(Key, Value);
-        undefined ->
-            ok
-    end,
     State2 = State1#?MODULE{tid = Tid},
     case new_active(State2) of
         {ok, State3} ->
@@ -542,9 +527,7 @@ handle_batch(Ops, State0) ->
     State5 = finish_retire(State4),
     {ok, Replies, schedule_retire(refresh(maybe_roll(State5)))}.
 
-terminate(_Reason, #?MODULE{name = Name, fd = Fd, retire = Retire,
-                            registry_key = RegKey}) ->
-    RegKey == undefined orelse persistent_term:erase(RegKey),
+terminate(_Reason, #?MODULE{name = Name, fd = Fd, retire = Retire}) ->
     ?CATCH(ra_counters:delete(Name)),
     _ = close(Fd),
     case Retire of

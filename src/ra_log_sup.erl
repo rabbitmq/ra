@@ -53,8 +53,10 @@ init([#{data_dir := DataDir,
                             [SegWriterConf]},
                   shutdown => 30_000},
     WalConf = make_wal_conf(Cfg),
-    ok = maybe_migrate_snapshot_store(Cfg),
+    %% the registry first: a stale one left by an earlier run in this VM must
+    %% not make the migration look in a store that is not running
     ok = snap_store_registry(Cfg),
+    ok = maybe_migrate_snapshot_store(Cfg),
     SnapStore = snap_store_children(Cfg),
     SupFlags = #{strategy => one_for_all,
                  intensity => 5,

@@ -36,6 +36,8 @@ all_tests() ->
      write_error_falls_back_to_directory,
      log_not_running_falls_back_to_directory_for_writes,
      unavailable_log_is_not_taken_for_an_empty_one,
+     recover_fails_when_the_log_is_unavailable,
+     a_restarting_log_is_waited_for,
      failed_snapshot_does_not_drop_the_current_logged_snapshot,
      failed_snapshot_that_was_logged_is_released,
      no_log_configured_uses_directories,
@@ -74,6 +76,8 @@ init_per_testcase(TestCase, Config) ->
                                       RecoveryCheckpointDir]],
     StoreName = list_to_atom("snap_store_" ++ atom_to_list(TestCase)),
     persistent_term:erase({?MODULE, fail}),
+    %% do not wait long for a log that is not coming back
+    application:set_env(ra, snapshot_store_wait_ms, 300),
     C1 = [{uid, ra_lib:to_binary(TestCase)},
           {snap_dir, SnapDir},
           {checkpoint_dir, CheckpointDir},
@@ -94,6 +98,7 @@ end_per_testcase(_TestCase, Config) ->
     catch ra_log_snap_store:stop(?config(store_name, Config)),
     persistent_term:erase(registry_key(Config)),
     persistent_term:erase({?MODULE, fail}),
+    application:unset_env(ra, snapshot_store_wait_ms),
     ok.
 
 %%%===================================================================
@@ -251,8 +256,6 @@ log_not_running_falls_back_to_directory_for_writes(Config) ->
     Name = ?config(store_name, Config),
     State0 = init_state(Config),
     ra_log_snap_store:stop(Name),
-    persistent_term:put(registry_key(Config),
-                        #{name => Name, max_size => ?MAX_SIZE}),
     MacState = crypto:strong_rand_bytes(500),
     State = take(State0, 55, 2, MacState, snapshot),
     ?assertEqual({55, 2}, ra_snapshot:current(State)),
@@ -274,17 +277,49 @@ unavailable_log_is_not_taken_for_an_empty_one(Config) ->
     _ = take(State0, 55, 2, MacState, snapshot),
     ?assertMatch({ok, #{idx := 55}}, ra_log_snap_store:lookup(Name, UId)),
     ra_log_snap_store:stop(Name),
-    %% the registry is owned by whoever started the store and stays
-    persistent_term:put(registry_key(Config),
-                        #{name => Name, max_size => ?MAX_SIZE}),
     ?assertError({snapshot_store_unavailable, UId, _}, init_state(Config)),
     %% once it is back the member starts with its snapshot
     start_store(Config, #{}),
-    persistent_term:put(registry_key(Config),
-                        #{name => Name, max_size => ?MAX_SIZE}),
     State = init_state(Config),
     ?assertEqual({55, 2}, ra_snapshot:current(State)),
     ?assertMatch({ok, #{index := 55}, MacState}, ra_snapshot:recover(State)),
+    ok.
+
+%% a member that recovered nothing would start from the initial state of its
+%% machine with the log truncated up to the snapshot: that must not look like
+%% "no snapshot"
+recover_fails_when_the_log_is_unavailable(Config) ->
+    UId = ?config(uid, Config),
+    State0 = init_state(Config),
+    State = take(State0, 55, 2, crypto:strong_rand_bytes(500), snapshot),
+    ra_log_snap_store:stop(?config(store_name, Config)),
+    ?assertError({snapshot_store_unavailable, UId, _},
+                 ra_snapshot:recover(State)),
+    %% a sender gets an error to retry
+    ?assertMatch({error, {snapshot_store_unavailable, UId, _}},
+                 ra_snapshot:begin_read(State, ra_log_snapshot:context())),
+    ok.
+
+%% members that start while the log is restarting wait for it
+a_restarting_log_is_waited_for(Config) ->
+    Name = ?config(store_name, Config),
+    State0 = init_state(Config),
+    MacState = crypto:strong_rand_bytes(500),
+    _ = take(State0, 55, 2, MacState, snapshot),
+    ra_log_snap_store:stop(Name),
+    application:set_env(ra, snapshot_store_wait_ms, 10000),
+    Self = self(),
+    _ = spawn_link(fun () -> Self ! {state, init_state(Config)} end),
+    timer:sleep(500),
+    start_store(Config, #{}),
+    receive
+        {state, State} ->
+            ?assertEqual({55, 2}, ra_snapshot:current(State)),
+            ?assertMatch({ok, #{index := 55}, MacState},
+                         ra_snapshot:recover(State))
+    after 15000 ->
+              ct:fail(init_did_not_finish)
+    end,
     ok.
 
 %% handle_error deletes the snapshot that was being written, which must not
@@ -398,13 +433,14 @@ delete_effect_names_the_module(Config) ->
 registry_key(Config) ->
     ra_log_snap_store:registry_key(?config(priv_dir, Config)).
 
+%% like ra_log_sup does: the registry is there whether or not the store is
+%% running, it is the store process that comes and goes
 start_store(Config, Opts) ->
     Name = ?config(store_name, Config),
+    persistent_term:put(registry_key(Config),
+                        #{name => Name, max_size => ?MAX_SIZE}),
     {ok, _} = ra_log_snap_store:start_link(
-                Opts#{name => Name,
-                      dir => ?config(store_dir, Config),
-                      registry => {registry_key(Config),
-                                   #{name => Name, max_size => ?MAX_SIZE}}}),
+                Opts#{name => Name, dir => ?config(store_dir, Config)}),
     ok.
 
 init_state(Config) ->

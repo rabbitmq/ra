@@ -253,10 +253,11 @@ superseded since it was looked up gives `{error, superseded}`.
 - The ETS table only becomes visible once recovery of the files is complete.
 - Whether a snapshot log is configured is recorded by `ra_log_sup` (not by the
 log process) so that it is known while the log is restarting. A member that
-starts while the log is not answering fails to start, and is retried by its
-supervisor, rather than start without a snapshot that its (truncated) log
-depends on. Taking a snapshot while the log is not answering writes a directory
-instead.
+starts while the log is restarting waits for it (up to `snapshot_store_wait_ms`
+in the `ra` application environment, 15 s) and then fails to start, rather than
+start without a snapshot that its (truncated) log depends on. Recovering a
+snapshot while the log is not answering is an error too, not "no snapshot".
+Taking a snapshot while the log is not answering writes a directory instead.
 - `min_file_bytes` is raised to at least four blocks (16KB): with less, copying
 the live data of a file forward could make the next file roll immediately.
 
