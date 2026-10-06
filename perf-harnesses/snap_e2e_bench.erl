@@ -90,6 +90,9 @@ bench(Dir, Mode, Opts) ->
     timer:sleep(1000),
     Dev = maps:get(device, Opts, undefined),
     D0 = disk_stats(Dev),
+    %% the counters of a member are kept under its name, which is the same in
+    %% every mode, so what counts is what was added during this run
+    SnapsBefore = snapshots_written(Ids),
     Parent = self(),
     T0 = erlang:monotonic_time(millisecond),
     Pids = [spawn_link(fun () ->
@@ -102,9 +105,7 @@ bench(Dir, Mode, Opts) ->
     %% let outstanding snapshots finish
     timer:sleep(2000),
     D1 = disk_stats(Dev),
-    Snaps = lists:sum([maps:get(snapshots_written,
-                                ra_counters:counters(Id, [snapshots_written]),
-                                0) || Id <- Ids]),
+    Snaps = snapshots_written(Ids) - SnapsBefore,
     Wall = (T1 - T0) / 1000,
     ok = ra_system:stop(Sys),
     #{mode := _} = Row = #{mode => Mode, members => N,
@@ -117,13 +118,24 @@ bench(Dir, Mode, Opts) ->
                            mb => delta(sectors, D0, D1) * 512 / 1048576},
     Row.
 
+snapshots_written(Ids) ->
+    lists:sum([case ra_counters:counters(Id, [snapshots_written]) of
+                   #{snapshots_written := N} -> N;
+                   _ -> 0
+               end || Id <- Ids]).
+
 delta(K, #{} = A, #{} = B) -> maps:get(K, B) - maps:get(K, A);
 delta(_, _, _) -> 0.
 
 disk_stats(undefined) ->
     undefined;
 disk_stats(Dev) ->
-    {ok, Bin} = file:read_file("/proc/diskstats"),
+    case file:read_file("/proc/diskstats") of
+        {ok, Bin} -> disk_stats(Dev, Bin);
+        {error, _} -> undefined
+    end.
+
+disk_stats(Dev, Bin) ->
     Want = list_to_binary(Dev),
     case [T || L <- binary:split(Bin, <<"\n">>, [global]),
                [_, _, D | T] <- [binary:split(L, [<<" ">>],

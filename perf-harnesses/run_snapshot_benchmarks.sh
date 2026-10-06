@@ -3,9 +3,10 @@
 # read the results into one directory to send back.
 #
 #   run_snapshot_benchmarks.sh <directory on the file system under test> \
-#                              <block device, e.g. nvme0n1> [quick|full]
+#                              <block device, e.g. nvme0n1> [smoke|quick|full]
 #
-# quick (default) takes about 20 minutes, full about 1.5 hours.
+# smoke takes a couple of minutes and only checks that everything works, quick
+# (default) takes about 20 minutes, full about 1.5 hours.
 # Run it from a checkout of the snap-store branch with ra compiled
 # (rebar3 compile). The directory is used for scratch files and emptied.
 set -u
@@ -20,15 +21,22 @@ OUT="$PWD/snapshot-bench-$(hostname)-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT" "$DIR" || exit 1
 EBIN="$ROOT/_build/default/lib/*/ebin"
 
+# no crash dumps in the directory the script is run from
+export ERL_CRASH_DUMP=/dev/null
 ulimit -n 65536 2>/dev/null || echo "warning: could not raise the open file limit" >&2
 
 case $MODE in
+    smoke)
+        # a couple of minutes, to check that everything is set up, the numbers
+        # mean nothing
+        DUR=3; RATES="1000"
+        MEMBERS="30"; CMDS=50; SIZE_MEMBERS=30 ;;
     full)
         DUR=60; RATES="5000, 10000, 20000, 30000, 40000, 60000"
-        MEMBERS="1000, 5000"; CMDS=1000 ;;
+        MEMBERS="1000, 5000"; CMDS=1000; SIZE_MEMBERS=1000 ;;
     *)
         DUR=20; RATES="5000, 10000, 20000, 40000"
-        MEMBERS="1000"; CMDS=500 ;;
+        MEMBERS="1000"; CMDS=500; SIZE_MEMBERS=1000 ;;
 esac
 
 echo "results in $OUT"
@@ -83,7 +91,7 @@ for M in $(echo "$MEMBERS" | tr ',' ' '); do
 done
 
 # --- 4. around the size limit (16KB): 8000 and 15000 go to the log, 20000 does not
-erl_run 06-e2e-sizes "[snap_e2e_bench:run(\"$DIR/e2e\", #{members => 1000, state_size => S, commands => $CMDS, snapshot_every => 5, modes => [directories, log], device => \"$DEV\"}) || S <- [8000, 15000, 20000]], halt()."
+erl_run 06-e2e-sizes "[snap_e2e_bench:run(\"$DIR/e2e\", #{members => $SIZE_MEMBERS, state_size => S, commands => $CMDS, snapshot_every => 5, modes => [directories, log], device => \"$DEV\"}) || S <- [8000, 15000, 20000]], halt()."
 
 # --- 5. the synthetic comparison of the alternatives (optional, slower) --
 if [ "$MODE" = full ]; then
