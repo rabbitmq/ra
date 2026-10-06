@@ -27,18 +27,31 @@ run(Dir) ->
 run(Dir0, Opts) ->
     Dir = filename:absname(Dir0),
     Rates = maps:get(rates, Opts, [10000]),
-    %% the baseline: the WAL writer alone
-    Base = bench(Dir, none, Opts),
-    Rows = [Base | [bench(Dir, Rate, Opts) || Rate <- Rates]],
-    io:format("~n~8s ~9s ~9s ~8s ~8s ~9s ~8s ~9s ~8s ~7s ~8s ~9s ~8s ~7s ~8s~n",
-              ["offered", "done/s", "puts", "p50 ms", "p99 ms", "max ms",
-               "put/bat", "fsync ms", "busy %", "B/put", "files", "disk wr",
-               "flushes", "MB wr", "wal p99"]),
+    header(),
+    %% the baseline first: the WAL writer alone. Each row is printed as soon
+    %% as its run is done.
+    Rows = [begin
+                R = bench(Dir, Rate, Opts),
+                header(),
+                row(R),
+                R
+            end || Rate <- [none | Rates]],
+    io:format("~n=== all runs ===~n"),
+    header(),
     [row(R) || R <- Rows],
     io:format("~nThe first row has no snapshots: the WAL writer alone.~n"
+              "B/put is bytes appended per snapshot (the snapshot, its record~n"
+              "header, padding and records copied forward when files are~n"
+              "retired).~n"
               "busy % is the part of the run the store spent writing and "
               "syncing, near 100 means it is saturated.~n"),
     ok.
+
+header() ->
+    io:format("~n~8s ~9s ~9s ~8s ~8s ~9s ~8s ~9s ~8s ~7s ~8s ~9s ~8s ~7s ~8s~n",
+              ["offered", "done/s", "puts", "p50 ms", "p99 ms", "max ms",
+               "put/bat", "fsync ms", "busy %", "B/put", "files", "disk wr",
+               "flushes", "MB wr", "wal p99"]).
 
 bench(Dir, Rate, Opts) ->
     Clients = maps:get(clients, Opts, 10000),
@@ -126,7 +139,7 @@ row(#{rate := Rate, wall := Wall, puts := Puts, lats := Lats, info := Info,
     Batches = maps:get(batches, Info, 0),
     Fsync = maps:get(fsync_time_us, Info, 0),
     Bytes = maps:get(bytes_written, Info, 0),
-    io:format("~8s ~9.1f ~9b ~8.1f ~8.1f ~9.1f ~8.1f ~9.2f ~8.1f ~7.0f ~8b ~9b ~8b ~7.1f ~8.1f~n",
+    io:format("~8s ~9.1f ~9b ~8.1f ~8.1f ~9.1f ~8.1f ~9.2f ~8.1f ~7.1f ~8b ~9b ~8b ~7.1f ~8.1f~n",
               [case Rate of none -> "-"; _ -> integer_to_list(Rate) end,
                Puts / Wall, Puts,
                pct(Lats, 0.5) / 1000, pct(Lats, 0.99) / 1000,
