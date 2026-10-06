@@ -99,3 +99,23 @@ snapshot path takes fewer rather than slowing the commands down. Add `none` to
 `modes` for a run with no snapshots at all: its device writes, flushes and MB
 are the WAL and segment baseline to subtract from the other modes. Use enough
 `commands` for runs of tens of seconds and repeat them, short runs are noisy.
+
+## `snap_store_bench`
+
+Drives the real `ra_log_snap_store` directly (no Ra servers) with an open loop
+load, to find out what one store process can take. Each of `clients` members
+puts a snapshot of `size` bytes every `clients * 1000 / rate` ms for `duration`
+seconds, whilst a WAL-like writer (4KB append + fdatasync) shares the file
+system. The first row of the output has no snapshots, it is the WAL writer's
+fsync latency on its own to compare with. `busy %` near 100 means the store is
+saturated; `done/s` below `offered` means it did not keep up.
+
+```sh
+erlc -o /tmp snap_store_bench.erl
+ulimit -n 65536
+erl -noshell -pa /tmp -pa ../_build/default/lib/*/ebin -eval '
+  snap_store_bench:run("/mnt/ext4/store",
+                       #{rates => [1000, 5000, 10000, 20000],
+                         clients => 10000, size => 1024, duration => 30,
+                         device => "nvme0n1"}), halt().'
+```
