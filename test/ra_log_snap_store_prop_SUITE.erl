@@ -224,8 +224,8 @@ read(Name, UId, IdxTerm) ->
 wait_quiescent(Name) ->
     wait_quiescent(Name, 400).
 
-wait_quiescent(_Name, 0) ->
-    exit(never_quiescent);
+wait_quiescent(Name, 0) ->
+    exit({never_quiescent, ra_log_snap_store:info(Name)});
 wait_quiescent(Name, N) ->
     case ra_log_snap_store:info(Name) of
         #{rolled_files := 0, retiring := false} ->

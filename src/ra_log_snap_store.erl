@@ -61,6 +61,7 @@
          release/3,
          delete/3,
          info/1,
+         roll/1,
          status/1,
          stop/1]).
 
@@ -131,7 +132,7 @@
           "Time taken to recover the log files when it started"}
         ]).
 
--define(MIN_FILE_BYTES, 4 * ?ALIGN).
+-define(MIN_FILE_BYTES, ?ALIGN).
 -define(DEFAULT_MIN_FILE_BYTES, 64 * 1024 * 1024).
 -define(DEFAULT_RETIRE_CHUNK, 1024 * 1024).
 -define(MIN_RETIRE_CHUNK, 4096).
@@ -166,6 +167,9 @@
          no :: non_neg_integer(),
          fd :: undefined | file:fd(),
          off = ?HDR_SIZE :: non_neg_integer(),
+         %% bytes of records in the active file, i.e. without padding
+         payload = 0 :: non_neg_integer(),
+         force_roll = false :: boolean(),
          seq = 1 :: non_neg_integer(),
          live_bytes = 0 :: non_neg_integer(),
          %% rolled files, oldest first, with the number of valid bytes
@@ -434,6 +438,13 @@ release(Name, UId, {_Idx, _Term} = IdxTerm) ->
 delete(Name, UId, Epoch) ->
     gen_batch_server:call(Name, {delete, UId, Epoch}, infinity).
 
+%% @doc Closes the active file and starts a new one, if the active file has
+%% anything in it. The files of the log roll by themselves as they fill up, this
+%% is for maintenance and tests.
+-spec roll(atom()) -> ok.
+roll(Name) ->
+    gen_batch_server:call(Name, roll, infinity).
+
 -spec info(atom()) -> map().
 info(Name) ->
     gen_batch_server:call(Name, info, infinity).
@@ -466,8 +477,6 @@ init(#{name := Name, dir := Dir} = Config) ->
                       cref = CRef,
                       dir = Dir,
                       tid = RecTid,
-                      %% never so small that copying the live data forward
-                      %% would roll the file again
                       min_file_bytes = max(?MIN_FILE_BYTES,
                                            maps:get(min_file_bytes, Config,
                                                     ?DEFAULT_MIN_FILE_BYTES)),
@@ -608,6 +617,9 @@ classify([{call, From, {delete, UId, Epoch}} | Rem], State, Puts,
          end,
     classify(Rem, State, Puts, [{delete, From, UId, Epoch} | Ordered],
              Followers, V1);
+classify([{call, From, roll} | Rem], State, Puts, Ordered, Followers,
+         Virtual) ->
+    classify(Rem, State, Puts, [{roll, From} | Ordered], Followers, Virtual);
 classify([{call, From, info} | Rem], State, Puts, Ordered, Followers,
          Virtual) ->
     classify(Rem, State, Puts, [{info, From} | Ordered], Followers, Virtual);
@@ -696,7 +708,12 @@ write_batch(Copies, Puts, #?MODULE{no = No, off = Off0, seq = Seq0,
         ok ->
             State1 = apply_entries([A || {copy, _, _, _} = A <- Applies],
                                    State0),
+            Payload = lists:sum([element(8, element(2, A)) ||
+                                    A <- Applies, element(1, A) == put] ++
+                                [element(8, element(4, A)) ||
+                                    A <- Applies, element(1, A) == copy]),
             State2 = State1#?MODULE{off = Off1,
+                                    payload = State1#?MODULE.payload + Payload,
                                     seq = Seq1,
                                     last_failed = false},
             State3 = incr(puts, length(Puts),
@@ -862,6 +879,8 @@ replay_op({release, UId, {Idx, Term}}, _Outcome, Es, Acc, S) ->
                  S
          end,
     {Acc, Es, S1};
+replay_op({roll, From}, _Outcome, Es, Acc, S) ->
+    {[{reply, From, ok} | Acc], Es, S#?MODULE{force_roll = true}};
 replay_op({info, From}, _Outcome, Es, Acc, S) ->
     {[{reply, From, do_info(S)} | Acc], Es, S}.
 
@@ -908,9 +927,18 @@ health(#?MODULE{fd = Fd, last_failed = LastFailed,
 %%% rolling and retiring
 %%%===================================================================
 
-maybe_roll(#?MODULE{fd = Fd, off = Off, live_bytes = Live,
-                    min_file_bytes = Min} = State)
-  when Fd =/= undefined andalso Off >= max(Min, 2 * Live) ->
+%% The file is rolled when the records in it are at least twice the live data
+%% (and at least min_file_bytes) so that at most half of what is copied
+%% forward out of a file is live, and copying the live data of a file can not
+%% roll the next one by itself. Padding is not counted in that, but a file is
+%% also rolled if it is a lot bigger than that anyway, e.g. made of many tiny
+%% batches.
+maybe_roll(#?MODULE{fd = Fd, off = Off, payload = Payload, live_bytes = Live,
+                    min_file_bytes = Min, force_roll = Force} = State)
+  when Fd =/= undefined andalso
+       ((Force andalso Payload > 0) orelse
+        Payload >= max(Min, 2 * Live) orelse
+        Off >= 4 * max(Min, 2 * Live)) ->
     case new_active(close_active(State, Off)) of
         {ok, State1} ->
             incr(rolls, State1);
@@ -919,7 +947,7 @@ maybe_roll(#?MODULE{fd = Fd, off = Off, live_bytes = Live,
             State1
     end;
 maybe_roll(State) ->
-    State.
+    State#?MODULE{force_roll = false}.
 
 %% Closes the active file. Everything in it up to `AckedLen' is durable.
 close_active(#?MODULE{fd = undefined} = State, _AckedLen) ->
@@ -939,7 +967,8 @@ new_active(#?MODULE{no = No0, dir = Dir, seq = Seq, rolled = Rolled,
     No = No0 + 1,
     case create_file(State, Dir, No, Seq, PrevLen) of
         {ok, Fd} ->
-            {ok, State#?MODULE{no = No, fd = Fd, off = ?HDR_SIZE}};
+            {ok, State#?MODULE{no = No, fd = Fd, off = ?HDR_SIZE, payload = 0,
+                               force_roll = false}};
         {error, Reason} ->
             ?ERROR("ra_log_snap_store: ~ts: could not create file ~b: ~w",
                    [State#?MODULE.name, No, Reason]),

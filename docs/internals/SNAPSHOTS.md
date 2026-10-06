@@ -217,7 +217,7 @@ a CRC each. Batches are padded to 4KB boundaries.
 nothing is deleted individually. An in memory ETS table points at the live
 record of each member. It is updated only after the batch that has the record
 has been fsynced, so an entry always refers to durable data.
-- When the active file reaches `max(min_file_bytes, 2 * live bytes)` it is rolled
+- When the records in the active file (not counting padding) reach `max(min_file_bytes, 2 * live bytes)` it is rolled
 over to a new file. The writer then retires the oldest file: it copies the
 records in it that are still live into the next batches it writes and deletes
 the file once those are durable. Space use is bounded by a small multiple of the

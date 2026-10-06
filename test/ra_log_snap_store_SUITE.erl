@@ -45,6 +45,7 @@ all_tests() ->
      retire_skips_an_invalid_record_and_copies_the_rest,
      retire_never_deletes_a_file_that_is_still_referenced,
      retire_open_error_backs_off,
+     copying_live_data_forward_does_not_roll_forever,
      reconciles_do_not_split_batches,
      release_then_repeated_put_in_a_batch_keeps_the_snapshot,
      disk_use_stays_bounded_under_load,
@@ -455,21 +456,23 @@ fsync_error_unacked_record_ignored_after_restart(Config) ->
 
 cannot_create_file_recovers(Config) ->
     %% creating the next file fails: puts get errors (rather than crashing the
-    %% store) until it works again. Each put is a block, the file rolls at four.
-    N = start(Config, #{io => io_with_faults(), min_file_bytes => 16384}),
+    %% store) until it works again
+    N = start(Config, #{io => io_with_faults()}),
     E = <<"e">>,
     [ok = ra_log_snap_store:put(N, <<"a">>, E, {I, 1}, image(100), [])
      || I <- [1, 2, 3]],
     inject_failure(create),
-    %% this put rolls the file and the roll fails
-    ok = ra_log_snap_store:put(N, <<"a">>, E, {4, 1}, image(100), []),
+    %% the roll fails
+    ok = ra_log_snap_store:roll(N),
+    ?assertEqual({degraded, [no_active_file]}, ra_log_snap_store:status(N)),
     ?assertMatch({error, _},
-                 ra_log_snap_store:put(N, <<"a">>, E, {5, 1}, image(100), [])),
-    ?assertMatch({ok, #{idx := 4}}, ra_log_snap_store:lookup(N, <<"a">>)),
+                 ra_log_snap_store:put(N, <<"a">>, E, {4, 1}, image(100), [])),
+    ?assertMatch({ok, #{idx := 3}}, ra_log_snap_store:lookup(N, <<"a">>)),
     clear_failure(),
     Img = image(100),
-    ok = ra_log_snap_store:put(N, <<"a">>, E, {6, 1}, Img, []),
-    {ok, Img, []} = ra_log_snap_store:read(N, <<"a">>, {6, 1}),
+    ok = ra_log_snap_store:put(N, <<"a">>, E, {5, 1}, Img, []),
+    {ok, Img, []} = ra_log_snap_store:read(N, <<"a">>, {5, 1}),
+    ?assertEqual(ok, ra_log_snap_store:status(N)),
     ok.
 
 %% the failure is of the batch only, so the file after it can be created: the
@@ -601,32 +604,24 @@ delete_is_ordered_before_later_puts(Config) ->
     ok.
 
 %% The first file holds a1 (dead, later replaced by a2), a2, b and c in four
-%% batches of one 4KB block each and is rolled by the fourth.
+%% batches of one 4KB block each. It is damaged and then rolled, so it is
+%% damaged when it is retired.
 rolled_file_with_a_hole(Config, Corrupt) ->
-    Self = self(),
-    N = start(Config, #{min_file_bytes => 16384,
-                        io => io_blocking_sync(Self)}),
+    N = start(Config, #{}),
     E = <<"e">>,
     ok = ra_log_snap_store:put(N, <<"a">>, E, {1, 1}, image(100), []),
     A2 = image(100),
     ok = ra_log_snap_store:put(N, <<"a">>, E, {2, 1}, A2, []),
     B = image(100),
     ok = ra_log_snap_store:put(N, <<"b">>, E, {1, 1}, B, []),
-    block_syncs(),
     C = image(100),
-    _ = spawn(fun () ->
-                      Self ! {put_c, ra_log_snap_store:put(N, <<"c">>, E, {1, 1},
-                                                           C, [])}
-              end),
-    receive in_sync -> ok after 5000 -> ct:fail(put_not_in_sync) end,
-    %% damage the file before the retiring of it starts
+    ok = ra_log_snap_store:put(N, <<"c">>, E, {1, 1}, C, []),
     [File] = filelib:wildcard(filename:join(?config(store_dir, Config),
                                             "*.snap")),
     {ok, Fd} = file:open(File, [read, write, raw, binary]),
     ok = Corrupt(Fd),
     ok = file:close(Fd),
-    unblock_syncs(),
-    receive {put_c, ok} -> ok after 5000 -> ct:fail(no_put_reply) end,
+    ok = ra_log_snap_store:roll(N),
     {N, File, A2, B, C}.
 
 retire_skips_an_invalid_record_and_copies_the_rest(Config) ->
@@ -642,7 +637,7 @@ retire_skips_an_invalid_record_and_copies_the_rest(Config) ->
      || {UId, IdxTerm, Img} <- [{<<"a">>, {2, 1}, A2}, {<<"b">>, {1, 1}, B},
                                 {<<"c">>, {1, 1}, C}]],
     ok = ra_log_snap_store:stop(N),
-    N = start(Config, #{min_file_bytes => 16384}),
+    N = start(Config, #{}),
     [?assertMatch({ok, Img, []}, ra_log_snap_store:read(N, UId, IdxTerm))
      || {UId, IdxTerm, Img} <- [{<<"a">>, {2, 1}, A2}, {<<"b">>, {1, 1}, B},
                                 {<<"c">>, {1, 1}, C}]],
@@ -677,12 +672,12 @@ retire_open_error_backs_off(Config) ->
                                     false -> file:open(Path, [read, raw, binary])
                                 end
                         end},
-    N = start(Config, #{min_file_bytes => 16384, io => IO}),
+    N = start(Config, #{io => IO}),
     inject_failure(open_read),
     E = <<"e">>,
-    %% the fourth block rolls the file
     [ok = ra_log_snap_store:put(N, <<"a">>, E, {I, 1}, image(100), [])
      || I <- [1, 2, 3, 4]],
+    ok = ra_log_snap_store:roll(N),
     timer:sleep(100),
     Pid = whereis(N),
     {reductions, R0} = process_info(Pid, reductions),
@@ -700,6 +695,26 @@ retire_open_error_backs_off(Config) ->
     clear_failure(),
     %% it does retry
     wait_quiescent(N),
+    ok.
+
+%% Copying the live data forward in small batches pads each batch to a block.
+%% With a handful of live members the padded copies made a file as big as the
+%% one being retired, which was rolled and retired in turn, for ever.
+copying_live_data_forward_does_not_roll_forever(Config) ->
+    N = start(Config, #{min_file_bytes => 16384, retire_chunk_bytes => 4096}),
+    E = <<"e">>,
+    Images = [{integer_to_binary(I), image(1000)} || I <- lists:seq(1, 6)],
+    [ok = ra_log_snap_store:put(N, UId, E, {1, 1}, Img, []) || {UId, Img} <- Images],
+    ok = ra_log_snap_store:roll(N),
+    wait_quiescent(N),
+    %% and it stays quiet
+    #{rolls := Rolls, retired_files := Retired} = ra_log_snap_store:info(N),
+    timer:sleep(300),
+    ?assertMatch(#{rolls := Rolls, retired_files := Retired},
+                 ra_log_snap_store:info(N)),
+    ?assert(Rolls =< 3),
+    [?assertMatch({ok, Img, []}, ra_log_snap_store:read(N, UId, {1, 1}))
+     || {UId, Img} <- Images],
     ok.
 
 %% a reconcile used to end the write of the batch it was in, so members
