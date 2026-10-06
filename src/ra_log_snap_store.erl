@@ -61,6 +61,7 @@
          release/3,
          delete/3,
          info/1,
+         status/1,
          stop/1]).
 
 -export([init/1,
@@ -77,6 +78,58 @@
 -define(REC_HDR, 9).
 -define(UNKNOWN_LEN, 16#FFFFFFFFFFFFFFFF).
 -define(DIR_KEY, '$dir').
+
+-define(C_PUTS, 1).
+-define(C_BATCHES, 2).
+-define(C_BYTES_WRITTEN, 3).
+-define(C_COPIES, 4).
+-define(C_ROLLS, 5).
+-define(C_RETIRED_FILES, 6).
+-define(C_RETIRE_BLOCKED, 7).
+-define(C_ERRORS, 8).
+-define(C_STALE_PUTS, 9).
+-define(C_CORRUPT_RECORDS, 10).
+-define(C_FSYNC_TIME_US, 11).
+-define(C_LIVE_BYTES, 12).
+-define(C_ENTRIES, 13).
+-define(C_FILES, 14).
+-define(C_DEGRADED, 15).
+-define(C_RECOVERY_TIME_MS, 16).
+-define(COUNTER_FIELDS,
+        [{puts, ?C_PUTS, counter,
+          "Snapshots appended to the snapshot log"},
+         {batches, ?C_BATCHES, counter,
+          "Batches written (one fsync each)"},
+         {bytes_written, ?C_BYTES_WRITTEN, counter,
+          "Bytes appended, including records copied forward and padding"},
+         {copies, ?C_COPIES, counter,
+          "Records copied forward out of files that are being retired"},
+         {rolls, ?C_ROLLS, counter,
+          "Files rolled over"},
+         {retired_files, ?C_RETIRED_FILES, counter,
+          "Files retired and deleted"},
+         {retire_blocked, ?C_RETIRE_BLOCKED, counter,
+          "Files kept because snapshots in them could not be copied out"},
+         {errors, ?C_ERRORS, counter,
+          "Batches that failed to be written or files that could not be "
+          "created"},
+         {stale_puts, ?C_STALE_PUTS, counter,
+          "Snapshots refused as older than the member's current one"},
+         {corrupt_records, ?C_CORRUPT_RECORDS, counter,
+          "Invalid records skipped when recovering or retiring files"},
+         {fsync_time_us, ?C_FSYNC_TIME_US, counter,
+          "Microseconds spent writing and syncing batches"},
+         {live_bytes, ?C_LIVE_BYTES, gauge,
+          "Bytes of the snapshots currently live"},
+         {entries, ?C_ENTRIES, gauge,
+          "Members with a snapshot in the log"},
+         {files, ?C_FILES, gauge,
+          "Snapshot log files on disk"},
+         {degraded, ?C_DEGRADED, gauge,
+          "1 if the snapshot log is unhealthy, see ra_log_snap_store:status/1"},
+         {recovery_time_ms, ?C_RECOVERY_TIME_MS, gauge,
+          "Time taken to recover the log files when it started"}
+        ]).
 
 -define(MIN_FILE_BYTES, 4 * ?ALIGN).
 -define(DEFAULT_MIN_FILE_BYTES, 64 * 1024 * 1024).
@@ -116,7 +169,13 @@
          rolled = [] :: [{non_neg_integer(), non_neg_integer()}],
          retire :: undefined | #retire{},
          retire_token = false :: boolean(),
-         counters = #{} :: #{atom() => non_neg_integer()}}).
+         cref :: counters:counters_ref(),
+         %% why the log is unhealthy, if it is
+         health = [] :: [atom()],
+         last_failed = false :: boolean(),
+         retire_failing = false :: boolean(),
+         %% files kept because they hold snapshots that could not be copied
+         blocked = [] :: [non_neg_integer()]}).
 
 -opaque state() :: #?MODULE{}.
 -export_type([state/0]).
@@ -217,6 +276,8 @@ migrate_out(#{dir := Dir, data_dir := DataDir} = Config) ->
     Tid = ets:new(snap_store_migration, [set, private]),
     try
         State = recover(#?MODULE{name = migration,
+                                 cref = counters:new(length(?COUNTER_FIELDS),
+                                                     [write_concurrency]),
                                  dir = Dir,
                                  tid = Tid,
                                  min_file_bytes = 1,
@@ -372,6 +433,18 @@ delete(Name, UId, Epoch) ->
 info(Name) ->
     gen_batch_server:call(Name, info, infinity).
 
+%% @doc Whether the snapshot log is healthy. Reasons it is not: it has no file
+%% to write to (it could not create one after a failure), the last batch
+%% failed to be written, files could not be read to retire them, or files are
+%% being kept because snapshots in them could not be copied out. The same is
+%% in the `degraded' counter, which is 1 when this is not `ok'.
+-spec status(atom()) -> ok | {degraded, [atom()]}.
+status(Name) ->
+    case info(Name) of
+        #{health := []} -> ok;
+        #{health := Reasons} -> {degraded, Reasons}
+    end.
+
 %%%===================================================================
 %%% gen_batch_server callbacks
 %%%===================================================================
@@ -383,7 +456,9 @@ init(#{name := Name, dir := Dir} = Config) ->
     %% once it is complete
     RecTid = ets:new(snap_store_recovery, [set, private]),
     Registry = maps:get(registry, Config, undefined),
+    CRef = new_counters(Name, maps:get(system, Config, undefined)),
     State0 = #?MODULE{name = Name,
+                      cref = CRef,
                       dir = Dir,
                       tid = RecTid,
                       %% never so small that copying the live data forward
@@ -402,7 +477,10 @@ init(#{name := Name, dir := Dir} = Config) ->
                                          undefined -> undefined
                                      end,
                       no = 0},
+    RecoveryStart = erlang:monotonic_time(millisecond),
     State1 = recover(State0),
+    counters:put(CRef, ?C_RECOVERY_TIME_MS,
+                 erlang:monotonic_time(millisecond) - RecoveryStart),
     Tid = ets:new(Name, [named_table, protected, set,
                          {read_concurrency, true}]),
     true = ets:insert(Tid, ets:tab2list(RecTid)),
@@ -417,7 +495,7 @@ init(#{name := Name, dir := Dir} = Config) ->
     State2 = State1#?MODULE{tid = Tid},
     case new_active(State2) of
         {ok, State3} ->
-            {ok, schedule_retire(State3)};
+            {ok, schedule_retire(refresh(State3))};
         {error, Reason, _} ->
             {stop, {cannot_create_snapshot_store_file, Reason}}
     end.
@@ -430,7 +508,7 @@ handle_batch(Ops, State0) ->
                   {[R | Acc], S1}
           end, {[], State0}, split_at_barriers(Ops)),
     {ok, lists:append(lists:reverse(Replies)),
-     schedule_retire(maybe_roll(State))}.
+     schedule_retire(refresh(maybe_roll(State)))}.
 
 %% Reconciling and deleting a member are answered in order with the puts that
 %% came before, and not after any that came later, so the operations of a batch
@@ -468,9 +546,10 @@ handle_group(Ops, State0) ->
     {Replies2, State4} = run_others(Others, State3),
     {Replies0 ++ Replies1 ++ Replies2, State4}.
 
-terminate(_Reason, #?MODULE{fd = Fd, retire = Retire,
+terminate(_Reason, #?MODULE{name = Name, fd = Fd, retire = Retire,
                             registry_key = RegKey}) ->
     RegKey == undefined orelse persistent_term:erase(RegKey),
+    ?CATCH(ra_counters:delete(Name)),
     _ = close(Fd),
     case Retire of
         #retire{fd = RFd} -> _ = close(RFd);
@@ -578,7 +657,7 @@ write_batch(_Copies, Puts, #?MODULE{fd = undefined} = State0) ->
         {error, Reason, State1} ->
             {[{reply, From, {error, Reason}}
               || {put, From, _, _, _, _, _, _} <- Puts],
-             incr(errors, State1)}
+             incr(errors, State1#?MODULE{last_failed = true})}
     end;
 write_batch([], [], #?MODULE{} = State) ->
     {[], finish_retire(State)};
@@ -587,11 +666,16 @@ write_batch(Copies, Puts, #?MODULE{no = No, off = Off0, seq = Seq0,
     Items = [{copy, C} || C <- Copies] ++ [{put, P} || P <- Puts],
     {IO, Applies, Off1, Seq1} = encode_items(Items, No, Off0, Seq0),
     Bytes = Off1 - Off0,
-    case do_write(State0, Fd, Off0, IO) of
+    WriteStart = erlang:monotonic_time(microsecond),
+    WriteRes = do_write(State0, Fd, Off0, IO),
+    incr(fsync_time_us, erlang:monotonic_time(microsecond) - WriteStart,
+         State0),
+    case WriteRes of
         ok ->
             State1 = apply_entries(Applies, State0),
             State2 = State1#?MODULE{off = Off1,
-                                    seq = Seq1},
+                                    seq = Seq1,
+                                    last_failed = false},
             State3 = incr(puts, length(Puts),
                           incr(copies, length(Copies),
                                incr(bytes_written, Bytes,
@@ -611,7 +695,7 @@ write_batch(Copies, Puts, #?MODULE{no = No, off = Off0, seq = Seq0,
             State2 = abandon_file(State1, Off0),
             {[{reply, From, {error, Reason}}
               || {put, From, _, _, _, _, _, _} <- Puts],
-             incr(errors, State2)}
+             incr(errors, State2#?MODULE{last_failed = true})}
     end.
 
 do_write(State, Fd, Off, IO) ->
@@ -739,14 +823,44 @@ run_others(Others, State) ->
       end, {[], State}, Others),
     {lists:reverse(Replies), State1}.
 
-do_info(#?MODULE{live_bytes = Live, off = Off, no = No, rolled = Rolled,
-                 counters = Counters, retire = Retire, fd = Fd}) ->
+do_info(#?MODULE{cref = CRef, live_bytes = Live, off = Off, no = No,
+                 rolled = Rolled, retire = Retire, fd = Fd, health = Health}) ->
+    Counters = maps:from_list([{Field, counters:get(CRef, Idx)}
+                               || {Field, Idx, _, _} <- ?COUNTER_FIELDS]),
     Counters#{live_bytes => Live,
               active_file => No,
               active_offset => Off,
               rolled_files => length(Rolled),
               retiring => Retire =/= undefined,
-              has_active_file => Fd =/= undefined}.
+              has_active_file => Fd =/= undefined,
+              health => Health}.
+
+%% Brings the gauges and the health up to date after a batch, logging when the
+%% health changes.
+refresh(#?MODULE{cref = CRef, tid = Tid, live_bytes = Live, rolled = Rolled,
+                 fd = Fd, name = Name, health = Old} = State) ->
+    counters:put(CRef, ?C_LIVE_BYTES, Live),
+    counters:put(CRef, ?C_ENTRIES, ets:info(Tid, size) - 1),
+    counters:put(CRef, ?C_FILES, length(Rolled) +
+                 case Fd of undefined -> 0; _ -> 1 end),
+    Health = health(State),
+    counters:put(CRef, ?C_DEGRADED, case Health of [] -> 0; _ -> 1 end),
+    case Health of
+        Old ->
+            ok;
+        [] ->
+            ?NOTICE("ra_log_snap_store: ~ts: healthy again", [Name]);
+        _ ->
+            ?ERROR("ra_log_snap_store: ~ts: unhealthy: ~w", [Name, Health])
+    end,
+    State#?MODULE{health = Health}.
+
+health(#?MODULE{fd = Fd, last_failed = LastFailed,
+                retire_failing = RetireFailing, blocked = Blocked}) ->
+    [no_active_file || Fd == undefined] ++
+        [write_errors || LastFailed] ++
+        [retire_read_errors || RetireFailing] ++
+        [files_blocked || Blocked =/= []].
 
 %%%===================================================================
 %%% rolling and retiring
@@ -874,7 +988,8 @@ retire_scan(#?MODULE{retire = undefined, rolled = [{No, Limit} | _],
 retire_scan(#?MODULE{retire = #retire{no = No, fd = Fd, off = Off,
                                       limit = Limit} = R,
                      retire_chunk = Chunk, live_fun = LiveFun} = State) ->
-    {Recs, Next, Status} = read_records(Fd, Off, Limit, Chunk),
+    {Recs, Next, Status, Skipped} = read_records(Fd, Off, Limit, Chunk),
+    counters:add(State#?MODULE.cref, ?C_CORRUPT_RECORDS, Skipped),
     {Copies, State1} =
         lists:foldl(
           fun ({RecOff, _TL, #{uid := UId, epoch := Epoch} = F}, {Acc, S}) ->
@@ -896,7 +1011,8 @@ retire_scan(#?MODULE{retire = #retire{no = No, fd = Fd, off = Off,
           end, {[], State}, Recs),
     State2 = case Status of
                  cont ->
-                     State1#?MODULE{retire = R#retire{off = Next}};
+                     State1#?MODULE{retire = R#retire{off = Next},
+                                    retire_failing = false};
                  io_error ->
                      %% could not read, try again from the same place later
                      ?ERROR("ra_log_snap_store: ~ts: read error retiring file "
@@ -908,7 +1024,8 @@ retire_scan(#?MODULE{retire = #retire{no = No, fd = Fd, off = Off,
                      %% cannot get past). It is deleted once the copies are
                      %% durable, if nothing still refers to it
                      State1#?MODULE{retire = R#retire{off = Next,
-                                                      limit = done}}
+                                                      limit = done},
+                                    retire_failing = false}
              end,
     {lists:reverse(Copies), State2}.
 
@@ -917,7 +1034,7 @@ retire_later(#?MODULE{retire_token = true} = State) ->
     State;
 retire_later(State) ->
     erlang:send_after(?RETIRE_RETRY_MS, self(), retire_step),
-    State#?MODULE{retire_token = true}.
+    State#?MODULE{retire_token = true, retire_failing = true}.
 
 %% Called once a batch (including any copies) is durable.
 finish_retire(#?MODULE{retire = #retire{no = No, fd = Fd, limit = done},
@@ -939,7 +1056,8 @@ finish_retire(#?MODULE{retire = #retire{no = No, fd = Fd, limit = done},
                    "could not be copied out of it, keeping it",
                    [State#?MODULE.name, No, Refs]),
             incr(retire_blocked,
-                 State#?MODULE{retire = undefined, rolled = Rolled1})
+                 State#?MODULE{retire = undefined, rolled = Rolled1,
+                               blocked = lists:usort([No | State#?MODULE.blocked])})
     end;
 finish_retire(State) ->
     State.
@@ -1018,7 +1136,9 @@ recover_file(#?MODULE{dir = Dir} = State, No, Limit) ->
     end.
 
 recover_loop(State, No, Fd, Off, Limit, MaxSeq) ->
-    {Recs, Next, Status} = read_records(Fd, Off, Limit, 4 * 1024 * 1024),
+    {Recs, Next, Status, Skipped} = read_records(Fd, Off, Limit,
+                                                 4 * 1024 * 1024),
+    counters:add(State#?MODULE.cref, ?C_CORRUPT_RECORDS, Skipped),
     MaxSeq1 = lists:foldl(
                 fun ({RecOff, TL, F}, Max) ->
                         recover_record(State, No, RecOff, TL, F),
@@ -1137,13 +1257,13 @@ read_record(Dir, No, Off, TL, ImgLen, IdxLen) ->
 %% was reached or `bad' if an invalid or torn record was found (the rest of
 %% the file is ignored). Returns the offset to continue from.
 read_records(_Fd, Off, Limit, _Chunk) when Off >= Limit ->
-    {[], Off, eof};
+    {[], Off, eof, 0};
 read_records(Fd, Off, Limit, Chunk) ->
     ReadLen = min(Chunk, Limit - Off),
     case file:pread(Fd, Off, ReadLen) of
         {ok, Bin} ->
-            case parse_records(Bin, 0, Off, Limit, []) of
-                {[], Next, more} when Next == Off ->
+            case parse_records(Bin, 0, Off, Limit, [], 0) of
+                {[], Next, more, _} when Next == Off ->
                     %% not even one whole record fit in the chunk, or the file
                     %% ends inside a record
                     case Bin of
@@ -1154,51 +1274,53 @@ read_records(Fd, Off, Limit, Chunk) ->
                             read_records(Fd, Off, Limit,
                                          ?REC_HDR + Len);
                         _ ->
-                            {[], Off, bad}
+                            {[], Off, bad, 0}
                     end;
-                {Recs, Next, more} ->
-                    {Recs, Next, cont};
-                {Recs, Next, Status} ->
-                    {Recs, Next, Status}
+                {Recs, Next, more, Skipped} ->
+                    {Recs, Next, cont, Skipped};
+                {Recs, Next, Status, Skipped} ->
+                    {Recs, Next, Status, Skipped}
             end;
         eof ->
-            {[], Off, bad};
+            {[], Off, bad, 0};
         {error, _} ->
-            {[], Off, io_error}
+            {[], Off, io_error, 0}
     end.
 
-parse_records(Bin, Rel, Base, Limit, Acc) ->
+parse_records(Bin, Rel, Base, Limit, Acc, Skipped) ->
     Abs = Base + Rel,
     case Bin of
         _ when Abs >= Limit ->
-            {lists:reverse(Acc), Abs, eof};
+            {lists:reverse(Acc), Abs, eof, Skipped};
         <<_:Rel/binary, Type:8, Len:32, Crc:32, Rest/binary>> ->
             TL = ?REC_HDR + Len,
             case Rest of
                 _ when Abs + TL > Limit ->
-                    {lists:reverse(Acc), Abs, bad};
+                    {lists:reverse(Acc), Abs, bad, Skipped};
                 <<Body:Len/binary, _/binary>> ->
                     case parse_body(Type, Len, Crc, Body) of
                         {put, Fields} ->
                             parse_records(Bin, Rel + TL, Base, Limit,
-                                          [{Abs, TL, Fields} | Acc]);
+                                          [{Abs, TL, Fields} | Acc], Skipped);
                         pad ->
-                            parse_records(Bin, Rel + TL, Base, Limit, Acc);
+                            parse_records(Bin, Rel + TL, Base, Limit, Acc,
+                                          Skipped);
                         bad when Type == ?PUT ->
                             %% a record that does not validate but whose
                             %% length fits: skip it, the ones after it are
                             %% independent
                             ?WARN("ra_log_snap_store: skipping invalid "
                                   "record at offset ~b", [Abs]),
-                            parse_records(Bin, Rel + TL, Base, Limit, Acc);
+                            parse_records(Bin, Rel + TL, Base, Limit, Acc,
+                                          Skipped + 1);
                         bad ->
-                            {lists:reverse(Acc), Abs, bad}
+                            {lists:reverse(Acc), Abs, bad, Skipped}
                     end;
                 _ ->
-                    {lists:reverse(Acc), Abs, more}
+                    {lists:reverse(Acc), Abs, more, Skipped}
             end;
         _ ->
-            {lists:reverse(Acc), Abs, more}
+            {lists:reverse(Acc), Abs, more, Skipped}
     end.
 
 parse_body(?PAD, Len, 0, _Body) when Len >= 1 ->
@@ -1305,5 +1427,30 @@ io_sync(_, Fd) -> ra_file:sync(Fd).
 incr(Key, State) ->
     incr(Key, 1, State).
 
-incr(Key, N, #?MODULE{counters = C} = State) ->
-    State#?MODULE{counters = C#{Key => maps:get(Key, C, 0) + N}}.
+incr(Key, N, #?MODULE{cref = CRef} = State) ->
+    counters:add(CRef, cidx(Key), N),
+    State.
+
+cidx(puts) -> ?C_PUTS;
+cidx(batches) -> ?C_BATCHES;
+cidx(bytes_written) -> ?C_BYTES_WRITTEN;
+cidx(copies) -> ?C_COPIES;
+cidx(rolls) -> ?C_ROLLS;
+cidx(retired_files) -> ?C_RETIRED_FILES;
+cidx(retire_blocked) -> ?C_RETIRE_BLOCKED;
+cidx(errors) -> ?C_ERRORS;
+cidx(stale_puts) -> ?C_STALE_PUTS;
+cidx(corrupt_records) -> ?C_CORRUPT_RECORDS;
+cidx(fsync_time_us) -> ?C_FSYNC_TIME_US.
+
+%% registered with ra_counters like the counters of the WAL, falling back to
+%% private ones when there is no seshat (e.g. unit tests of the store)
+new_counters(Name, System) ->
+    ?CATCH(ra_counters:delete(Name)),
+    try
+        ra_counters:new(Name, ?COUNTER_FIELDS,
+                        #{ra_system => System, module => ?MODULE})
+    catch
+        _:_ ->
+            counters:new(length(?COUNTER_FIELDS), [write_concurrency])
+    end.

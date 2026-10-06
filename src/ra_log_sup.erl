@@ -131,6 +131,7 @@ snap_store_children(#{snapshot_store := StoreCfg,
                         filename:join(DataDir, ra_lib:to_list(UId)))
               end,
     Conf = #{name => Name,
+             system => System,
              dir => filename:join(DataDir, "snapshot_store"),
              min_file_bytes => MinFileBytes,
              live_fun => LiveFun},

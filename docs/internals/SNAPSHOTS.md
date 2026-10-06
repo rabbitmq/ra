@@ -252,6 +252,38 @@ instead.
 - `min_file_bytes` is raised to at least four blocks (16KB): with less, copying
 the live data of a file forward could make the next file roll immediately.
 
+### Metrics and health
+
+The log registers counters with `ra_counters`, like the WAL does, under its
+process name (`ra_counters:overview(Name)`, labelled with the system and module
+so they are exported with the other Ra metrics). `ra:overview(System)` also
+returns `snapshot_store` with the same values and the health when it is
+configured.
+
+| counter | |
+|---|---|
+| `puts` | snapshots appended |
+| `batches` | batches written, one fsync each; `puts / batches` is how well it batches |
+| `bytes_written` | bytes appended, including records copied forward and padding |
+| `copies` | records copied forward when retiring files; `copies / puts` is the extra work of reclaiming space |
+| `rolls`, `retired_files` | files rolled over and deleted |
+| `retire_blocked` | files kept because snapshots in them could not be copied out |
+| `errors` | batches that failed to be written, or files that could not be created |
+| `stale_puts` | snapshots refused as older than the member's current one |
+| `corrupt_records` | invalid records skipped when recovering or retiring |
+| `fsync_time_us` | time spent writing and syncing; divide by `batches` for the average |
+| `live_bytes`, `entries`, `files` | gauges: size of the live snapshots, members with one, files on disk |
+| `recovery_time_ms` | gauge: how long recovering the files took at start |
+| `degraded` | gauge: 1 if the log is unhealthy |
+
+`ra_log_snap_store:status/1` says why it is unhealthy, one or more of:
+`no_active_file` (it could not create a file after a failure so puts fail, and
+members fall back to directories), `write_errors` (the last batch could not be
+written), `retire_read_errors` (files could not be read to retire them, it is
+retrying), `files_blocked` (files are kept because snapshots in them could not
+be copied out, this lasts until restart and needs a look at the disk). Changes
+in health are logged. Alert on `degraded`.
+
 ### Turning it off
 
 Snapshots that exist only in the log would be invisible without it while their

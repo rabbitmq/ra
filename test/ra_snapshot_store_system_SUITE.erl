@@ -27,6 +27,7 @@ all_tests() ->
      system_restart_recovers_from_the_store,
      large_snapshots_use_directories,
      delete_server_removes_store_entry,
+     counters_and_overview,
      disabling_the_store_moves_snapshots_back_to_directories,
      lagging_follower_installs_snapshot_from_the_store
     ].
@@ -149,6 +150,28 @@ disabling_the_store_moves_snapshots_back_to_directories(Config) ->
     ?assertMatch({ok, [_ | _]}, file:list_dir(snapshots_dir(Config, a))),
     StoreDir = filename:join(?config(data_dir, Config), "snapshot_store"),
     ?assertNot(ra_log_snap_store:has_files(StoreDir)),
+    ok.
+
+counters_and_overview(Config) ->
+    Sys = ?config(sys, Config),
+    {ok, _} = start_system(Config),
+    [Id] = start_members(Config, [a], #{blob_size => 1000}),
+    ok = send_commands(Id, 30),
+    UId = uid(a),
+    wait_for(fun () -> store_idx(Sys, UId) >= 5 end),
+    %% registered with ra_counters like the other counters of the system
+    Counters = ra_counters:overview(store_name(Sys)),
+    ?assertMatch(#{puts := Puts, batches := B, entries := 1, degraded := 0,
+                   corrupt_records := 0}
+                   when Puts >= 1 andalso B >= 1, Counters),
+    Overview = ra:overview(Sys),
+    ?assertMatch(#{snapshot_store := #{puts := P, health := []}}
+                   when P >= 1, Overview),
+    ?assertEqual(ok, ra_log_snap_store:status(store_name(Sys))),
+    %% and not there when it is not configured
+    ok = ra_system:stop(Sys),
+    {ok, _} = start_system_without_store(Config),
+    ?assertNot(maps:is_key(snapshot_store, ra:overview(Sys))),
     ok.
 
 lagging_follower_installs_snapshot_from_the_store(Config) ->

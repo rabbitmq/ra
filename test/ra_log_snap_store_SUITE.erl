@@ -37,6 +37,8 @@ all_tests() ->
      fsync_error_unacked_record_ignored_after_restart,
      cannot_create_file_recovers,
      unknown_call_gets_an_error,
+     counters_count_what_happens,
+     status_follows_failures,
      duplicate_put_in_a_failed_batch_is_not_acked,
      delete_is_ordered_before_later_puts,
      retire_skips_an_invalid_record_and_copies_the_rest,
@@ -244,6 +246,9 @@ recovery_skips_an_invalid_record(Config) ->
     ok = file:pwrite(Fd, 4096 + 9 + 20, <<255>>),
     ok = file:close(Fd),
     N = start(Config, #{}),
+    %% found when recovering and again when the file is retired
+    #{corrupt_records := Corrupt} = ra_log_snap_store:info(N),
+    ?assert(Corrupt >= 1),
     {ok, Img, []} = ra_log_snap_store:read(N, <<"a">>, {1, 1}),
     ?assertEqual(not_found, ra_log_snap_store:lookup(N, <<"b">>)),
     {ok, Imgc, []} = ra_log_snap_store:read(N, <<"c">>, {1, 1}),
@@ -462,6 +467,42 @@ cannot_create_file_recovers(Config) ->
     {ok, Img, []} = ra_log_snap_store:read(N, <<"a">>, {6, 1}),
     ok.
 
+counters_count_what_happens(Config) ->
+    N = start(Config, #{}),
+    E = <<"e">>,
+    [ok = ra_log_snap_store:put(N, <<"a">>, E, {I, 1}, image(100), [])
+     || I <- [1, 2, 3]],
+    ok = ra_log_snap_store:put(N, <<"b">>, E, {1, 1}, image(100), []),
+    ?assertEqual({error, stale},
+                 ra_log_snap_store:put(N, <<"b">>, E, {0, 1}, image(100), [])),
+    #{puts := 4, batches := Batches, stale_puts := 1, errors := 0,
+      bytes_written := Bytes, fsync_time_us := FsyncUs, live_bytes := Live,
+      health := []} = ra_log_snap_store:info(N),
+    ?assert(Batches >= 1),
+    ?assert(Bytes >= 4096),
+    ?assert(FsyncUs > 0),
+    ?assert(Live > 0),
+    ?assertEqual(ok, ra_log_snap_store:status(N)),
+    ok.
+
+status_follows_failures(Config) ->
+    N = start(Config, #{io => io_with_faults()}),
+    E = <<"e">>,
+    ok = ra_log_snap_store:put(N, <<"a">>, E, {1, 1}, image(100), []),
+    ?assertEqual(ok, ra_log_snap_store:status(N)),
+    inject_failure(pwrite),
+    ?assertEqual({error, eio},
+                 ra_log_snap_store:put(N, <<"a">>, E, {2, 1}, image(100), [])),
+    %% the batch failed and no new file could be made
+    ?assertEqual({degraded, [no_active_file, write_errors]},
+                 ra_log_snap_store:status(N)),
+    #{errors := 1} = ra_log_snap_store:info(N),
+    clear_failure(),
+    %% it recovers by itself with the next put
+    ok = ra_log_snap_store:put(N, <<"a">>, E, {3, 1}, image(100), []),
+    ?assertEqual(ok, ra_log_snap_store:status(N)),
+    ok.
+
 unknown_call_gets_an_error(Config) ->
     N = start(Config, #{}),
     ?assertEqual({error, unknown_request},
@@ -581,6 +622,7 @@ retire_never_deletes_a_file_that_is_still_referenced(Config) ->
                      maps:get(retire_blocked, ra_log_snap_store:info(N), 0) == 1
              end),
     ?assert(filelib:is_file(File)),
+    ?assertEqual({degraded, [files_blocked]}, ra_log_snap_store:status(N)),
     %% c was not damaged, it is still served from the file
     ?assertMatch({ok, C, []}, ra_log_snap_store:read(N, <<"c">>, {1, 1})),
     %% a2 was before the damage and was copied
