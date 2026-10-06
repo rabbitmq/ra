@@ -87,7 +87,7 @@
 -type transform_fun() :: fun ((ra:index(), ra_term(), ra_server:command()) -> term()).
 
 -type effect() ::
-    {delete_snapshot, Dir :: file:filename_all(), ra_idxterm()} |
+    {delete_snapshot, module(), Dir :: file:filename_all(), ra_idxterm()} |
     {monitor, process, log | snapshot_writer, pid()}.
 
 %% logs can have effects too so that they can be coordinated with other state
@@ -1075,15 +1075,15 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes,
             %% Delete old snapshot files. This is done as an effect
             %% so that if an old snapshot is still being replicated
             %% the cleanup can be delayed until it is safe.
-            DeleteCurrentSnap = {delete_snapshot,
-                                 ra_snapshot:directory(SnapState1, snapshot),
-                                 ra_snapshot:current(SnapState0)},
+            DeleteCurrentSnap =
+                ra_snapshot:delete_effect(SnapState1, snapshot,
+                                          ra_snapshot:current(SnapState0)),
             %% Also delete any checkpoints older than this snapshot.
             {SnapState, Checkpoints} =
                 ra_snapshot:take_older_checkpoints(SnapIdx, SnapState1),
-            CPEffects = [{delete_snapshot,
-                          ra_snapshot:directory(SnapState, checkpoint),
-                          Checkpoint} || Checkpoint <- Checkpoints],
+            CPEffects = [ra_snapshot:delete_effect(SnapState, checkpoint,
+                                                   Checkpoint)
+                         || Checkpoint <- Checkpoints],
             Effects0 = [DeleteCurrentSnap | CPEffects],
 
             LWIdxTerm =
@@ -1130,9 +1130,8 @@ handle_event({snapshot_written, {SnapIdx, _} = Snap, LiveIndexes,
             %% If we already have the maximum allowed number of checkpoints,
             %% remove some checkpoints to make space.
             {SnapState, CPs} = ra_snapshot:take_extra_checkpoints(SnapState1),
-            Effects = [{delete_snapshot,
-                        ra_snapshot:directory(SnapState, SnapKind),
-                        CP} || CP <- CPs],
+            Effects = [ra_snapshot:delete_effect(SnapState, SnapKind, CP)
+                       || CP <- CPs],
             {State0#?MODULE{snapshot_state = SnapState}, Effects}
     end;
 handle_event({snapshot_written, {Idx, Term} = Snap, _Indexes,
@@ -1144,9 +1143,7 @@ handle_event({snapshot_written, {Idx, Term} = Snap, _Indexes,
     ?INFO("~ts: old snapshot_written received for index ~b in term ~b
           current snapshot ~w, deleting old ~s",
            [LogId, Idx, Term, Current, SnapKind]),
-    Effects = [{delete_snapshot,
-                ra_snapshot:directory(SnapState, SnapKind),
-                Snap}],
+    Effects = [ra_snapshot:delete_effect(SnapState, SnapKind, Snap)],
     {State0, Effects};
 handle_event({snapshot_error, Snap, SnapKind, Error},
              #?MODULE{cfg =#cfg{log_id = LogId},
@@ -1227,9 +1224,8 @@ install_snapshot({SnapIdx, SnapTerm} = IdxTerm, MacMod, LiveIndexes,
 
     {SnapState, Checkpoints} =
         ra_snapshot:take_older_checkpoints(SnapIdx, SnapState0),
-    CPEffects = [{delete_snapshot,
-                  ra_snapshot:directory(SnapState, checkpoint),
-                  Checkpoint} || Checkpoint <- Checkpoints],
+    CPEffects = [ra_snapshot:delete_effect(SnapState, checkpoint, Checkpoint)
+                 || Checkpoint <- Checkpoints],
     SmallestLiveIndex = case ra_seq:first(LiveIndexes) of
                             undefined ->
                                 SnapIdx + 1;
@@ -1550,8 +1546,10 @@ read_config(Dir) ->
 delete_everything(#?MODULE{cfg = #cfg{uid = UId,
                                       names = Names,
                                       directory = Dir},
-                           snapshot_state = _SnapState} = Log) ->
+                           snapshot_state = SnapState} = Log) ->
     _ = close(Log),
+    %% snapshots that do not live in the member's directory
+    ?CATCH(ra_snapshot:delete_all(SnapState)),
     %% if there is a snapshot process pending it could cause the directory
     %% deletion to fail, best kill the snapshot process first
     ok = ra_log_ets:delete_mem_tables(Names, UId),

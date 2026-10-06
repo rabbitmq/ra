@@ -287,6 +287,11 @@
 -define(DEFAULT_TIMEOUT, 5000).
 
 -define(DEFAULT_SNAPSHOT_MODULE, ra_log_snapshot).
+%% biggest snapshot (with its live indexes) kept in the shared snapshot log
+-define(SNAPSHOT_STORE_MAX_SIZE, 16 * 1024).
+%% how long a member waits for a snapshot store that is restarting
+-define(SNAPSHOT_STORE_WAIT_MS, 15000).
+-define(SNAPSHOT_STORE_MIN_FILE_BYTES, 64 * 1024 * 1024).
 
 -define(DEFAULT_MAX_CHECKPOINTS, 10).
 

@@ -1768,7 +1768,7 @@ snapshot_written_after_installation(Config) ->
 
     [begin
          case E of
-             {delete_snapshot, Dir, S} ->
+             {delete_snapshot, _Mod, Dir, S} ->
                  ra_snapshot:delete(Dir, S);
              _ ->
                  ok
@@ -1820,7 +1820,7 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
 
     [begin
          case E of
-             {delete_snapshot, Dir, S} ->
+             {delete_snapshot, _Mod, Dir, S} ->
                  ra_snapshot:delete(Dir, S);
              _ ->
                  ok

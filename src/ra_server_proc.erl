@@ -1732,10 +1732,10 @@ handle_effect(leader, {send_snapshot, {_, ToNode} = To, {SnapState, _Id, Term}},
             SS = ra_server:update_peer(To, #{status => disconnected}, SS0),
             {State#state{server_state = SS}, Actions}
     end;
-handle_effect(_, {delete_snapshot, Dir, SnapshotRef}, _, State0, Actions) ->
+handle_effect(_, {delete_snapshot, Mod, Dir, SnapshotRef}, _, State0, Actions) ->
     %% delete snapshots in separate process
     _ = spawn(fun() ->
-                      ra_snapshot:delete(Dir, SnapshotRef)
+                      ra_snapshot:delete(Mod, Dir, SnapshotRef)
               end),
     {State0, Actions};
 handle_effect(_, {send_vote_requests, VoteRequests}, _, % EvtType

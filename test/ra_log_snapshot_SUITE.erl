@@ -14,6 +14,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("kernel/include/file.hrl").
 
 %%%===================================================================
 %%% Common Test callbacks
@@ -35,7 +36,9 @@ all_tests() ->
      read_invalid_version,
      recover_invalid_checksum,
      read_meta_data,
-     recover_same_as_read
+     recover_same_as_read,
+     recover_hand_built_file,
+     encode_decode_image
     ].
 
 groups() ->
@@ -190,6 +193,51 @@ recover_same_as_read(Config) ->
     SnapshotData = my_state,
     {ok, _} = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotData, true),
     {ok, SnapshotMeta, SnapshotData} = ra_log_snapshot:recover(Dir),
+    ok.
+
+recover_hand_built_file(Config) ->
+    %% a file made by hand, i.e. not by write/4, in the documented format
+    Dir = ?config(dir, Config),
+    File = filename:join(Dir, "snapshot.dat"),
+    SnapshotMeta = meta(33, 94, [{banana, node@jungle}]),
+    MetaBin = term_to_binary(SnapshotMeta),
+    Data = [<<(byte_size(MetaBin)):32/unsigned>>, MetaBin,
+            term_to_binary(my_state)],
+    Crc = erlang:crc32(Data),
+    ok = file:write_file(File, [<<"RASN", 1:8/unsigned, Crc:32/integer>>,
+                                Data]),
+    ?assertEqual({ok, SnapshotMeta, my_state}, ra_log_snapshot:recover(Dir)),
+    ?assertEqual(ok, ra_log_snapshot:validate(Dir)),
+    ?assertEqual({ok, SnapshotMeta}, ra_log_snapshot:read_meta(Dir)),
+    ok.
+
+encode_decode_image(Config) ->
+    Meta = meta(33, 94, [{banana, node@jungle}]),
+    State = crypto:strong_rand_bytes(5000),
+    {Image, Size} = ra_log_snapshot:encode(Meta, State),
+    Bin = iolist_to_binary(Image),
+    ?assertEqual(Size, byte_size(Bin)),
+    ?assertEqual({ok, Meta, State}, ra_log_snapshot:decode_image(Bin)),
+    ?assertEqual({ok, Meta}, ra_log_snapshot:meta_from_image(Bin)),
+    %% corrupting the body is detected
+    Skip = byte_size(Bin) - 1,
+    <<Head:Skip/binary, Last>> = Bin,
+    Bad = <<Head/binary, (Last bxor 16#FF)>>,
+    ?assertEqual({error, checksum_error}, ra_log_snapshot:decode_image(Bad)),
+    ?assertEqual({error, invalid_format},
+                 ra_log_snapshot:decode_image(<<"nope">>)),
+    ?assertEqual({error, invalid_format},
+                 ra_log_snapshot:meta_from_image(<<"nope">>)),
+    ?assertEqual({error, {invalid_version, 9}},
+                 ra_log_snapshot:decode_image(<<"RASN", 9, 0:32, 1>>)),
+    ?assertEqual({error, {invalid_version, 9}},
+                 ra_log_snapshot:meta_from_image(<<"RASN", 9, 0:32, 1>>)),
+    %% an image made by encode is byte-identical to the file write/4 makes
+    Dir = ?config(dir, Config),
+    {ok, Bytes} = ra_log_snapshot:write(Dir, Meta, State, false),
+    {ok, OnDisk} = file:read_file(filename:join(Dir, "snapshot.dat")),
+    ?assertEqual(Bytes, byte_size(OnDisk)),
+    ?assertEqual(Bin, OnDisk),
     ok.
 
 %% Utility

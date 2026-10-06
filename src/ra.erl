@@ -747,16 +747,33 @@ overview(System) ->
         Config ->
             #{names := #{segment_writer := SegWriter,
                          open_mem_tbls := OpenTbls,
-                         wal := Wal}} = Config,
-            #{node => node(),
-              servers => ra_directory:overview(System),
-              %% TODO:filter counter keys by system
-              counters => ra_counters:overview(),
-              wal => #{status => lists:nth(5, element(4, sys:get_status(Wal))),
-                       open_mem_tables => ets:info(OpenTbls, size)
-                      },
-              segment_writer => ra_log_segment_writer:overview(SegWriter)
-             }
+                         wal := Wal} = Names} = Config,
+            Overview = #{node => node(),
+                         servers => ra_directory:overview(System),
+                         %% TODO:filter counter keys by system
+                         counters => ra_counters:overview(),
+                         wal => #{status => lists:nth(5, element(4, sys:get_status(Wal))),
+                                  open_mem_tables => ets:info(OpenTbls, size)
+                                 },
+                         segment_writer => ra_log_segment_writer:overview(SegWriter)
+                        },
+            case Config of
+                #{snapshot_store := _} ->
+                    Overview#{snapshot_store =>
+                                  snapshot_store_overview(Names, System)};
+                _ ->
+                    Overview
+            end
+    end.
+
+snapshot_store_overview(Names, System) ->
+    Name = maps:get(snap_store, Names,
+                    maps:get(snap_store, ra_system:derive_names(System))),
+    try
+        ra_log_snap_store:info(Name)
+    catch
+        exit:_ ->
+            unavailable
     end.
 
 %% @doc Submits a command to a ra server. Returns after the command has
