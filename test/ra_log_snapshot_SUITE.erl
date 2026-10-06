@@ -37,10 +37,7 @@ all_tests() ->
      recover_invalid_checksum,
      read_meta_data,
      recover_same_as_read,
-     padded_aligned,
-     padded_boundary,
-     recover_unpadded_file,
-     padding_checksum_error,
+     recover_hand_built_file,
      encode_decode_image
     ].
 
@@ -198,45 +195,8 @@ recover_same_as_read(Config) ->
     {ok, SnapshotMeta, SnapshotData} = ra_log_snapshot:recover(Dir),
     ok.
 
-padded_aligned(Config) ->
-    Dir = ?config(dir, Config),
-    File = filename:join(Dir, "snapshot.dat"),
-    SnapshotMeta = meta(33, 94, [{banana, node@jungle}]),
-    [begin
-         State = crypto:strong_rand_bytes(Size),
-         {ok, Bytes} = ra_log_snapshot:write(Dir, SnapshotMeta, State, true),
-         {ok, #file_info{size = FileSize}} = file:read_file_info(File),
-         ?assertEqual(FileSize, Bytes),
-         ?assertEqual({ok, FileSize}, ra_log_snapshot:get_size(Dir)),
-         ?assertEqual(0, FileSize rem 4096),
-         ?assertEqual({ok, SnapshotMeta, State},
-                      ra_log_snapshot:recover(Dir)),
-         ?assertEqual(ok, ra_log_snapshot:validate(Dir)),
-         ?assertEqual({SnapshotMeta, State}, read(Dir))
-     end || Size <- [0, 1, 100, 4000, 4096, 5000, 20000]],
-    ok.
-
-padded_boundary(Config) ->
-    %% find a state size that produces an exactly aligned file with no
-    %% padding and check neighbours either side
-    Dir = ?config(dir, Config),
-    SnapshotMeta = meta(33, 94, [{banana, node@jungle}]),
-    Sz = fun(N) ->
-                 {ok, B} = ra_log_snapshot:write(Dir, SnapshotMeta,
-                                                 binary:copy(<<0>>, N), false),
-                 B
-         end,
-    %% unpadded size = 9 + 4 + meta + term overhead + N
-    Base = byte_size(term_to_binary(SnapshotMeta)) + 13 +
-        (byte_size(term_to_binary(<<>>))),
-    Exact = 4096 - Base,
-    ?assertEqual(4096, Sz(Exact)),
-    ?assertEqual(8192, Sz(Exact + 1)),
-    ?assertEqual(4096, Sz(Exact - 1)),
-    ok.
-
-recover_unpadded_file(Config) ->
-    %% files written before padding was introduced must still be readable
+recover_hand_built_file(Config) ->
+    %% a file made by hand, i.e. not by write/4, in the documented format
     Dir = ?config(dir, Config),
     File = filename:join(Dir, "snapshot.dat"),
     SnapshotMeta = meta(33, 94, [{banana, node@jungle}]),
@@ -251,35 +211,19 @@ recover_unpadded_file(Config) ->
     ?assertEqual({ok, SnapshotMeta}, ra_log_snapshot:read_meta(Dir)),
     ok.
 
-padding_checksum_error(Config) ->
-    Dir = ?config(dir, Config),
-    File = filename:join(Dir, "snapshot.dat"),
-    SnapshotMeta = meta(33, 94, [{banana, node@jungle}]),
-    {ok, 4096} = ra_log_snapshot:write(Dir, SnapshotMeta, my_state, true),
-    {ok, Fd} = file:open(File, [read, write, raw, binary]),
-    ok = file:pwrite(Fd, 4095, <<1>>),
-    ok = file:close(Fd),
-    ?assertEqual({error, checksum_error}, ra_log_snapshot:recover(Dir)),
-    ok.
-
-encode_decode_image(_Config) ->
+encode_decode_image(Config) ->
     Meta = meta(33, 94, [{banana, node@jungle}]),
     State = crypto:strong_rand_bytes(5000),
-    %% padded and unpadded images both round trip in memory
-    [begin
-         {Image, Size} = ra_log_snapshot:encode(Meta, State, Pad),
-         Bin = iolist_to_binary(Image),
-         ?assertEqual(Size, byte_size(Bin)),
-         ?assertEqual(Pad, Size rem 4096 == 0),
-         ?assertEqual({ok, Meta, State}, ra_log_snapshot:decode_image(Bin)),
-         ?assertEqual({ok, Meta}, ra_log_snapshot:meta_from_image(Bin)),
-         %% corrupting the body is detected
-         Skip = byte_size(Bin) - 1,
-         <<Head:Skip/binary, Last>> = Bin,
-         Bad = <<Head/binary, (Last bxor 16#FF)>>,
-         ?assertEqual({error, checksum_error},
-                      ra_log_snapshot:decode_image(Bad))
-     end || Pad <- [true, false]],
+    {Image, Size} = ra_log_snapshot:encode(Meta, State),
+    Bin = iolist_to_binary(Image),
+    ?assertEqual(Size, byte_size(Bin)),
+    ?assertEqual({ok, Meta, State}, ra_log_snapshot:decode_image(Bin)),
+    ?assertEqual({ok, Meta}, ra_log_snapshot:meta_from_image(Bin)),
+    %% corrupting the body is detected
+    Skip = byte_size(Bin) - 1,
+    <<Head:Skip/binary, Last>> = Bin,
+    Bad = <<Head/binary, (Last bxor 16#FF)>>,
+    ?assertEqual({error, checksum_error}, ra_log_snapshot:decode_image(Bad)),
     ?assertEqual({error, invalid_format},
                  ra_log_snapshot:decode_image(<<"nope">>)),
     ?assertEqual({error, invalid_format},
@@ -288,13 +232,12 @@ encode_decode_image(_Config) ->
                  ra_log_snapshot:decode_image(<<"RASN", 9, 0:32, 1>>)),
     ?assertEqual({error, {invalid_version, 9}},
                  ra_log_snapshot:meta_from_image(<<"RASN", 9, 0:32, 1>>)),
-    %% an image written by encode is byte-identical to the file write/4 makes
-    Dir = ?config(dir, _Config),
+    %% an image made by encode is byte-identical to the file write/4 makes
+    Dir = ?config(dir, Config),
     {ok, Bytes} = ra_log_snapshot:write(Dir, Meta, State, false),
     {ok, OnDisk} = file:read_file(filename:join(Dir, "snapshot.dat")),
     ?assertEqual(Bytes, byte_size(OnDisk)),
-    {PaddedImage, _} = ra_log_snapshot:encode(Meta, State, true),
-    ?assertEqual(iolist_to_binary(PaddedImage), OnDisk),
+    ?assertEqual(Bin, OnDisk),
     ok.
 
 %% Utility

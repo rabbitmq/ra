@@ -19,7 +19,7 @@
          list/1,
          delete/1,
          indexes/1,
-         encode/3,
+         encode/2,
          decode_image/1,
          meta_from_image/1,
          sync/1,
@@ -38,7 +38,6 @@
 -define(MAGIC, "RASN").
 -define(VERSION, 1).
 -define(STORE_EPOCH, <<"1">>).
--define(ALIGN, 4096).
 
 -type file_err() :: ra_snapshot:file_err().
 -type meta() :: ra_snapshot:meta().
@@ -54,13 +53,12 @@ prepare(_Index, State) -> State.
 %% MetaData Len (unsigned 32)
 %% MetaData (binary)
 %% Snapshot Data (binary)
-%% Zero padding up to a multiple of 4096 bytes (covered by the checksum)
 %% @end
 
 -spec write(file:filename(), meta(), term(), Sync :: boolean()) ->
     {ok, non_neg_integer()} | {error, file_err()}.
 write(Dir, Meta, MacState, Sync) ->
-    {Image, Bytes} = encode(Meta, MacState, true),
+    {Image, Bytes} = encode(Meta, MacState),
     File = filename(Dir),
     case ra_lib:write_file(File, Image, Sync) of
         ok ->
@@ -85,7 +83,7 @@ write(Location, #{index := Idx, term := Term} = Meta, MacState, Indexes,
             IndexesBin = term_to_binary(Indexes),
             case Size0 + byte_size(IndexesBin) =< MaxSize of
                 true ->
-                    {Image, Size} = finish_image(Data, Size0, false),
+                    {Image, Size} = finish_image(Data, Size0),
                     case store_put(Name, UId, {Idx, Term},
                                    iolist_to_binary(Image), IndexesBin) of
                         ok ->
@@ -116,7 +114,7 @@ store_put(Name, UId, IdxTerm, Image, IndexesBin) ->
 
 write_directory(Location, Data, Size0, Sync) ->
     ok = ra_lib:make_dir(Location),
-    {Image, Bytes} = finish_image(Data, Size0, true),
+    {Image, Bytes} = finish_image(Data, Size0),
     case ra_lib:write_file(filename(Location), Image, Sync) of
         ok -> {ok, Bytes, directory};
         Err -> Err
@@ -186,15 +184,12 @@ indexes(Location) ->
 
 %% @doc encodes the complete snapshot file image (header, checksum, meta and
 %% machine state) without writing it anywhere. Returns the image and its size
-%% in bytes. When `Pad' is true the image is zero padded to a multiple of
-%% 4096 bytes so that many parallel writers do not leave partial tail pages
-%% that the file system / device has to merge. binary_to_term/1 ignores the
-%% trailing bytes and the checksum covers them so no format change is needed.
--spec encode(meta(), term(), Pad :: boolean()) ->
+%% in bytes.
+-spec encode(meta(), term()) ->
     {iodata(), non_neg_integer()}.
-encode(Meta, MacState, Pad) ->
+encode(Meta, MacState) ->
     {Data, Size} = encode_data(Meta, MacState),
-    finish_image(Data, Size, Pad).
+    finish_image(Data, Size).
 
 %% serialises the body of the image, the expensive part
 encode_data(Meta, MacState) ->
@@ -205,15 +200,9 @@ encode_data(Meta, MacState) ->
     Data = [<<(byte_size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
     {Data, 9 + iolist_size(Data)}.
 
-finish_image(Data0, Bytes0, Pad) ->
-    PadBytes = case Pad of
-                   true -> (?ALIGN - (Bytes0 rem ?ALIGN)) rem ?ALIGN;
-                   false -> 0
-               end,
-    Data = [Data0, <<0:(PadBytes * 8)>>],
+finish_image(Data, Size) ->
     Checksum = erlang:crc32(Data),
-    {[<<?MAGIC, ?VERSION:8/unsigned, Checksum:32/integer>>, Data],
-     Bytes0 + PadBytes}.
+    {[<<?MAGIC, ?VERSION:8/unsigned, Checksum:32/integer>>, Data], Size}.
 
 %% @doc validates and decodes a snapshot file image held in memory. The
 %% counterpart of recover/1 for images that did not come from a file.

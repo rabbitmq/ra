@@ -785,8 +785,7 @@ migrate_out_creates_snapshot_directories(Config) ->
                     fun (M, A) ->
                             MacState = crypto:strong_rand_bytes(1500),
                             Meta = snapshot_meta(R, 2),
-                            {Image, _} = ra_log_snapshot:encode(Meta, MacState,
-                                                                false),
+                            {Image, _} = ra_log_snapshot:encode(Meta, MacState),
                             Indexes = ra_seq:from_list([R, R + 3]),
                             ok = ra_log_snap_store:put(N, M, E, {R, 2}, Image,
                                                        Indexes),
@@ -826,7 +825,7 @@ migrate_out_skips_newer_directories_and_dead_members(Config) ->
                                     true),
     E = <<"e">>,
     [begin
-         {Image, _} = ra_log_snapshot:encode(snapshot_meta(50, 2), M, false),
+         {Image, _} = ra_log_snapshot:encode(snapshot_meta(50, 2), M),
          ok = ra_log_snap_store:put(N, M, E, {50, 2}, Image, [])
      end || M <- [<<"m1">>, <<"m2">>, <<"m3">>]],
     ok = ra_log_snap_store:stop(N),
@@ -858,7 +857,7 @@ migrate_out_replaces_a_partial_directory(Config) ->
     ok = ra_lib:make_dir(SnapshotsDir),
     Partial = ra_snapshot:make_snapshot_dir(SnapshotsDir, 50, 2),
     ok = ra_lib:make_dir(Partial),
-    {Image, _} = ra_log_snapshot:encode(snapshot_meta(50, 2), <<"state">>, false),
+    {Image, _} = ra_log_snapshot:encode(snapshot_meta(50, 2), <<"state">>),
     Whole = iolist_to_binary(Image),
     ok = file:write_file(filename:join(Partial, "snapshot.dat"),
                          binary:part(Whole, 0, byte_size(Whole) - 3)),
@@ -877,7 +876,7 @@ migrate_out_keeps_the_log_when_a_write_fails(Config) ->
     DataDir = filename:join(?config(priv_dir, Config), "data4"),
     ok = ra_lib:make_dir(DataDir),
     ok = ra_lib:make_dir(filename:join(DataDir, <<"m1">>)),
-    {Image, _} = ra_log_snapshot:encode(snapshot_meta(50, 2), <<"state">>, false),
+    {Image, _} = ra_log_snapshot:encode(snapshot_meta(50, 2), <<"state">>),
     ok = ra_log_snap_store:put(N, <<"m1">>, <<"e">>, {50, 2}, Image, []),
     ok = ra_log_snap_store:stop(N),
     %% a file where the snapshots directory should be
