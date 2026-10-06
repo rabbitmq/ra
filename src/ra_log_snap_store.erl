@@ -530,10 +530,10 @@ handle_batch(Ops, State0) ->
 terminate(_Reason, #?MODULE{name = Name, fd = Fd, retire = Retire}) ->
     ?CATCH(ra_counters:delete(Name)),
     _ = close(Fd),
-    case Retire of
-        #retire{fd = RFd} -> _ = close(RFd);
-        _ -> ok
-    end,
+    _ = case Retire of
+            #retire{fd = RFd} -> close(RFd);
+            _ -> ok
+        end,
     ok.
 
 format_status(State) ->
@@ -693,8 +693,8 @@ write_batch(Copies, Puts, #?MODULE{no = No, off = Off0, seq = Seq0,
     Bytes = Off1 - Off0,
     WriteStart = erlang:monotonic_time(microsecond),
     WriteRes = do_write(State0, Fd, Off0, IO),
-    incr(fsync_time_us, erlang:monotonic_time(microsecond) - WriteStart,
-         State0),
+    ok = add_counter(fsync_time_us,
+                     erlang:monotonic_time(microsecond) - WriteStart, State0),
     case WriteRes of
         ok ->
             State1 = apply_entries([A || {copy, _, _, _} = A <- Applies],
@@ -1184,10 +1184,10 @@ finish_retire(#?MODULE{retire = #retire{no = No, fd = Fd, limit = done,
                                     '_', '_', '_', '_'}, [], [true]}]),
     case Refs of
         0 ->
-            case Keep of
-                true -> set_aside(file_name(Dir, No));
-                false -> _ = file:delete(file_name(Dir, No))
-            end,
+            _ = case Keep of
+                    true -> set_aside(file_name(Dir, No));
+                    false -> file:delete(file_name(Dir, No))
+                end,
             _ = ra_lib:sync_dir(Dir),
             incr(retired_files,
                  State#?MODULE{retire = undefined, rolled = Rolled1});
@@ -1241,17 +1241,18 @@ recover(#?MODULE{dir = Dir, tid = Tid} = State0) ->
                   %% only the newest file can have been left half created,
                   %% anything else is damage and is set aside, not deleted
                   File = file_name(Dir, No),
-                  case No == lists:last(Nos) andalso file_size(Dir, No) < ?ALIGN of
-                      true ->
-                          ?WARN("ra_log_snap_store: file ~b has an invalid "
-                                "header (~w), deleting it", [No, Reason]),
-                          _ = file:delete(File);
-                      false ->
-                          ?ERROR("ra_log_snap_store: invalid header in file "
-                                 "~b: ~w, setting it aside as ~ts.bad",
-                                 [No, Reason, File]),
-                          set_aside(File)
-                  end,
+                  _ = case No == lists:last(Nos) andalso
+                          file_size(Dir, No) < ?ALIGN of
+                          true ->
+                              ?WARN("ra_log_snap_store: file ~b has an invalid "
+                                    "header (~w), deleting it", [No, Reason]),
+                              file:delete(File);
+                          false ->
+                              ?ERROR("ra_log_snap_store: invalid header in file "
+                                     "~b: ~w, setting it aside as ~ts.bad",
+                                     [No, Reason, File]),
+                              set_aside(File)
+                      end,
                   {RAcc, max(No, MaxN), MaxS}
           end, {[], 0, 1}, Headers),
     Live = ets:foldl(fun ({?DIR_KEY, _}, A) -> A;
@@ -1592,9 +1593,13 @@ io_sync(_, Fd) -> ra_file:sync(Fd).
 incr(Key, State) ->
     incr(Key, 1, State).
 
-incr(Key, N, #?MODULE{cref = CRef} = State) ->
-    counters:add(CRef, cidx(Key), N),
+incr(Key, N, State) ->
+    ok = add_counter(Key, N, State),
     State.
+
+%% for when only the counter is wanted and not the state back
+add_counter(Key, N, #?MODULE{cref = CRef}) ->
+    counters:add(CRef, cidx(Key), N).
 
 cidx(puts) -> ?C_PUTS;
 cidx(batches) -> ?C_BATCHES;
@@ -1605,7 +1610,6 @@ cidx(retired_files) -> ?C_RETIRED_FILES;
 cidx(retire_blocked) -> ?C_RETIRE_BLOCKED;
 cidx(errors) -> ?C_ERRORS;
 cidx(stale_puts) -> ?C_STALE_PUTS;
-cidx(corrupt_records) -> ?C_CORRUPT_RECORDS;
 cidx(fsync_time_us) -> ?C_FSYNC_TIME_US;
 cidx(lost_snapshots) -> ?C_LOST_SNAPSHOTS.
 
