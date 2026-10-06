@@ -941,8 +941,8 @@ abandon_file(#?MODULE{dir = Dir, no = No} = State, AckedLen) ->
     %% if that file cannot be created it is not there to say it
     _ = truncate_file(file_name(Dir, No), AckedLen),
     case new_active(State1) of
-        {ok, State1} -> State1;
-        {error, _Reason, State1} -> State1
+        {ok, State2} -> State2;
+        {error, _Reason, State2} -> State2
     end.
 
 truncate_file(Path, Len) ->

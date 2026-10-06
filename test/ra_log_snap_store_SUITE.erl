@@ -37,6 +37,7 @@ all_tests() ->
      fsync_error_unacked_record_ignored_after_restart,
      cannot_create_file_recovers,
      unknown_call_gets_an_error,
+     batch_failure_when_the_next_file_can_be_created,
      counters_count_what_happens,
      status_follows_failures,
      duplicate_put_in_a_failed_batch_is_not_acked,
@@ -465,6 +466,39 @@ cannot_create_file_recovers(Config) ->
     Img = image(100),
     ok = ra_log_snap_store:put(N, <<"a">>, E, {6, 1}, Img, []),
     {ok, Img, []} = ra_log_snap_store:read(N, <<"a">>, {6, 1}),
+    ok.
+
+%% the failure is of the batch only, so the file after it can be created: the
+%% usual shape of a transient error. The store must carry on (it used to crash,
+%% taking the log supervisor with it).
+batch_failure_when_the_next_file_can_be_created(Config) ->
+    [begin
+         Name = list_to_atom(atom_to_list(?config(store_name, Config)) ++
+                             "_" ++ atom_to_list(Fault)),
+         Dir = filename:join(?config(store_dir, Config), atom_to_list(Fault)),
+         {ok, Pid} = ra_log_snap_store:start_link(
+                       #{name => Name, dir => Dir, io => io_with_faults()}),
+         E = <<"e">>,
+         Img1 = image(100),
+         ok = ra_log_snap_store:put(Name, <<"a">>, E, {1, 1}, Img1, []),
+         inject_failure(Fault, 1),
+         ?assertEqual({error, eio},
+                      ra_log_snap_store:put(Name, <<"a">>, E, {2, 1},
+                                            image(100), [])),
+         ?assertEqual(Pid, whereis(Name)),
+         ?assertMatch({ok, #{idx := 1}}, ra_log_snap_store:lookup(Name, <<"a">>)),
+         Img3 = image(100),
+         ok = ra_log_snap_store:put(Name, <<"a">>, E, {3, 1}, Img3, []),
+         ?assertEqual(ok, ra_log_snap_store:status(Name)),
+         #{errors := 1} = ra_log_snap_store:info(Name),
+         %% what was not acknowledged does not come back
+         ok = ra_log_snap_store:stop(Name),
+         {ok, _} = ra_log_snap_store:start_link(
+                     #{name => Name, dir => Dir, io => io_with_faults()}),
+         ?assertMatch({ok, #{idx := 3}}, ra_log_snap_store:lookup(Name, <<"a">>)),
+         {ok, Img3, []} = ra_log_snap_store:read(Name, <<"a">>, {3, 1}),
+         ok = ra_log_snap_store:stop(Name)
+     end || Fault <- [pwrite, sync]],
     ok.
 
 counters_count_what_happens(Config) ->
@@ -1005,10 +1039,22 @@ io_with_faults() ->
                 end}.
 
 inject_failure(What) ->
-    persistent_term:put({?MODULE, fail}, What).
+    inject_failure(What, infinity).
+
+%% fail the next `Count' times the operation is done, then work again
+inject_failure(What, Count) ->
+    persistent_term:put({?MODULE, fail}, {What, Count}).
 
 clear_failure() ->
     persistent_term:erase({?MODULE, fail}).
 
 failing(What) ->
-    persistent_term:get({?MODULE, fail}, undefined) =:= What.
+    case persistent_term:get({?MODULE, fail}, undefined) of
+        {What, infinity} ->
+            true;
+        {What, N} when N > 0 ->
+            persistent_term:put({?MODULE, fail}, {What, N - 1}),
+            true;
+        _ ->
+            false
+    end.
