@@ -13,7 +13,8 @@
 %%     halt().'
 %%
 %% Options (defaults): rates [10000] puts/s offered in total, clients 10000,
-%% size 1024 (bytes of snapshot), duration 30 (s), wal true, min_file_bytes
+%% size 1024 (bytes of snapshot), duration 30 (s; done/s is puts over this),
+%% wal true, min_file_bytes
 %% 64MB, device undefined (adds /proc/diskstats deltas).
 -module(snap_store_bench).
 
@@ -99,7 +100,9 @@ bench(Dir, Rate, Opts) ->
                                                client(UId, Image, 1, PeriodUs,
                                                       Stop, [])}
                              end) || C <- lists:seq(1, Clients)],
-                   lists:append([receive {done, P, L} -> L end || P <- Pids])
+                   %% in arrival order: a receive for each pid in turn is
+                   %% quadratic with this many messages in the mailbox
+                   lists:append([receive {done, _, L} -> L end || _ <- Pids])
            end,
     T1 = erlang:monotonic_time(microsecond),
     Info = case Rate of
@@ -116,7 +119,7 @@ bench(Dir, Rate, Opts) ->
     Wall = (T1 - T0) / 1.0e6,
     Sorted = lists:sort(Lats),
     InWindow = [L || {St, L} <- WalLats, St >= T0, St =< T1],
-    #{rate => Rate, wall => Wall, puts => length(Lats),
+    #{rate => Rate, wall => Duration * 1.0, puts => length(Lats),
       lats => Sorted, info => Info, disk => diff(D0, D1),
       wal_p99 => pct(lists:sort(InWindow), 0.99) / 1000}.
 
@@ -129,7 +132,7 @@ client(UId, Image, Idx, PeriodUs, Stop, Acc) ->
         false ->
             ok = ra_log_snap_store:put(?NAME, UId, <<"e">>, {Idx, 1}, Image, []),
             End = erlang:monotonic_time(microsecond),
-            Left = PeriodUs - (End - Start),
+            Left = min(PeriodUs - (End - Start), Stop - End),
             Left >= 1000 andalso timer:sleep(Left div 1000),
             client(UId, Image, Idx + 1, PeriodUs, Stop, [End - Start | Acc])
     end.
