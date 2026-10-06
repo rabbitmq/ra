@@ -28,6 +28,8 @@ all_tests() ->
      large_snapshots_use_directories,
      delete_server_removes_store_entry,
      counters_and_overview,
+     crossing_max_size_and_back,
+     followers_installing_snapshots_across_max_size,
      disabling_the_store_moves_snapshots_back_to_directories,
      lagging_follower_installs_snapshot_from_the_store
     ].
@@ -152,6 +154,94 @@ disabling_the_store_moves_snapshots_back_to_directories(Config) ->
     ?assertNot(ra_log_snap_store:has_files(StoreDir)),
     ok.
 
+%% The state of the machine grows past max_size and shrinks again. The
+%% snapshots move between the log and directories and the member recovers from
+%% whichever it has, after a restart of the server and of the whole system.
+crossing_max_size_and_back(Config) ->
+    Sys = ?config(sys, Config),
+    {ok, _} = start_system(Config),
+    [Id] = start_members(Config, [a], #{blob_size => 1000}),
+    UId = uid(a),
+    Dir = snapshots_dir(Config, a),
+    %% small: in the log
+    ok = send_commands(Id, 30),
+    wait_for(fun () -> store_idx(Sys, UId) >= 5 end),
+    ?assertEqual({ok, []}, file:list_dir(Dir)),
+    ?assertEqual(30, count(Id)),
+    %% large: directories, and the log's entry goes
+    ok = resize(Id, ?MAX_SIZE * 3),
+    ok = send_commands(Id, 30),
+    wait_for(fun () -> {ok, []} =/= file:list_dir(Dir) end),
+    wait_for(fun () -> store_idx(Sys, UId) == -1 end),
+    ok = ra:stop_server(Sys, Id),
+    ok = ra:restart_server(Sys, Id),
+    ?assertEqual(60, count(Id)),
+    %% small again: back in the log, and the directory goes
+    ok = resize(Id, 500),
+    ok = send_commands(Id, 30),
+    wait_for(fun () -> store_idx(Sys, UId) >= 61 end),
+    wait_for(fun () -> {ok, []} == file:list_dir(Dir) end),
+    ok = ra:stop_server(Sys, Id),
+    ok = ra:restart_server(Sys, Id),
+    ?assertEqual(90, count(Id)),
+    %% and the whole system, so the log is recovered from its files
+    ok = ra_system:stop(Sys),
+    {ok, _} = start_system(Config),
+    ok = ra:restart_server(Sys, Id),
+    ?assertEqual(90, count(Id)),
+    %% large once more, then recover from the directory
+    ok = resize(Id, ?MAX_SIZE * 3),
+    ok = send_commands(Id, 30),
+    wait_for(fun () -> store_idx(Sys, UId) == -1 end),
+    ok = ra:stop_server(Sys, Id),
+    ok = ra:restart_server(Sys, Id),
+    ?assertEqual(120, count(Id)),
+    ok.
+
+%% A follower that has fallen behind is sent the leader's snapshot, while the
+%% machine state is large (the leader's snapshot is a directory) and again when
+%% it is small (it is in the log). The follower's own snapshots afterwards go
+%% to wherever their size says.
+followers_installing_snapshots_across_max_size(Config) ->
+    Sys = ?config(sys, Config),
+    {ok, _} = start_system(Config),
+    Ids = start_members(Config, [a, b, c], #{blob_size => 1000}),
+    ok = send_commands(hd(Ids), 3),
+    Total0 = 3,
+    Total = lists:foldl(
+              fun (Size, Total1) ->
+                      {ok, _, Leader} = ra:members(hd(Ids)),
+                      [Lagging | _] = Ids -- [Leader],
+                      SentBefore = snapshots_sent(Ids),
+                      ok = ra:stop_server(Sys, Lagging),
+                      ok = resize(Leader, Size),
+                      ok = send_commands(Leader, 60),
+                      LeaderUId = uid(element(1, Leader)),
+                      wait_for(fun () ->
+                                       Snaps = snapshots_dir(Config, element(1, Leader)),
+                                       case Size > ?MAX_SIZE of
+                                           true -> {ok, []} =/= file:list_dir(Snaps);
+                                           false -> store_idx(Sys, LeaderUId) >= Total1 + 20
+                                       end
+                               end),
+                      ok = ra:restart_server(Sys, Lagging),
+                      Expected = Total1 + 60,
+                      wait_for(fun () -> catch count(Lagging) == Expected end, 300),
+                      ?assertEqual(Expected, count(Leader)),
+                      %% it was brought up to date by a snapshot from the leader
+                      ?assert(snapshots_sent(Ids) > SentBefore),
+                      Expected
+              end, Total0, [?MAX_SIZE * 3, 500, ?MAX_SIZE * 3, 500]),
+    %% everyone, restarted, has the same state
+    [begin
+         ok = ra:stop_server(Sys, Id),
+         ok = ra:restart_server(Sys, Id)
+     end || Id <- Ids],
+    wait_for(fun () ->
+                     lists:all(fun (Id) -> catch count(Id) == Total end, Ids)
+             end, 300),
+    ok.
+
 counters_and_overview(Config) ->
     Sys = ?config(sys, Config),
     {ok, _} = start_system(Config),
@@ -273,10 +363,23 @@ wait_for(Fun, N) ->
 get_count(#{count := Count}) ->
     Count.
 
+resize(Id, Size) ->
+    {ok, _, _} = ra:process_command(Id, {resize, Size}),
+    ok.
+
+snapshots_sent(Ids) ->
+    lists:sum([maps:get(snapshots_sent,
+                        ra_counters:counters({element(1, Id), node()},
+                                             [snapshots_sent]))
+               || Id <- Ids]).
+
 %% ra_machine
 init(#{blob_size := Size}) ->
     #{count => 0, blob => crypto:strong_rand_bytes(Size)}.
 
+apply(#{index := Idx}, {resize, Size}, State0) ->
+    State = State0#{blob := crypto:strong_rand_bytes(Size)},
+    {State, ok, [{release_cursor, Idx, State}]};
 apply(#{index := Idx}, inc, #{count := Count} = State0) ->
     State = State0#{count := Count + 1},
     {State, Count + 1, [{release_cursor, Idx, State}]}.
