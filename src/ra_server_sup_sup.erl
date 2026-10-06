@@ -180,7 +180,7 @@ delete_server_rpc(System, RaName) ->
             {error, system_not_started};
         #{data_dir := _SysDir,
           names := #{log_meta := Meta,
-                     server_sup := SrvSup} = Names} ->
+                     server_sup := SrvSup} = Names} = SysConfig ->
             ?INFO("Deleting server ~w and its data directory.",
                   [RaName]),
             %% TODO: better handle and report errors
@@ -192,8 +192,9 @@ delete_server_rpc(System, RaName) ->
             _ = supervisor:terminate_child(SrvSup, UId),
             _ = delete_data_directory(Dir),
             %% snapshots kept in the shared snapshot log, if there is one
-            case Names of
-                #{snap_store := SnapStore} ->
+            case SysConfig of
+                #{snapshot_store := _} ->
+                    #{snap_store := SnapStore} = Names,
                     ?CATCH(ra_log_snap_store:delete(SnapStore, UId, any));
                 _ ->
                     ok

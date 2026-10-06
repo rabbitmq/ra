@@ -31,6 +31,7 @@ all_tests() ->
      crossing_max_size_and_back,
      followers_installing_snapshots_across_max_size,
      disabling_the_store_moves_snapshots_back_to_directories,
+     enabling_the_store_on_an_existing_system,
      lagging_follower_installs_snapshot_from_the_store
     ].
 
@@ -265,6 +266,34 @@ counters_and_overview(Config) ->
     ok = ra_system:stop(Sys),
     {ok, _} = start_system_without_store(Config),
     ?assertNot(maps:is_key(snapshot_store, ra:overview(Sys))),
+    ok.
+
+%% The upgrade path: a system that has been running without the snapshot log,
+%% with snapshots as directories, has it switched on. Its members start from
+%% the directories, new snapshots go to the log and the old directories are
+%% removed once they are superseded.
+enabling_the_store_on_an_existing_system(Config) ->
+    Sys = ?config(sys, Config),
+    UId = uid(a),
+    Dir = snapshots_dir(Config, a),
+    {ok, _} = start_system_without_store(Config),
+    [Id] = start_members(Config, [a], #{blob_size => 1000}),
+    ok = send_commands(Id, 30),
+    wait_for(fun () -> {ok, []} =/= file:list_dir(Dir) end),
+    ok = ra_system:stop(Sys),
+    %% switched on
+    {ok, _} = start_system(Config),
+    ok = ra:restart_server(Sys, Id),
+    ?assertEqual(30, count(Id)),
+    ?assert(snapshot_index(Id) >= 5),
+    ?assertEqual(-1, store_idx(Sys, UId)),
+    ok = send_commands(Id, 30),
+    wait_for(fun () -> store_idx(Sys, UId) >= 35 end),
+    %% the directory snapshots from before are gone once superseded
+    wait_for(fun () -> {ok, []} == file:list_dir(Dir) end),
+    ok = ra:stop_server(Sys, Id),
+    ok = ra:restart_server(Sys, Id),
+    ?assertEqual(60, count(Id)),
     ok.
 
 lagging_follower_installs_snapshot_from_the_store(Config) ->
