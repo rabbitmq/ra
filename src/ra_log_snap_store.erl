@@ -1091,7 +1091,11 @@ recover(#?MODULE{dir = Dir, tid = Tid} = State0) ->
                   {Valid, Seen} = recover_file(State0, No, Limit),
                   {[{No, Valid} | RAcc], max(No, MaxN),
                    lists:max([MaxS, NextSeq, Seen + 1])};
-              ({No, {error, Reason}}, {RAcc, MaxN, MaxS}) ->
+              ({No, {error, {io, Reason}}}, _) ->
+                  %% not being able to read a file says nothing about what is in
+                  %% it, do not carry on as if it was damaged
+                  error({snapshot_store_cannot_read_file, No, Reason});
+              ({No, {error, {bad_header, Reason}}}, {RAcc, MaxN, MaxS}) ->
                   %% only the newest file can have been left half created,
                   %% anything else is damage and is set aside, not deleted
                   File = file_name(Dir, No),
@@ -1131,8 +1135,7 @@ recover_file(#?MODULE{dir = Dir} = State, No, Limit) ->
                 _ = file:close(Fd)
             end;
         {error, Reason} ->
-            ?ERROR("ra_log_snap_store: cannot open file ~b: ~w", [No, Reason]),
-            {0, 0}
+            error({snapshot_store_cannot_read_file, No, Reason})
     end.
 
 recover_loop(State, No, Fd, Off, Limit, MaxSeq) ->
@@ -1362,10 +1365,13 @@ file_numbers(Dir) ->
             error({snapshot_store_cannot_list_files, Dir, Reason})
     end.
 
+%% An error here is not the same as an empty file: a snapshot log that can
+%% not be read has to stop the system, not be taken for empty or damaged and
+%% be deleted.
 file_size(Dir, No) ->
     case prim_file:read_file_info(file_name(Dir, No)) of
         {ok, Info} -> element(2, Info);
-        {error, _} -> 0
+        {error, Reason} -> error({snapshot_store_cannot_read_file, No, Reason})
     end.
 
 read_header(Dir, No) ->
@@ -1379,19 +1385,19 @@ read_header(Dir, No) ->
                         Crc ->
                             {ok, #{next_seq => NextSeq, prev_len => PrevLen}};
                         _ ->
-                            {error, bad_header_checksum}
+                            {error, {bad_header, bad_header_checksum}}
                     end;
                 {ok, _} ->
-                    {error, invalid_header};
+                    {error, {bad_header, invalid_header}};
                 eof ->
-                    {error, truncated_header};
-                {error, _} = Err ->
-                    Err
+                    {error, {bad_header, truncated_header}};
+                {error, Reason} ->
+                    {error, {io, Reason}}
             after
                 _ = file:close(Fd)
             end;
-        {error, _} = Err ->
-            Err
+        {error, Reason} ->
+            {error, {io, Reason}}
     end.
 
 %% a directory sync that failed means a file in it may not be there after a

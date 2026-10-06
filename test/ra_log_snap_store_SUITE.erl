@@ -45,6 +45,7 @@ all_tests() ->
      retire_skips_an_invalid_record_and_copies_the_rest,
      retire_never_deletes_a_file_that_is_still_referenced,
      retire_open_error_backs_off,
+     unreadable_file_stops_the_store_starting,
      damaged_header_in_an_old_file_is_set_aside,
      torn_file_creation_is_deleted,
      stray_files_in_the_directory_are_ignored,
@@ -688,6 +689,31 @@ retire_open_error_backs_off(Config) ->
     clear_failure(),
     %% it does retry
     wait_quiescent(N),
+    ok.
+
+%% an I/O error is not damage: the snapshots in the file must not be given up
+%% on (renamed, or deleted by retiring) because it could not be read once
+unreadable_file_stops_the_store_starting(Config) ->
+    N = start(Config, #{}),
+    E = <<"e">>,
+    Img = image(100),
+    ok = ra_log_snap_store:put(N, <<"a">>, E, {1, 1}, Img, []),
+    ok = ra_log_snap_store:stop(N),
+    [File] = filelib:wildcard(filename:join(?config(store_dir, Config),
+                                            "*.snap")),
+    %% a directory where the file should be can not be opened as a file
+    ok = file:rename(File, File ++ ".orig"),
+    ok = file:make_dir(File),
+    process_flag(trap_exit, true),
+    ?assertMatch({error, _},
+                 ra_log_snap_store:start_link(
+                   #{name => N, dir => ?config(store_dir, Config)})),
+    process_flag(trap_exit, false),
+    ok = file:del_dir(File),
+    ok = file:rename(File ++ ".orig", File),
+    N = start(Config, #{}),
+    {ok, Img, []} = ra_log_snap_store:read(N, <<"a">>, {1, 1}),
+    ?assertNot(filelib:is_file(File ++ ".bad")),
     ok.
 
 damaged_header_in_an_old_file_is_set_aside(Config) ->
