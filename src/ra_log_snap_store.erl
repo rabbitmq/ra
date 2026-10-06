@@ -96,6 +96,7 @@
 -define(C_FILES, 14).
 -define(C_DEGRADED, 15).
 -define(C_RECOVERY_TIME_MS, 16).
+-define(C_LOST_SNAPSHOTS, 17).
 -define(COUNTER_FIELDS,
         [{puts, ?C_PUTS, counter,
           "Snapshots appended to the snapshot log"},
@@ -129,7 +130,10 @@
          {degraded, ?C_DEGRADED, gauge,
           "1 if the snapshot log is unhealthy, see ra_log_snap_store:status/1"},
          {recovery_time_ms, ?C_RECOVERY_TIME_MS, gauge,
-          "Time taken to recover the log files when it started"}
+          "Time taken to recover the log files when it started"},
+         {lost_snapshots, ?C_LOST_SNAPSHOTS, counter,
+          "Snapshots that could not be read, and so were given up on, when "
+          "retiring a file"}
         ]).
 
 -define(MIN_FILE_BYTES, ?ALIGN).
@@ -152,7 +156,10 @@
 -record(retire, {no :: non_neg_integer(),
                  fd :: file:fd(),
                  off :: non_neg_integer(),
-                 limit :: non_neg_integer()}).
+                 limit :: non_neg_integer() | done,
+                 %% snapshots in the file could not be read, set it aside
+                 %% instead of deleting it
+                 keep = false :: boolean()}).
 
 -record(?MODULE,
         {name :: atom(),
@@ -183,6 +190,7 @@
          health = [] :: [atom()],
          last_failed = false :: boolean(),
          retire_failing = false :: boolean(),
+         lost = 0 :: non_neg_integer(),
          %% files kept because they hold snapshots that could not be copied
          blocked = [] :: [non_neg_integer()]}).
 
@@ -756,6 +764,19 @@ encode_items(Items, No, Off0, Seq0) ->
                   E = {UId, Epoch, Idx, Term, Seq, No, Off, TL,
                        byte_size(Image), byte_size(Indexes)},
                   {[Rec | IOAcc], [{put, E} | AAcc], Off + TL, Seq + 1};
+              ({copy, {rescue, OldNo, OldOff, UId, Epoch, Idx, Term,
+                       Image, Indexes}},
+               {IOAcc, AAcc, Off, Seq}) ->
+                  Body = [<<Seq:64, (byte_size(UId)):16>>, UId,
+                          <<(byte_size(Epoch)):16>>, Epoch,
+                          <<Idx:64, Term:64,
+                            (byte_size(Image)):32, (byte_size(Indexes)):32>>,
+                          Image, Indexes],
+                  {Rec, TL} = record(?PUT, Body),
+                  E = {UId, Epoch, Idx, Term, Seq, No, Off, TL,
+                       byte_size(Image), byte_size(Indexes)},
+                  {[Rec | IOAcc], [{copy, OldNo, OldOff, E} | AAcc],
+                   Off + TL, Seq + 1};
               ({copy, {copy, OldNo, OldOff, UId, Epoch, Idx, Term,
                        ImgLen, IdxLen, <<_OldSeq:64, Rest/binary>>}},
                {IOAcc, AAcc, Off, Seq}) ->
@@ -917,11 +938,13 @@ refresh(#?MODULE{cref = CRef, tid = Tid, live_bytes = Live, rolled = Rolled,
     State#?MODULE{health = Health}.
 
 health(#?MODULE{fd = Fd, last_failed = LastFailed,
-                retire_failing = RetireFailing, blocked = Blocked}) ->
+                retire_failing = RetireFailing, blocked = Blocked,
+                lost = Lost}) ->
     [no_active_file || Fd == undefined] ++
         [write_errors || LastFailed] ++
         [retire_read_errors || RetireFailing] ++
-        [files_blocked || Blocked =/= []].
+        [files_blocked || Blocked =/= []] ++
+        [snapshots_lost || Lost > 0].
 
 %%%===================================================================
 %%% rolling and retiring
@@ -1016,6 +1039,20 @@ abandon_file(#?MODULE{dir = Dir, no = No} = State, AckedLen) ->
         {error, _Reason, State2} -> State2
     end.
 
+%% renames a file we do not want to use but should not throw away, without
+%% overwriting what was set aside before
+set_aside(Path) ->
+    Flat = lists:flatten(io_lib:format("~ts", [Path])),
+    Target = set_aside_name(Flat, Flat ++ ".bad", 1),
+    _ = file:rename(Path, Target),
+    ok.
+
+set_aside_name(Path, Name, N) ->
+    case filelib:is_file(Name) of
+        true -> set_aside_name(Path, Path ++ ".bad." ++ integer_to_list(N), N + 1);
+        false -> Name
+    end.
+
 truncate_file(Path, Len) ->
     case file:open(Path, [read, write, raw, binary]) of
         {ok, Fd} ->
@@ -1082,25 +1119,69 @@ retire_scan(#?MODULE{retire = #retire{no = No, fd = Fd, off = Off,
                           {Acc, S}
                   end
           end, {[], State}, Recs),
-    State2 = case Status of
-                 cont ->
-                     State1#?MODULE{retire = R#retire{off = Next},
-                                    retire_failing = false};
-                 io_error ->
-                     %% could not read, try again from the same place later
-                     ?ERROR("ra_log_snap_store: ~ts: read error retiring file "
-                            "~b at offset ~b, will try again",
-                            [State#?MODULE.name, No, Off]),
-                     retire_later(State1);
-                 _ ->
-                     %% reached the end of the file (or an invalid record we
-                     %% cannot get past). It is deleted once the copies are
-                     %% durable, if nothing still refers to it
-                     State1#?MODULE{retire = R#retire{off = Next,
-                                                      limit = done},
-                                    retire_failing = false}
-             end,
-    {lists:reverse(Copies), State2}.
+    case Status of
+        cont ->
+            {lists:reverse(Copies),
+             State1#?MODULE{retire = R#retire{off = Next},
+                            retire_failing = false}};
+        io_error ->
+            %% could not read, try again from the same place later
+            ?ERROR("ra_log_snap_store: ~ts: read error retiring file "
+                   "~b at offset ~b, will try again",
+                   [State#?MODULE.name, No, Off]),
+            {lists:reverse(Copies), retire_later(State1)};
+        _ ->
+            %% reached the end of the file. What the scan could not get to is
+            %% fetched by where it is. The file is deleted once the copies
+            %% are durable.
+            {Rescued, Lost, State2} = rescue(State1, No, Copies),
+            {lists:reverse(Copies) ++ Rescued,
+             State2#?MODULE{retire = R#retire{off = Next, limit = done,
+                                              keep = Lost > 0},
+                            lost = State2#?MODULE.lost + Lost,
+                            retire_failing = false}}
+    end.
+
+%% Snapshots that still point into the file being retired and were not found by
+%% reading it (they are in a batch behind a record that could not be read) are
+%% read from where the store knows them to be. Those that can not be read are
+%% given up on, they would not be served anyway, and the file is set aside to be
+%% looked at instead of deleted.
+rescue(#?MODULE{tid = Tid, dir = Dir, live_fun = LiveFun} = State, No,
+       Copies) ->
+    Copied = maps:from_list([{{UId, Off}, true}
+                             || {copy, _, Off, UId, _, _, _, _, _, _} <- Copies]),
+    Refs = ets:select(Tid, [{{'$1', '$2', '$3', '$4', '$5', No,
+                              '$6', '$7', '$8', '$9'}, [],
+                             [{{'$1', '$2', '$3', '$4', '$6', '$7', '$8',
+                                '$9'}}]}]),
+    lists:foldl(
+      fun ({UId, Epoch, Idx, Term, Off, TL, ImgLen, IdxLen}, {Acc, Lost, S}) ->
+              case Copied of
+                  #{{UId, Off} := true} ->
+                      {Acc, Lost, S};
+                  _ ->
+                      case read_record(Dir, No, Off, TL, ImgLen, IdxLen) of
+                          {ok, Image, Indexes} ->
+                              case LiveFun(UId, Epoch) of
+                                  true ->
+                                      {[{rescue, No, Off, UId, Epoch, Idx,
+                                         Term, Image, Indexes} | Acc],
+                                       Lost, S};
+                                  false ->
+                                      {Acc, Lost, remove_entry(UId, S)}
+                              end;
+                          {error, Reason} ->
+                              ?ERROR("ra_log_snap_store: ~ts: the snapshot "
+                                     "~b of ~ts in file ~b at offset ~b can "
+                                     "not be read: ~w, giving up on it",
+                                     [State#?MODULE.name, Idx, UId, No, Off,
+                                      Reason]),
+                              {Acc, Lost + 1,
+                               incr(lost_snapshots, remove_entry(UId, S))}
+                      end
+              end
+      end, {[], 0, State}, Refs).
 
 %% back off rather than retrying in a loop
 retire_later(#?MODULE{retire_token = true} = State) ->
@@ -1111,7 +1192,8 @@ retire_later(State) ->
                   retire_backoff = true}.
 
 %% Called once a batch (including any copies) is durable.
-finish_retire(#?MODULE{retire = #retire{no = No, fd = Fd, limit = done},
+finish_retire(#?MODULE{retire = #retire{no = No, fd = Fd, limit = done,
+                                        keep = Keep},
                        dir = Dir, rolled = Rolled, tid = Tid} = State) ->
     _ = close(Fd),
     Rolled1 = lists:keydelete(No, 1, Rolled),
@@ -1119,7 +1201,10 @@ finish_retire(#?MODULE{retire = #retire{no = No, fd = Fd, limit = done},
                                     '_', '_', '_', '_'}, [], [true]}]),
     case Refs of
         0 ->
-            _ = file:delete(file_name(Dir, No)),
+            case Keep of
+                true -> set_aside(file_name(Dir, No));
+                false -> _ = file:delete(file_name(Dir, No))
+            end,
             _ = ra_lib:sync_dir(Dir),
             incr(retired_files,
                  State#?MODULE{retire = undefined, rolled = Rolled1});
@@ -1182,7 +1267,7 @@ recover(#?MODULE{dir = Dir, tid = Tid} = State0) ->
                           ?ERROR("ra_log_snap_store: invalid header in file "
                                  "~b: ~w, setting it aside as ~ts.bad",
                                  [No, Reason, File]),
-                          _ = file:rename(File, [File, ".bad"])
+                          set_aside(File)
                   end,
                   {RAcc, max(No, MaxN), MaxS}
           end, {[], 0, 1}, Headers),
@@ -1373,7 +1458,7 @@ parse_records(Bin, Rel, Base, Limit, Acc, Skipped) ->
             TL = ?REC_HDR + Len,
             case Rest of
                 _ when Abs + TL > Limit ->
-                    {lists:reverse(Acc), Abs, bad, Skipped};
+                    resync(Bin, Base, Limit, Abs, Acc, Skipped);
                 <<Body:Len/binary, _/binary>> ->
                     case parse_body(Type, Len, Crc, Body) of
                         {put, Fields} ->
@@ -1391,13 +1476,30 @@ parse_records(Bin, Rel, Base, Limit, Acc, Skipped) ->
                             parse_records(Bin, Rel + TL, Base, Limit, Acc,
                                           Skipped + 1);
                         bad ->
-                            {lists:reverse(Acc), Abs, bad, Skipped}
+                            resync(Bin, Base, Limit, Abs, Acc, Skipped)
                     end;
                 _ ->
                     {lists:reverse(Acc), Abs, more, Skipped}
             end;
         _ ->
             {lists:reverse(Acc), Abs, more, Skipped}
+    end.
+
+%% Something that can not be a record's header. Its length can not be trusted
+%% so carry on from where the next batch starts: they all start on a block
+%% boundary, and every record is checked, so what is found there is either a
+%% good record or is not taken. Whatever follows in the same batch is not
+%% found this way, retiring has another way to find the snapshots in it.
+resync(Bin, Base, Limit, Abs, Acc, Skipped) ->
+    Next = ((Abs div ?ALIGN) + 1) * ?ALIGN,
+    ?WARN("ra_log_snap_store: unreadable record at offset ~b, carrying on "
+          "from ~b", [Abs, Next]),
+    if Next >= Limit ->
+           {lists:reverse(Acc), Limit, eof, Skipped + 1};
+       Next - Base < byte_size(Bin) ->
+           parse_records(Bin, Next - Base, Base, Limit, Acc, Skipped + 1);
+       true ->
+           {lists:reverse(Acc), Next, more, Skipped + 1}
     end.
 
 parse_body(?PAD, Len, 0, _Body) when Len >= 1 ->
@@ -1521,7 +1623,8 @@ cidx(retire_blocked) -> ?C_RETIRE_BLOCKED;
 cidx(errors) -> ?C_ERRORS;
 cidx(stale_puts) -> ?C_STALE_PUTS;
 cidx(corrupt_records) -> ?C_CORRUPT_RECORDS;
-cidx(fsync_time_us) -> ?C_FSYNC_TIME_US.
+cidx(fsync_time_us) -> ?C_FSYNC_TIME_US;
+cidx(lost_snapshots) -> ?C_LOST_SNAPSHOTS.
 
 %% registered with ra_counters like the counters of the WAL, falling back to
 %% private ones when there is no seshat (e.g. unit tests of the store)

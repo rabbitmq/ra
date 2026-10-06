@@ -26,7 +26,7 @@ all_tests() ->
      recovery,
      recovery_torn_tail,
      recovery_skips_an_invalid_record,
-     recovery_stops_at_an_unreadable_record_header,
+     recovery_resyncs_after_an_unreadable_record_header,
      recovery_live_fun,
      batches_are_aligned,
      concurrent_puts_are_batched,
@@ -43,7 +43,8 @@ all_tests() ->
      duplicate_put_in_a_failed_batch_is_not_acked,
      delete_is_ordered_before_later_puts,
      retire_skips_an_invalid_record_and_copies_the_rest,
-     retire_never_deletes_a_file_that_is_still_referenced,
+     retire_gives_up_only_on_the_snapshot_it_can_not_read,
+     retire_rescues_snapshots_it_can_not_reach_by_scanning,
      retire_open_error_backs_off,
      copying_live_data_forward_does_not_roll_forever,
      reconciles_do_not_split_batches,
@@ -264,15 +265,17 @@ recovery_skips_an_invalid_record(Config) ->
     {ok, Img2, []} = ra_log_snap_store:read(N, <<"b">>, {2, 1}),
     ok.
 
-recovery_stops_at_an_unreadable_record_header(Config) ->
-    %% when not even the length of a record can be trusted nothing after it
-    %% can be found
+recovery_resyncs_after_an_unreadable_record_header(Config) ->
+    %% when not even the length of a record can be trusted the scan carries on
+    %% from the next batch (they start on block boundaries). The snapshots
+    %% after it are found, not lost.
     N = start(Config, #{}),
     E = <<"e">>,
     Img = image(100),
     ok = ra_log_snap_store:put(N, <<"a">>, E, {1, 1}, Img, []),
     ok = ra_log_snap_store:put(N, <<"b">>, E, {1, 1}, image(100), []),
-    ok = ra_log_snap_store:put(N, <<"c">>, E, {1, 1}, image(100), []),
+    Imgc = image(100),
+    ok = ra_log_snap_store:put(N, <<"c">>, E, {1, 1}, Imgc, []),
     ok = ra_log_snap_store:stop(N),
     [File] = filelib:wildcard(filename:join(?config(store_dir, Config),
                                             "*.snap")),
@@ -282,7 +285,7 @@ recovery_stops_at_an_unreadable_record_header(Config) ->
     N = start(Config, #{}),
     {ok, Img, []} = ra_log_snap_store:read(N, <<"a">>, {1, 1}),
     ?assertEqual(not_found, ra_log_snap_store:lookup(N, <<"b">>)),
-    ?assertEqual(not_found, ra_log_snap_store:lookup(N, <<"c">>)),
+    {ok, Imgc, []} = ra_log_snap_store:read(N, <<"c">>, {1, 1}),
     ok.
 
 recovery_live_fun(Config) ->
@@ -643,24 +646,80 @@ retire_skips_an_invalid_record_and_copies_the_rest(Config) ->
                                 {<<"c">>, {1, 1}, C}]],
     ok.
 
-retire_never_deletes_a_file_that_is_still_referenced(Config) ->
-    %% b's record can not be got past (its type is damaged) so b and c, which
-    %% follow it, can not be copied. The file must stay as they live in it.
+retire_gives_up_only_on_the_snapshot_it_can_not_read(Config) ->
+    %% b's record is unreadable (its type is damaged). a2 before it and c after
+    %% it are copied, only b is given up on, and the file is set aside, not
+    %% deleted.
     {N, File, A2, _B, C} =
         rolled_file_with_a_hole(Config,
                                 fun (Fd) ->
                                         file:pwrite(Fd, 8192, <<255>>)
                                 end),
     wait_for(fun () ->
-                     maps:get(retire_blocked, ra_log_snap_store:info(N), 0) == 1
+                     maps:get(lost_snapshots, ra_log_snap_store:info(N)) == 1
              end),
-    ?assert(filelib:is_file(File)),
-    ?assertEqual({degraded, [files_blocked]}, ra_log_snap_store:status(N)),
-    %% c was not damaged, it is still served from the file
-    ?assertMatch({ok, C, []}, ra_log_snap_store:read(N, <<"c">>, {1, 1})),
-    %% a2 was before the damage and was copied
+    wait_quiescent(N),
+    ?assertNot(filelib:is_file(File)),
+    ?assert(filelib:is_file(File ++ ".bad")),
     ?assertMatch({ok, A2, []}, ra_log_snap_store:read(N, <<"a">>, {2, 1})),
-    #{rolled_files := 0, retiring := false} = ra_log_snap_store:info(N),
+    ?assertMatch({ok, C, []}, ra_log_snap_store:read(N, <<"c">>, {1, 1})),
+    ?assertEqual(not_found, ra_log_snap_store:lookup(N, <<"b">>)),
+    ?assertEqual({degraded, [snapshots_lost]}, ra_log_snap_store:status(N)),
+    %% and nothing else is lost when it restarts
+    ok = ra_log_snap_store:stop(N),
+    N = start(Config, #{}),
+    ?assertMatch({ok, A2, []}, ra_log_snap_store:read(N, <<"a">>, {2, 1})),
+    ?assertMatch({ok, C, []}, ra_log_snap_store:read(N, <<"c">>, {1, 1})),
+    ok.
+
+%% Two snapshots in one batch and the first is unreadable. The scan resyncs at
+%% the next batch so does not see the second, but the store knows where it is
+%% and copies it from there before the file goes.
+retire_rescues_snapshots_it_can_not_reach_by_scanning(Config) ->
+    Self = self(),
+    N = start(Config, #{io => io_blocking_sync(Self)}),
+    E = <<"e">>,
+    ok = ra_log_snap_store:put(N, <<"a">>, E, {1, 1}, image(100), []),
+    block_syncs(),
+    _ = spawn(fun () ->
+                      ra_log_snap_store:put(N, <<"x">>, E, {1, 1}, image(100), [])
+              end),
+    receive in_sync -> ok after 5000 -> ct:fail(put_not_in_sync) end,
+    B2 = image(100),
+    [_, _] = [begin
+                  spawn(fun () ->
+                                Self ! {put, UId,
+                                        ra_log_snap_store:put(N, UId, E, {1, 1},
+                                                              Img, [])}
+                        end),
+                  wait_queued(N, I)
+              end || {I, {UId, Img}} <- [{1, {<<"b1">>, image(100)}},
+                                         {2, {<<"b2">>, B2}}]],
+    unblock_syncs(),
+    [receive {put, _, ok} -> ok after 5000 -> ct:fail(no_put_reply) end
+     || _ <- [1, 2]],
+    %% b1 and b2 were written as one batch, b1 first
+    [Entry] = ets:lookup(N, <<"b1">>),
+    B1Off = element(7, Entry),
+    [File] = filelib:wildcard(filename:join(?config(store_dir, Config),
+                                            "*.snap")),
+    {ok, Fd} = file:open(File, [read, write, raw, binary]),
+    ok = file:pwrite(Fd, B1Off, <<255>>),
+    ok = file:close(Fd),
+    ok = ra_log_snap_store:roll(N),
+    wait_for(fun () ->
+                     maps:get(lost_snapshots, ra_log_snap_store:info(N)) == 1
+             end),
+    wait_quiescent(N),
+    ?assertMatch({ok, B2, []}, ra_log_snap_store:read(N, <<"b2">>, {1, 1})),
+    ?assertEqual(not_found, ra_log_snap_store:lookup(N, <<"b1">>)),
+    ?assertMatch({ok, _}, ra_log_snap_store:lookup(N, <<"a">>)),
+    ?assertMatch({ok, _}, ra_log_snap_store:lookup(N, <<"x">>)),
+    ?assertNot(filelib:is_file(File)),
+    ?assert(filelib:is_file(File ++ ".bad")),
+    ok = ra_log_snap_store:stop(N),
+    N = start(Config, #{}),
+    ?assertMatch({ok, B2, []}, ra_log_snap_store:read(N, <<"b2">>, {1, 1})),
     ok.
 
 retire_open_error_backs_off(Config) ->

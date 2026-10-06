@@ -229,13 +229,21 @@ acknowledged so that anything written after that is ignored when recovering.
 - On start the files are scanned in order and the newest record of each member
 is kept. A record is dead if its member's directory is gone (any other error
 looking for it counts as alive). A record whose contents do not validate is
-skipped, the ones after it are independent; one whose length cannot be trusted
-ends the scan of that file. A file with a damaged header is set aside as
+skipped, the ones after it are independent; where not even the length of a record
+can be trusted the scan carries on from the next block boundary (every batch
+starts on one and every record is checked). A file with a damaged header is set aside as
 `.bad`, not deleted, unless it is the newest and tiny (a file that was being
 created when the node stopped). A file is never appended to after a restart.
-- The file being retired is never deleted while a member's snapshot still points
-into it. If part of it can not be read the file is kept and an error is logged.
+- Snapshots the scan can not reach (in a batch behind a record that could not be
+read) are found again from where the store knows them to be, and copied before
+the file goes. Only a snapshot that can not be read at all is given up on
+(`lost_snapshots`): it could not be served anyway. The file is then set aside as
+`.bad`, not deleted, and the log reports `snapshots_lost` until it is restarted.
 Read errors are retried after a delay.
+- A file is rolled when the records in it, not counting padding, reach
+`max(min_file_bytes, 2 * live bytes)`, so copying the live data of a file forward
+can never roll the next one by itself. Retiring reads in proportion to what a
+batch appends so files are retired as fast as they are made.
 - Deleting a snapshot (`release`) removes a member's entry only if it is that
 exact snapshot (index and term). The snapshot being written when a failure
 happens is deleted by `ra_snapshot`, which must not take the current one.
@@ -273,6 +281,7 @@ configured.
 | `corrupt_records` | invalid records skipped when recovering or retiring |
 | `fsync_time_us` | time spent writing and syncing; divide by `batches` for the average |
 | `live_bytes`, `entries`, `files` | gauges: size of the live snapshots, members with one, files on disk |
+| `lost_snapshots` | snapshots given up on because they could not be read when retiring a file |
 | `recovery_time_ms` | gauge: how long recovering the files took at start |
 | `degraded` | gauge: 1 if the log is unhealthy |
 
@@ -281,8 +290,11 @@ configured.
 members fall back to directories), `write_errors` (the last batch could not be
 written), `retire_read_errors` (files could not be read to retire them, it is
 retrying), `files_blocked` (files are kept because snapshots in them could not
-be copied out, this lasts until restart and needs a look at the disk). Changes
-in health are logged. Alert on `degraded`.
+be copied out, this lasts until restart and needs a look at the disk),
+`snapshots_lost` (a snapshot could not be read when retiring a file and was given
+up on, the file is kept as `.bad`; lasts until restart, the counter
+`lost_snapshots` says how many). Changes in health are logged. Alert on
+`degraded`.
 
 ### Turning it off
 
