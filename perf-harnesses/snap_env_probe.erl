@@ -8,6 +8,11 @@
 %%
 %% Reports, as microseconds:
 %%   append+fdatasync  what the log (and the WAL) pays per batch
+%%   overwrite+fdatasync  the same but into a file that is already fully
+%%                     written, so the size does not change and there is no
+%%                     metadata to commit: the cost of the device's flush alone.
+%%                     The difference to the row above is the file system's
+%%                     journal commit, which preallocating the files would avoid
 %%   dir snapshot      what one snapshot costs as a directory: mkdir, create two
 %%                     files, fsync one, fsync the directory and its parent, then
 %%                     delete the previous one. Alone and with 8 and 32 at once.
@@ -27,6 +32,7 @@ run(Dir0, Opts) ->
     io:format("~n~-34s ~9s ~9s ~9s ~9s ~10s~n",
               ["", "p50 us", "p99 us", "max us", "ops", "ops/s"]),
     append_sync(Dir, Secs),
+    overwrite_sync(Dir, Secs),
     [dir_snapshots(Dir, Secs, Par) || Par <- [1, 8, 32]],
     _ = file:del_dir_r(Dir),
     ok.
@@ -42,6 +48,27 @@ append_sync(Dir, Secs) ->
                 end, []),
     ok = file:close(Fd),
     report("append 4KB + fdatasync", Lats, Secs).
+
+overwrite_sync(Dir, Secs) ->
+    Size = 64 * 1024 * 1024,
+    Block = crypto:strong_rand_bytes(4096),
+    File = filename:join(Dir, "overwrite.dat"),
+    {ok, Fd} = file:open(File, [write, read, raw, binary]),
+    %% really written, not just allocated: an allocated but unwritten extent
+    %% turns into a written one on the first write, which is metadata again
+    [ok = file:pwrite(Fd, Off, binary:copy(<<0>>, 1024 * 1024))
+     || Off <- lists:seq(0, Size - 1024 * 1024, 1024 * 1024)],
+    ok = file:sync(Fd),
+    Pos = counters:new(1, []),
+    Lats = loop(erlang:monotonic_time(millisecond) + Secs * 1000,
+                fun () ->
+                        Off = counters:get(Pos, 1) * 4096 rem Size,
+                        counters:add(Pos, 1, 1),
+                        ok = file:pwrite(Fd, Off, Block),
+                        ok = file:datasync(Fd)
+                end, []),
+    ok = file:close(Fd),
+    report("overwrite 4KB + fdatasync", Lats, Secs).
 
 dir_snapshots(Dir, Secs, Par) ->
     Parent = self(),
