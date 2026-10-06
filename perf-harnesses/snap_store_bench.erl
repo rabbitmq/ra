@@ -189,7 +189,12 @@ stop_wal(Pid) ->
 disk_stats(undefined) ->
     undefined;
 disk_stats(Dev) ->
-    {ok, Bin} = file:read_file("/proc/diskstats"),
+    case file:read_file("/proc/diskstats") of
+        {ok, Bin} -> disk_stats(Dev, Bin);
+        {error, _} -> undefined
+    end.
+
+disk_stats(Dev, Bin) ->
     Want = list_to_binary(Dev),
     case [T || L <- binary:split(Bin, <<"\n">>, [global]),
                [_, _, D | T] <- [binary:split(L, [<<" ">>],
