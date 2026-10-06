@@ -135,6 +135,9 @@
 -define(DEFAULT_MIN_FILE_BYTES, 64 * 1024 * 1024).
 -define(DEFAULT_RETIRE_CHUNK, 1024 * 1024).
 -define(MIN_RETIRE_CHUNK, 4096).
+-define(MAX_RETIRE_CHUNK, 64 * 1024 * 1024).
+%% bytes of a file read to retire it for each byte appended by a batch
+-define(RETIRE_FACTOR, 4).
 -define(RETIRE_RETRY_MS, 1000).
 -define(DEFAULT_MAX_BATCH, 1024).
 
@@ -169,6 +172,8 @@
          rolled = [] :: [{non_neg_integer(), non_neg_integer()}],
          retire :: undefined | #retire{},
          retire_token = false :: boolean(),
+         %% not retiring until the retry timer fires, after an error
+         retire_backoff = false :: boolean(),
          cref :: counters:counters_ref(),
          %% why the log is unhealthy, if it is
          health = [] :: [atom()],
@@ -501,50 +506,24 @@ init(#{name := Name, dir := Dir} = Config) ->
     end.
 
 handle_batch(Ops, State0) ->
-    {Replies, State} =
-        lists:foldl(
-          fun (Group, {Acc, S0}) ->
-                  {R, S1} = handle_group(Group, S0),
-                  {[R | Acc], S1}
-          end, {[], State0}, split_at_barriers(Ops)),
-    {ok, lists:append(lists:reverse(Replies)),
-     schedule_retire(refresh(maybe_roll(State)))}.
-
-%% Reconciling and deleting a member are answered in order with the puts that
-%% came before, and not after any that came later, so the operations of a batch
-%% are handled in groups that end at one.
-split_at_barriers(Ops) ->
-    split_at_barriers(Ops, [], []).
-
-split_at_barriers([], [], Groups) ->
-    lists:reverse(Groups);
-split_at_barriers([], Acc, Groups) ->
-    lists:reverse([lists:reverse(Acc) | Groups]);
-split_at_barriers([{call, _, {Barrier, _, _}} = Op | Rem], Acc, Groups)
-  when Barrier == reconcile orelse Barrier == delete ->
-    split_at_barriers(Rem, [], [lists:reverse([Op | Acc]) | Groups]);
-split_at_barriers([Op | Rem], Acc, Groups) ->
-    split_at_barriers(Rem, [Op | Acc], Groups).
-
-handle_group(Ops, State0) ->
-    {Puts, Others, Followers, State1} = classify(Ops, State0, [], [], [], #{}),
-    %% without a usable file there is nowhere to copy to
-    {Copies, State2} = case State1#?MODULE.fd of
-                           undefined -> {[], State1};
-                           _ -> retire_scan(State1)
+    {Puts, Ordered, Followers, State1} = classify(Ops, State0),
+    PutBytes = lists:sum([byte_size(Image) + byte_size(Indexes)
+                          || {put, _, _, _, _, _, Image, Indexes} <- Puts]),
+    %% Files are retired in proportion to what is appended, so that they are
+    %% retired as fast as they are made whatever the load
+    Budget = min(?MAX_RETIRE_CHUNK,
+                 max(State1#?MODULE.retire_chunk, ?RETIRE_FACTOR * PutBytes)),
+    {Copies, State2} = case State1 of
+                           %% nowhere to copy to
+                           #?MODULE{fd = undefined} -> {[], State1};
+                           %% backing off after an error
+                           #?MODULE{retire_backoff = true} -> {[], State1};
+                           _ -> retire_scan(State1, Budget)
                        end,
-    {Replies0, State3} = write_batch(Copies, Puts, State2),
-    %% a repeat of a put in the same batch gets the outcome of the put
-    Outcomes = maps:from_list([{From, Reply}
-                               || {reply, From, Reply} <- Replies0]),
-    Replies1 = [{reply, From, case Outcomes of
-                                 #{Leader := ok} -> Reply;
-                                 #{Leader := Error} -> Error;
-                                 _ -> Reply
-                             end}
-                || {Leader, From, Reply} <- Followers],
-    {Replies2, State4} = run_others(Others, State3),
-    {Replies0 ++ Replies1 ++ Replies2, State4}.
+    {Outcome, State3} = write_batch(Copies, Puts, State2),
+    {Replies, State4} = replay(Ordered, Followers, Outcome, State3),
+    State5 = finish_retire(State4),
+    {ok, Replies, schedule_retire(refresh(maybe_roll(State5)))}.
 
 terminate(_Reason, #?MODULE{name = Name, fd = Fd, retire = Retire,
                             registry_key = RegKey}) ->
@@ -564,65 +543,108 @@ format_status(State) ->
 %%% batch handling
 %%%===================================================================
 
-%% Splits a group of operations, in arrival order, into the puts that need to
-%% be written and the other operations that are answered after them. A put
-%% that repeats, or is stale compared to, one earlier in the same batch is a
-%% "follower" of it: it is answered with the outcome of the earlier one, as
-%% nothing is durable yet.
-classify([], State, Puts, Others, Followers, _Pending) ->
-    {lists:reverse(Puts), lists:reverse(Others), lists:reverse(Followers),
+%% Goes through the operations of a batch in arrival order and splits them into
+%% the puts to be written and the operations to carry out, again in arrival
+%% order, once the write is done. A deleted, released or reconciled member is
+%% seen as such by the operations that follow it in the batch, so a put after a
+%% delete is not judged against the entry that is about to go. A put that
+%% repeats, or is stale compared to, one earlier in the same batch is a
+%% "follower" of it and gets the outcome of the earlier one, as nothing is
+%% durable yet.
+classify(Ops, State) ->
+    classify(Ops, State, [], [], [], #{}).
+
+classify([], State, Puts, Ordered, Followers, _Virtual) ->
+    {lists:reverse(Puts), lists:reverse(Ordered), lists:reverse(Followers),
      State};
 classify([{call, From, {put, UId, Epoch, Idx, Term, Image, Indexes}} | Rem],
-         State, Puts, Others, Followers, Pending) ->
-    {Current, Leader} = case Pending of
-                            #{UId := {E, I, T, L}} -> {{E, I, T}, L};
-                            _ -> {current(UId, State), undefined}
+         State, Puts, Ordered, Followers, Virtual) ->
+    {Current, Leader} = case virtual(UId, Virtual, State) of
+                            {pending, E, I, T, L} -> {{E, I, T}, L};
+                            {stored, E, I, T} -> {{E, I, T}, undefined};
+                            none -> {undefined, undefined}
                         end,
     case put_decision(Current, Epoch, Idx, Term) of
         write ->
             Item = {put, From, UId, Epoch, Idx, Term, Image, Indexes},
-            classify(Rem, State, [Item | Puts], Others, Followers,
-                     Pending#{UId => {Epoch, Idx, Term, From}});
+            classify(Rem, State, [Item | Puts],
+                     [{put, From, UId} | Ordered], Followers,
+                     Virtual#{UId => {pending, Epoch, Idx, Term, From}});
         ok when Leader == undefined ->
-            classify(Rem, State, Puts, [{reply, From, ok} | Others],
-                     Followers, Pending);
+            classify(Rem, State, Puts, [{reply, From, ok} | Ordered],
+                     Followers, Virtual);
         ok ->
-            classify(Rem, State, Puts, Others,
-                     [{Leader, From, ok} | Followers], Pending);
+            classify(Rem, State, Puts, Ordered,
+                     [{Leader, From, ok} | Followers], Virtual);
         stale when Leader == undefined ->
             classify(Rem, incr(stale_puts, State), Puts,
-                     [{reply, From, {error, stale}} | Others], Followers,
-                     Pending);
+                     [{reply, From, {error, stale}} | Ordered], Followers,
+                     Virtual);
         stale ->
-            classify(Rem, incr(stale_puts, State), Puts, Others,
-                     [{Leader, From, {error, stale}} | Followers], Pending)
+            classify(Rem, incr(stale_puts, State), Puts, Ordered,
+                     [{Leader, From, {error, stale}} | Followers], Virtual)
     end;
 classify([{call, From, {reconcile, UId, Epoch}} | Rem], State, Puts,
-         Others, Followers, Pending) ->
-    classify(Rem, State, Puts,
-             [{reconcile, From, UId, Epoch} | Others], Followers, Pending);
+         Ordered, Followers, Virtual) ->
+    %% an entry of another incarnation is dropped by the reconcile
+    V1 = case virtual(UId, Virtual, State) of
+             {_, E, _, _} when E =/= Epoch -> Virtual#{UId => none};
+             {pending, E, _, _, _} when E =/= Epoch -> Virtual#{UId => none};
+             _ -> Virtual
+         end,
+    classify(Rem, State, Puts, [{reconcile, From, UId, Epoch} | Ordered],
+             Followers, V1);
 classify([{call, From, {delete, UId, Epoch}} | Rem], State, Puts,
-         Others, Followers, Pending) ->
+         Ordered, Followers, Virtual) ->
+    V1 = case virtual(UId, Virtual, State) of
+             {pending, E, _, _, _}
+               when Epoch == any orelse Epoch == E ->
+                 Virtual#{UId => none};
+             {stored, E, _, _}
+               when Epoch == any orelse Epoch == E ->
+                 Virtual#{UId => none};
+             _ ->
+                 Virtual
+         end,
+    classify(Rem, State, Puts, [{delete, From, UId, Epoch} | Ordered],
+             Followers, V1);
+classify([{call, From, info} | Rem], State, Puts, Ordered, Followers,
+         Virtual) ->
+    classify(Rem, State, Puts, [{info, From} | Ordered], Followers, Virtual);
+classify([{call, From, _Unknown} | Rem], State, Puts, Ordered, Followers,
+         Virtual) ->
     classify(Rem, State, Puts,
-             [{delete, From, UId, Epoch} | Others], Followers,
-             maps:remove(UId, Pending));
-classify([{call, From, info} | Rem], State, Puts, Others, Followers,
-         Pending) ->
-    classify(Rem, State, Puts, [{info, From} | Others], Followers, Pending);
-classify([{call, From, _Unknown} | Rem], State, Puts, Others, Followers,
-         Pending) ->
-    classify(Rem, State, Puts, [{reply, From, {error, unknown_request}} | Others],
-             Followers, Pending);
-classify([{cast, {release, UId, IdxTerm}} | Rem], State, Puts, Others,
-         Followers, Pending) ->
-    classify(Rem, State, Puts, [{release, UId, IdxTerm} | Others], Followers,
-             Pending);
-classify([{info, retire_step} | Rem], State, Puts, Others, Followers,
-         Pending) ->
-    classify(Rem, State#?MODULE{retire_token = false}, Puts, Others,
-             Followers, Pending);
-classify([_ | Rem], State, Puts, Others, Followers, Pending) ->
-    classify(Rem, State, Puts, Others, Followers, Pending).
+             [{reply, From, {error, unknown_request}} | Ordered],
+             Followers, Virtual);
+classify([{cast, {release, UId, {Idx, Term} = IdxTerm}} | Rem], State, Puts,
+         Ordered, Followers, Virtual) ->
+    V1 = case virtual(UId, Virtual, State) of
+             {pending, _, Idx, Term, _} -> Virtual#{UId => none};
+             {stored, _, Idx, Term} -> Virtual#{UId => none};
+             _ -> Virtual
+         end,
+    classify(Rem, State, Puts, [{release, UId, IdxTerm} | Ordered], Followers,
+             V1);
+classify([{info, retire_step} | Rem], State, Puts, Ordered, Followers,
+         Virtual) ->
+    classify(Rem, State#?MODULE{retire_token = false, retire_backoff = false},
+             Puts, Ordered, Followers, Virtual);
+classify([_ | Rem], State, Puts, Ordered, Followers, Virtual) ->
+    classify(Rem, State, Puts, Ordered, Followers, Virtual).
+
+%% the member's entry as the operations of the batch before this one leave it
+virtual(UId, Virtual, State) ->
+    case Virtual of
+        #{UId := none} ->
+            none;
+        #{UId := {pending, _, _, _, _} = Pending} ->
+            Pending;
+        _ ->
+            case current(UId, State) of
+                undefined -> none;
+                {E, I, T} -> {stored, E, I, T}
+            end
+    end.
 
 current(UId, #?MODULE{tid = Tid}) ->
     case ets:lookup(Tid, UId) of
@@ -645,9 +667,11 @@ put_decision({_OtherEpoch, _, _}, _Epoch, _Idx, _Term) ->
 %% Writes copies (records carried forward from the file being retired) and
 %% puts in a single append + fsync. Copies go first so that, if a put for the
 %% same member is in the same batch, the put has the higher sequence number.
+%% The copies are published once the batch is durable, the puts are by replay/4,
+%% which has to apply them in the order the operations came in.
 write_batch(_Copies, [], #?MODULE{fd = undefined} = State) ->
     %% nothing to write and no usable file, don't churn trying to make one
-    {[], State};
+    {no_write, State};
 write_batch(_Copies, Puts, #?MODULE{fd = undefined} = State0) ->
     %% no usable file: try to get one, otherwise fail the puts
     State = abandon_retire_progress(State0),
@@ -655,12 +679,10 @@ write_batch(_Copies, Puts, #?MODULE{fd = undefined} = State0) ->
         {ok, State1} ->
             write_batch([], Puts, State1);
         {error, Reason, State1} ->
-            {[{reply, From, {error, Reason}}
-              || {put, From, _, _, _, _, _, _} <- Puts],
-             incr(errors, State1#?MODULE{last_failed = true})}
+            {{error, Reason}, incr(errors, State1#?MODULE{last_failed = true})}
     end;
 write_batch([], [], #?MODULE{} = State) ->
-    {[], finish_retire(State)};
+    {no_write, State};
 write_batch(Copies, Puts, #?MODULE{no = No, off = Off0, seq = Seq0,
                                    fd = Fd} = State0) ->
     Items = [{copy, C} || C <- Copies] ++ [{put, P} || P <- Puts],
@@ -672,7 +694,8 @@ write_batch(Copies, Puts, #?MODULE{no = No, off = Off0, seq = Seq0,
          State0),
     case WriteRes of
         ok ->
-            State1 = apply_entries(Applies, State0),
+            State1 = apply_entries([A || {copy, _, _, _} = A <- Applies],
+                                   State0),
             State2 = State1#?MODULE{off = Off1,
                                     seq = Seq1,
                                     last_failed = false},
@@ -680,8 +703,7 @@ write_batch(Copies, Puts, #?MODULE{no = No, off = Off0, seq = Seq0,
                           incr(copies, length(Copies),
                                incr(bytes_written, Bytes,
                                     incr(batches, State2)))),
-            {[{reply, From, ok} || {put, From, _, _, _, _, _, _} <- Puts],
-             finish_retire(State3)};
+            {{ok, [E || {put, E} <- Applies]}, State3};
         {error, Reason} ->
             %% Do not retry the fsync: after a failed fsync the page cache can
             %% claim the data is clean while it never reached the disk. Fail
@@ -693,8 +715,7 @@ write_batch(Copies, Puts, #?MODULE{no = No, off = Off0, seq = Seq0,
                    [State0#?MODULE.name, Reason, No]),
             State1 = abandon_retire_progress(State0),
             State2 = abandon_file(State1, Off0),
-            {[{reply, From, {error, Reason}}
-              || {put, From, _, _, _, _, _, _} <- Puts],
+            {{error, Reason},
              incr(errors, State2#?MODULE{last_failed = true})}
     end.
 
@@ -786,42 +807,63 @@ remove_entry(UId, #?MODULE{tid = Tid, live_bytes = Live} = State) ->
             State
     end.
 
-run_others(Others, State) ->
-    {Replies, State1} = lists:foldl(
-      fun ({reply, _From, _Reply} = R, {Acc, S}) ->
-              {[R | Acc], S};
-          ({reconcile, From, UId, Epoch}, {Acc, S}) ->
-              case ets:lookup(S#?MODULE.tid, UId) of
-                  [{UId, Epoch, Idx, Term, _, _, _, _, _, _}] ->
-                      {[{reply, From, {ok, #{idx => Idx,
-                                            term => Term}}} | Acc], S};
-                  [{UId, _OtherEpoch, _, _, _, _, _, _, _, _}] ->
-                      {[{reply, From, not_found} | Acc],
-                       remove_entry(UId, S)};
-                  [] ->
-                      {[{reply, From, not_found} | Acc], S}
-              end;
-          ({delete, From, UId, Epoch}, {Acc, S}) ->
-              S1 = case ets:lookup(S#?MODULE.tid, UId) of
-                       [{UId, EntryEpoch, _, _, _, _, _, _, _, _}]
-                         when Epoch == any orelse Epoch == EntryEpoch ->
-                           remove_entry(UId, S);
-                       _ ->
-                           S
-                   end,
-              {[{reply, From, ok} | Acc], S1};
-          ({release, UId, {Idx, Term}}, {Acc, S}) ->
-              S1 = case ets:lookup(S#?MODULE.tid, UId) of
-                       [{UId, _, Idx, Term, _, _, _, _, _, _}] ->
-                           remove_entry(UId, S);
-                       _ ->
-                           S
-                   end,
-              {Acc, S1};
-          ({info, From}, {Acc, S}) ->
-              {[{reply, From, do_info(S)} | Acc], S}
-      end, {[], State}, Others),
-    {lists:reverse(Replies), State1}.
+%% Carries out the operations of the batch in the order they came in, now that
+%% the write is done: a put is published (or failed), a delete or release takes
+%% effect, a reconcile is answered from what the operations before it left.
+replay(Ordered, Followers, Outcome, State0) ->
+    Entries = case Outcome of
+                  {ok, Es} -> Es;
+                  _ -> []
+              end,
+    {Replies0, _, State1} =
+        lists:foldl(fun (Op, {Acc, Es, S}) ->
+                            replay_op(Op, Outcome, Es, Acc, S)
+                    end, {[], Entries, State0}, Ordered),
+    %% a repeat of a put in the same batch gets the outcome of the put
+    Outcomes = maps:from_list([{From, Reply}
+                               || {reply, From, Reply} <- Replies0]),
+    Replies1 = [{reply, From, case Outcomes of
+                                 #{Leader := ok} -> Reply;
+                                 #{Leader := Error} -> Error;
+                                 _ -> Reply
+                             end}
+                || {Leader, From, Reply} <- Followers],
+    {lists:reverse(Replies0) ++ Replies1, State1}.
+
+replay_op({reply, _From, _Reply} = R, _Outcome, Es, Acc, S) ->
+    {[R | Acc], Es, S};
+replay_op({put, From, _UId}, {ok, _}, [E | Es], Acc, S) ->
+    {[{reply, From, ok} | Acc], Es, publish(E, S)};
+replay_op({put, From, _UId}, {error, Reason}, Es, Acc, S) ->
+    {[{reply, From, {error, Reason}} | Acc], Es, S};
+replay_op({reconcile, From, UId, Epoch}, _Outcome, Es, Acc, S) ->
+    case ets:lookup(S#?MODULE.tid, UId) of
+        [{UId, Epoch, Idx, Term, _, _, _, _, _, _}] ->
+            {[{reply, From, {ok, #{idx => Idx, term => Term}}} | Acc], Es, S};
+        [{UId, _OtherEpoch, _, _, _, _, _, _, _, _}] ->
+            {[{reply, From, not_found} | Acc], Es, remove_entry(UId, S)};
+        [] ->
+            {[{reply, From, not_found} | Acc], Es, S}
+    end;
+replay_op({delete, From, UId, Epoch}, _Outcome, Es, Acc, S) ->
+    S1 = case ets:lookup(S#?MODULE.tid, UId) of
+             [{UId, EntryEpoch, _, _, _, _, _, _, _, _}]
+               when Epoch == any orelse Epoch == EntryEpoch ->
+                 remove_entry(UId, S);
+             _ ->
+                 S
+         end,
+    {[{reply, From, ok} | Acc], Es, S1};
+replay_op({release, UId, {Idx, Term}}, _Outcome, Es, Acc, S) ->
+    S1 = case ets:lookup(S#?MODULE.tid, UId) of
+             [{UId, _, Idx, Term, _, _, _, _, _, _}] ->
+                 remove_entry(UId, S);
+             _ ->
+                 S
+         end,
+    {Acc, Es, S1};
+replay_op({info, From}, _Outcome, Es, Acc, S) ->
+    {[{reply, From, do_info(S)} | Acc], Es, S}.
 
 do_info(#?MODULE{cref = CRef, live_bytes = Live, off = Off, no = No,
                  rolled = Rolled, retire = Retire, fd = Fd, health = Health}) ->
@@ -968,18 +1010,20 @@ schedule_retire(State) ->
 
 %% Reads the next chunk of the file being retired and returns the records in
 %% it that are still live, as copies to be re-appended.
-retire_scan(#?MODULE{retire = undefined, rolled = []} = State) ->
+retire_scan(#?MODULE{retire = undefined, rolled = []} = State, _Budget) ->
     {[], State};
 retire_scan(#?MODULE{retire = undefined, rolled = [{No, Limit} | _],
-                     dir = Dir} = State) ->
+                     dir = Dir} = State, Budget) ->
     case io_open_read(State, file_name(Dir, No)) of
         {ok, Fd} ->
             retire_scan(State#?MODULE{retire = #retire{no = No, fd = Fd,
                                                        off = ?HDR_SIZE,
-                                                       limit = Limit}});
+                                                       limit = Limit}},
+                        Budget);
         {error, enoent} ->
             %% already gone
-            retire_scan(State#?MODULE{rolled = tl(State#?MODULE.rolled)});
+            retire_scan(State#?MODULE{rolled = tl(State#?MODULE.rolled)},
+                        Budget);
         {error, Reason} ->
             ?ERROR("ra_log_snap_store: ~ts: cannot open file ~b to retire: ~w, "
                    "will try again", [State#?MODULE.name, No, Reason]),
@@ -987,8 +1031,8 @@ retire_scan(#?MODULE{retire = undefined, rolled = [{No, Limit} | _],
     end;
 retire_scan(#?MODULE{retire = #retire{no = No, fd = Fd, off = Off,
                                       limit = Limit} = R,
-                     retire_chunk = Chunk, live_fun = LiveFun} = State) ->
-    {Recs, Next, Status, Skipped} = read_records(Fd, Off, Limit, Chunk),
+                     live_fun = LiveFun} = State, Budget) ->
+    {Recs, Next, Status, Skipped} = read_records(Fd, Off, Limit, Budget),
     counters:add(State#?MODULE.cref, ?C_CORRUPT_RECORDS, Skipped),
     {Copies, State1} =
         lists:foldl(
@@ -1034,7 +1078,8 @@ retire_later(#?MODULE{retire_token = true} = State) ->
     State;
 retire_later(State) ->
     erlang:send_after(?RETIRE_RETRY_MS, self(), retire_step),
-    State#?MODULE{retire_token = true, retire_failing = true}.
+    State#?MODULE{retire_token = true, retire_failing = true,
+                  retire_backoff = true}.
 
 %% Called once a batch (including any copies) is durable.
 finish_retire(#?MODULE{retire = #retire{no = No, fd = Fd, limit = done},

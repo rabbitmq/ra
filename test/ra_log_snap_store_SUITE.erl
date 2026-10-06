@@ -45,6 +45,9 @@ all_tests() ->
      retire_skips_an_invalid_record_and_copies_the_rest,
      retire_never_deletes_a_file_that_is_still_referenced,
      retire_open_error_backs_off,
+     reconciles_do_not_split_batches,
+     release_then_repeated_put_in_a_batch_keeps_the_snapshot,
+     disk_use_stays_bounded_under_load,
      unreadable_file_stops_the_store_starting,
      damaged_header_in_an_old_file_is_set_aside,
      torn_file_creation_is_deleted,
@@ -666,7 +669,9 @@ retire_never_deletes_a_file_that_is_still_referenced(Config) ->
     ok.
 
 retire_open_error_backs_off(Config) ->
+    Opens = counters:new(1, []),
     IO = #{open_read => fun (Path) ->
+                                counters:add(Opens, 1, 1),
                                 case failing(open_read) of
                                     true -> {error, eio};
                                     false -> file:open(Path, [read, raw, binary])
@@ -681,18 +686,127 @@ retire_open_error_backs_off(Config) ->
     timer:sleep(100),
     Pid = whereis(N),
     {reductions, R0} = process_info(Pid, reductions),
+    Opens0 = counters:get(Opens, 1),
     timer:sleep(500),
     {reductions, R1} = process_info(Pid, reductions),
     %% it is waiting to retry, not retrying in a loop
     ?assert(R1 - R0 < 10000),
+    ?assert(counters:get(Opens, 1) - Opens0 =< 1),
     ?assert(maps:get(rolled_files, ra_log_snap_store:info(N)) >= 1),
+    %% and a busy store (a batch each) does not retry for each batch either
+    [ok = ra_log_snap_store:put(N, <<"b">>, E, {I, 1}, image(100), [])
+     || I <- lists:seq(1, 30)],
+    ?assert(counters:get(Opens, 1) - Opens0 =< 2),
     clear_failure(),
     %% it does retry
     wait_quiescent(N),
     ok.
 
-%% an I/O error is not damage: the snapshots in the file must not be given up
-%% on (renamed, or deleted by retiring) because it could not be read once
+%% a reconcile used to end the write of the batch it was in, so members
+%% starting up, which reconcile, undid the batching of everyone else's puts
+reconciles_do_not_split_batches(Config) ->
+    N = start(Config, #{}),
+    E = <<"e">>,
+    Parent = self(),
+    Writers = 100,
+    Rounds = 20,
+    Pids = [spawn_link(
+              fun () ->
+                      UId = integer_to_binary(W),
+                      [begin
+                           ok = ra_log_snap_store:put(N, UId, E, {R, 1},
+                                                      image(100), []),
+                           {ok, _} = ra_log_snap_store:reconcile(N, UId, E)
+                       end || R <- lists:seq(1, Rounds)],
+                      Parent ! {done, self()}
+              end) || W <- lists:seq(1, Writers)],
+    [receive {done, P} -> ok after 60000 -> ct:fail(timeout) end || P <- Pids],
+    #{puts := Puts, batches := Batches} = ra_log_snap_store:info(N),
+    ct:pal("~b puts in ~b batches", [Puts, Batches]),
+    ?assertEqual(Writers * Rounds, Puts),
+    ?assert(Batches < Puts div 2),
+    ok.
+
+%% [release X, put X] in a batch: the put is not a no-op as the release has
+%% already dropped X, and the snapshot must not be lost
+release_then_repeated_put_in_a_batch_keeps_the_snapshot(Config) ->
+    Self = self(),
+    N = start(Config, #{io => io_blocking_sync(Self)}),
+    E = <<"e">>,
+    Img = image(100),
+    ok = ra_log_snap_store:put(N, <<"a">>, E, {5, 1}, Img, []),
+    block_syncs(),
+    _ = spawn(fun () ->
+                      ra_log_snap_store:put(N, <<"b">>, E, {1, 1}, image(10), [])
+              end),
+    receive in_sync -> ok after 5000 -> ct:fail(put_not_in_sync) end,
+    ok = ra_log_snap_store:release(N, <<"a">>, {5, 1}),
+    wait_queued(N, 1),
+    _ = spawn(fun () ->
+                      Self ! {put, ra_log_snap_store:put(N, <<"a">>, E, {5, 1},
+                                                         Img, [])}
+              end),
+    wait_queued(N, 2),
+    unblock_syncs(),
+    receive {put, ok} -> ok after 5000 -> ct:fail(no_put_reply) end,
+    ?assertMatch({ok, #{idx := 5}}, ra_log_snap_store:lookup(N, <<"a">>)),
+    {ok, Img, []} = ra_log_snap_store:read(N, <<"a">>, {5, 1}),
+    %% and it stays
+    ok = ra_log_snap_store:stop(N),
+    N = start(Config, #{}),
+    {ok, Img, []} = ra_log_snap_store:read(N, <<"a">>, {5, 1}),
+    ok.
+
+%% With files that roll all the time and many writers, files are retired as
+%% fast as they are made. Retiring used to read a fixed amount for each batch
+%% so under load the files piled up without bound.
+disk_use_stays_bounded_under_load(Config) ->
+    N = start(Config, #{min_file_bytes => 65536,
+                        retire_chunk_bytes => 4096}),
+    E = <<"e">>,
+    Parent = self(),
+    Writers = 8,
+    PerWriter = 25,
+    Stop = erlang:monotonic_time(millisecond) + 2500,
+    Pids = [spawn_link(
+              fun () ->
+                      UIds = [integer_to_binary(W * 1000 + I)
+                              || I <- lists:seq(1, PerWriter)],
+                      writer(N, E, UIds, 1, Stop),
+                      Parent ! {done, self()}
+              end) || W <- lists:seq(1, Writers)],
+    Max = sample_files(N, Stop + 200, 0),
+    [receive {done, P} -> ok after 60000 -> ct:fail(timeout) end || P <- Pids],
+    Live = Writers * PerWriter * 8300,
+    ct:pal("at most ~b files, ~b live bytes", [Max, Live]),
+    %% a file is about twice the live data, a few of them are in flight
+    ?assert(Max =< 8),
+    wait_quiescent(N),
+    Files = filelib:wildcard(filename:join(?config(store_dir, Config), "*.snap")),
+    Total = lists:sum([filelib:file_size(F) || F <- Files]),
+    ?assert(Total < 6 * Live),
+    ok.
+
+writer(N, E, UIds, Round, Stop) ->
+    case erlang:monotonic_time(millisecond) >= Stop of
+        true ->
+            ok;
+        false ->
+            [ok = ra_log_snap_store:put(N, U, E, {Round, 1}, image(8192), [])
+             || U <- UIds],
+            writer(N, E, UIds, Round + 1, Stop)
+    end.
+
+sample_files(N, Until, Max) ->
+    case erlang:monotonic_time(millisecond) >= Until of
+        true ->
+            Max;
+        false ->
+            #{files := Files} = ra_log_snap_store:info(N),
+            timer:sleep(20),
+            sample_files(N, Until, max(Max, Files))
+    end.
+
 unreadable_file_stops_the_store_starting(Config) ->
     N = start(Config, #{}),
     E = <<"e">>,
