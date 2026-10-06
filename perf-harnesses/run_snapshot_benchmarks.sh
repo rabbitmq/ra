@@ -3,7 +3,10 @@
 # read the results into one directory to send back.
 #
 #   run_snapshot_benchmarks.sh <directory on the file system under test> \
-#                              <block device, e.g. nvme0n1> [smoke|quick|full]
+#                              [<block device, e.g. nvme0n1>] [smoke|quick|full]
+#
+# The device is found from the directory if it is not given, and is checked
+# against it if it is: the disk columns of the results are those of the device.
 #
 # smoke takes a couple of minutes and only checks that everything works, quick
 # (default) takes about 20 minutes, full about 1.5 hours.
@@ -12,10 +15,12 @@
 set -u
 
 DIR=${1:?directory on the file system under test}
-DEV=${2:?block device name, e.g. nvme0n1}
+DEV=${2:-}
 MODE=${3:-quick}
+case $DEV in smoke|quick|full) MODE=$DEV; DEV= ;; esac
 
 HERE=$(cd "$(dirname "$0")" && pwd)
+mkdir -p "$DIR" || exit 1
 ROOT=$(cd "$HERE/.." && pwd)
 OUT="$PWD/snapshot-bench-$(hostname)-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT" "$DIR" || exit 1
@@ -23,6 +28,20 @@ EBIN="$ROOT/_build/default/lib/*/ebin"
 
 # no crash dumps in the directory the script is run from
 export ERL_CRASH_DUMP=/dev/null
+# the device the directory is on, the disk and not the partition
+SRC=$(findmnt -no SOURCE -T "$DIR" 2>/dev/null)
+DETECTED=$(lsblk -no pkname "$SRC" 2>/dev/null | head -1)
+[ -n "$DETECTED" ] || DETECTED=$(basename "$SRC" 2>/dev/null)
+if [ -z "$DEV" ]; then
+    DEV=$DETECTED
+elif [ -n "$DETECTED" ] && [ "$DETECTED" != "$DEV" ]; then
+    echo "WARNING: $DIR is on $SRC ($DETECTED), not $DEV. Using $DETECTED so the" >&2
+    echo "disk columns are those of the device that is being measured." >&2
+    DEV=$DETECTED
+fi
+[ -n "$DEV" ] || { echo "could not tell which device $DIR is on, give it as the second argument" >&2; exit 1; }
+echo "directory $DIR is on $SRC, measuring device $DEV"
+
 ulimit -n 65536 2>/dev/null || echo "warning: could not raise the open file limit" >&2
 
 case $MODE in

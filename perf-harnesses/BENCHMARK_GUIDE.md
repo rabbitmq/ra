@@ -26,8 +26,10 @@ perf-harnesses/run_snapshot_benchmarks.sh /mnt/ext4/bench nvme0n1 quick   # ~20 
 perf-harnesses/run_snapshot_benchmarks.sh /mnt/ext4/bench nvme0n1 full    # ~1.5 h, optional
 ```
 
-The device is the name in `/proc/diskstats` (`nvme0n1`, not a partition; for
-LVM/RAID give the underlying device and say so). Only `probe`, `store`, `e2e`
+The device is found from the directory if you leave it out (the second argument
+is optional) and checked against it if you give it; it is the name in
+`/proc/diskstats` (`nvme0n1`, not a partition; for LVM/RAID check what it picks
+and say so). The disk columns are those of this device. Only `probe`, `store`, `e2e`
 and `fs` under the directory are used and emptied. Results land in
 `./snapshot-bench-<host>-<date>/`. Run one at a time. A fresh `rebar3 compile`
 matters: a stale build shows as zero `fsync ms`/`files`/`put/bat` columns.
