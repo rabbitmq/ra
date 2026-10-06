@@ -116,7 +116,6 @@ bench(Dir, Rate, Opts) ->
         _ -> ok = ra_log_snap_store:stop(?NAME)
     end,
     _ = file:del_dir_r(Base),
-    Wall = (T1 - T0) / 1.0e6,
     Sorted = lists:sort(Lats),
     InWindow = [L || {St, L} <- WalLats, St >= T0, St =< T1],
     #{rate => Rate, wall => Duration * 1.0, puts => length(Lats),
