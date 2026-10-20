@@ -263,7 +263,12 @@
                               %% minimum number of log entries since last
                               %% snapshot/checkpoint before writing a recovery
                               %% checkpoint on shutdown. 0 disables (default).
-                              min_recovery_checkpoint_interval => non_neg_integer()
+                              min_recovery_checkpoint_interval => non_neg_integer(),
+                              %% allow the leader to commit entries once
+                              %% they are on N div 2 voters (rather than
+                              %% N div 2 + 1) when N is even and >= 4.
+                              %% Default: false
+                              flexible_quorum => boolean()
                              }.
 
 -type ra_server_info_key() :: machine_version | atom().
@@ -299,7 +304,8 @@
                             %% minimum number of log entries since last
                             %% snapshot/checkpoint before writing a recovery
                             %% checkpoint on shutdown. 0 disables (default).
-                            min_recovery_checkpoint_interval => non_neg_integer()}.
+                            min_recovery_checkpoint_interval => non_neg_integer(),
+                            flexible_quorum => boolean()}.
 
 -type config() :: ra_server_config().
 
@@ -417,6 +423,7 @@ init(#{id := Id,
     CommitIndex = max(LastApplied, SnapshotIdx),
     MinRecoveryCheckpointInterval = maps:get(min_recovery_checkpoint_interval,
                                              Config, 0),
+    FlexibleQuorum = maps:get(flexible_quorum, Config, false),
     Cfg = #cfg{id = Id,
                uid = UId,
                log_id = LogId,
@@ -432,7 +439,8 @@ init(#{id := Id,
                max_append_entries_rpc_batch_size = MaxAERBatchSize,
                counter = maps:get(counter, Config, undefined),
                system_config = SystemConfig,
-               min_recovery_checkpoint_interval = MinRecoveryCheckpointInterval},
+               min_recovery_checkpoint_interval = MinRecoveryCheckpointInterval,
+               flexible_quorum = FlexibleQuorum},
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX, CommitIndex),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapshotIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_TERM, CurrentTerm),
@@ -548,7 +556,7 @@ handle_leader({PeerId, #append_entries_reply{term = Term, success = true,
             Effects00 = maybe_promote_peer(PeerId, State1, []),
             {State2, Effects0} = evaluate_quorum(State1, Effects00),
             {State3, Effects1} = process_pending_consistent_queries(State2,
-                                                                   Effects0),
+                                                                    Effects0),
             Effects2 = [{next_event, info, pipeline_rpcs} | Effects1],
             case State3 of
                 #{cluster := #{Id := _}} ->
@@ -2171,6 +2179,9 @@ become(leader, OldRaftState, #{cluster := Cluster,
                                cluster_change_permitted := CCP0,
                                log := Log0} = State) ->
     Log = ra_log:release_resources(maps:size(Cluster), sequential, Log0),
+    %% NB: cluster_change_permitted must stay false until the leader has
+    %% committed an entry in its own term. Both cluster changes and the
+    %% flexible commit quorum (see flexible_quorum_permitted/1) depend on this
     CCP = case OldRaftState of
               await_condition ->
                   CCP0;
@@ -3351,6 +3362,7 @@ apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyMode}},
                     ?DEBUG("~ts: committing ra cluster change at index ~b to ~tw",
                            [log_id(State0), Idx, maps:keys(NewCluster)]),
                     %% else just enable further cluster changes again
+                    %% (and the flexible commit quorum, if configured)
                     State0#{cluster_change_permitted => true}
             end,
     {Mod, Idx, State, MacSt, Effects, Notifys, LastTs};
@@ -3367,6 +3379,9 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
               current_term := CurrentTerm,
               cluster_change_permitted := ClusterChangePerm0} = State0,
             MacSt, Effects, Notifys, LastTs}) ->
+    %% applying the noop for the current term means the leader has committed
+    %% an entry in its own term, enabling cluster changes and the flexible
+    %% commit quorum (if configured)
     ClusterChangePerm = case CurrentTerm of
                             Term ->
                                 ?DEBUG("~ts: enabling ra cluster changes in"
@@ -3602,6 +3617,9 @@ append_cluster_change(Cluster, From, ReplyMode,
         Log ->
             NewState = State#{log => Log,
                               cluster => Cluster,
+                              %% NB: this also disables the flexible commit
+                              %% quorum until the change is committed and
+                              %% applied
                               cluster_change_permitted => false,
                               cluster_index_term => IdxTerm,
                               previous_cluster => {PrevCITIdx, PrevCITTerm,
@@ -3665,8 +3683,51 @@ evaluate_quorum(#{cfg := Cfg,
     {State1, Effects1} = apply_to(CI, State, Effects),
     maybe_emit_pending_release_cursor(State1, Effects1).
 
-increment_commit_index(State0 = #{current_term := CurrentTerm}) ->
-    PotentialNewCommitIndex = agreed_commit(match_indexes(State0)),
+data_commit_quorum_size(N, true) when N rem 2 =:= 0, N >= 4 ->
+    % Even and flexible quorum permitted: as the election quorum is
+    % N div 2 + 1 a commit quorum of N div 2 is enough for them to intersect
+    N div 2;
+data_commit_quorum_size(N, _FlexiPermitted) ->
+    % Odd or flexible quorum not permitted: classic majority holds
+    required_quorum_count(N).
+
+%% A reduced commit quorum is only used when enabled with the flexible_quorum
+%% server config and is only safe when:
+%% - cluster_change_permitted is true: this is only the case after the leader
+%%   has committed an entry in its own term (the noop) and when there is no
+%%   uncommitted cluster change in flight.
+%% - the latest cluster change has been committed. This is checked explicitly
+%%   as cluster_change_permitted is also set to true when applying a noop
+%%   for the current term, which can be appended mid-term (machine upgrades)
+%%   ahead of a cluster change that is still in flight when the noop is
+%%   applied.
+%% - the leader is a voter in its own cluster config: match_indexes/1 always
+%%   includes the leader's index so if the leader has removed itself the
+%%   number of match indexes would be one more than the number of voters.
+flexible_quorum_permitted(#{cfg := #cfg{id = Id,
+                                        flexible_quorum = true},
+                            cluster := Cluster,
+                            cluster_change_permitted := true,
+                            cluster_index_term := {CITIdx, _},
+                            commit_index := CommitIdx})
+  when CommitIdx >= CITIdx ->
+    case Cluster of
+        #{Id := #{voter_status := #{membership := Membership}}}
+          when Membership =/= voter ->
+            false;
+        #{Id := _} ->
+            true;
+        _ ->
+            false
+    end;
+flexible_quorum_permitted(_State) ->
+    false.
+
+increment_commit_index(#{current_term := CurrentTerm} = State0) ->
+    MatchIdxs = match_indexes(State0),
+    DataQuorumSize = data_commit_quorum_size(length(MatchIdxs),
+                                             flexible_quorum_permitted(State0)),
+    PotentialNewCommitIndex = agreed_commit(MatchIdxs, DataQuorumSize),
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
     case fetch_term(PotentialNewCommitIndex, State0) of
@@ -3703,9 +3764,14 @@ match_indexes(#{cfg := #cfg{id = Id},
 
 -spec agreed_commit(list()) -> ra_index().
 agreed_commit(Indexes) ->
+    %% highest index agreed by a majority
+    agreed_commit(Indexes, required_quorum_count(length(Indexes))).
+
+-spec agreed_commit(list(), pos_integer()) -> ra_index().
+agreed_commit(Indexes, QuorumSize) ->
+    %% highest index agreed by QuorumSize members, i.e. the Nth highest
     SortedIdxs = lists:sort(fun erlang:'>'/2, Indexes),
-    Nth = trunc(length(SortedIdxs) / 2) + 1,
-    lists:nth(Nth, SortedIdxs).
+    lists:nth(QuorumSize, SortedIdxs).
 
 log_unhandled_msg(RaState, Msg, #{cfg := #cfg{log_id = LogId}}) ->
     ?DEBUG("~ts: ~w received unhandled msg: ~W", [LogId, RaState, Msg, 6]).
@@ -3849,6 +3915,7 @@ update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster} = State0) ->
     end.
 
 get_current_query_quorum(State) ->
+    %% Explicitly not implemented for FlexiRaft
     agreed_commit(query_indexes(State)).
 
 -spec take_from_queue_while(fun((El) -> {true, Res} | false),
@@ -4016,6 +4083,9 @@ maybe_promote_peer(PeerId, #{cluster := Cluster}, Effects) ->
 -spec required_quorum(ra_cluster()) -> pos_integer().
 required_quorum(Cluster) ->
     Voters = count_voters(Cluster),
+    required_quorum_count(Voters).
+
+required_quorum_count(Voters) ->
     trunc(Voters / 2) + 1.
 
 count_voters(Cluster) ->
@@ -4247,7 +4317,7 @@ agreed_commit_test() ->
     4 = agreed_commit([4]),
     % 2 servers - only leader has seen new commit
     3 = agreed_commit([4, 3]),
-    % 2 servers - all servers have seen new commit
+    % 3 servers - all servers have seen new commit
     4 = agreed_commit([4, 4, 4]),
     % 3 servers - leader + 1 server has seen new commit
     4 = agreed_commit([4, 4, 3]),
@@ -4255,6 +4325,54 @@ agreed_commit_test() ->
     4 = agreed_commit([3, 4, 4]),
     % 3 servers - only leader has seen new commit
     3 = agreed_commit([4, 2, 3]),
+
+    %% Nth
+    4 = agreed_commit([4], 1),
+    % 2 servers - only leader has seen new commit
+    4 = agreed_commit([4, 3], 1),
+    % 3 servers - all servers have seen new commit
+    4 = agreed_commit([4, 4, 4], 2),
+    % 3 servers - only leader has seen new commit
+    4 = agreed_commit([4, 3, 3], 1),
+    % only other servers have seen new commit
+    4 = agreed_commit([3, 4, 4], 1),
+    % 3 servers - only leader has seen new commit
+    4 = agreed_commit([4, 2, 3], 1),
+
+    % 2 of the 3 have seen commit 3
+    3 = agreed_commit([3, 3, 2], 2),
+    % 2 ahead, 2 behind
+    3 = agreed_commit([5, 5, 3, 2, 1], 3),
+    % one way ahead of the rest
+    1 = agreed_commit([5, 2, 1, 1, 1], 4),
+
+    ok.
+
+required_quorum_count_test() ->
+    %% 3 voters, 2 needed for quorum
+    2 = required_quorum_count(3),
+    %% 4 voters
+    3 = required_quorum_count(4),
+    %% 5 voters
+    3 = required_quorum_count(5),
+
+    ok.
+
+data_commit_quorum_size_test() ->
+    1 = data_commit_quorum_size(1, true),
+    2 = data_commit_quorum_size(2, true),
+    2 = data_commit_quorum_size(3, true),
+    2 = data_commit_quorum_size(4, true),
+    3 = data_commit_quorum_size(5, true),
+    3 = data_commit_quorum_size(6, true),
+    4 = data_commit_quorum_size(7, true),
+
+    2 = data_commit_quorum_size(3, false),
+    3 = data_commit_quorum_size(4, false),
+    3 = data_commit_quorum_size(5, false),
+    4 = data_commit_quorum_size(6, false),
+    4 = data_commit_quorum_size(7, false),
+
     ok.
 
 -endif.

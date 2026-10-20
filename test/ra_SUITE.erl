@@ -81,7 +81,10 @@ all_tests() ->
      voter_gets_promoted_consistent_leader,
      voter_gets_promoted_new_leader,
      unknown_leader_call,
-     unknown_local_call
+     unknown_local_call,
+     flexible_quorum_even_cluster,
+     flexible_quorum_disabled_even_cluster,
+     flexible_quorum_remove_leader_under_load
     ].
 
 groups() ->
@@ -1276,7 +1279,7 @@ follower_catchup(Config) ->
                  await_condition_timeout => 1000}
            end,
     ok = ra:start_server(?SYS, Conf(N1, [N2], <<"N1">>)),
-    % start second servern
+    % start second server
     ok = ra:start_server(?SYS, Conf(N2, [N1], <<"N2">>)),
     ok = ra:trigger_election(N1),
     _ = ra:members(N1),
@@ -1624,6 +1627,100 @@ start_and_join_nonvoter({ClusterName, _} = ServerRef, {_, _} = New) ->
     {ok, _, _} = add_member_retry(ServerRef, Server),
     ok = ra:start_server(default, ClusterName, Server, add_machine(), [ServerRef]),
     ok.
+
+flexible_quorum_even_cluster(Config) ->
+    Servers = start_even_cluster(Config, #{flexible_quorum => true}),
+    Leader = issue_op(hd(Servers), 5),
+    [F1, F2 | _] = Followers = Servers -- [Leader],
+    ok = ra:stop_server(?SYS, F1),
+    ok = ra:stop_server(?SYS, F2),
+    %% leader + one follower is a commit quorum for 4 voters
+    {ok, 15, Leader} = ra:process_command(Leader, 10, 2000),
+    %% but consistent queries still require a classic majority
+    {timeout, _} = ra:consistent_query(Leader, ?IDMFA, 500),
+    ok = ra:restart_server(?SYS, F1),
+    ok = ra:restart_server(?SYS, F2),
+    validate_state_on_node(Leader, 15),
+    [await_local_state(F, 15) || F <- Followers],
+    terminate_cluster(Servers).
+
+flexible_quorum_disabled_even_cluster(Config) ->
+    Servers = start_even_cluster(Config, #{}),
+    Leader = issue_op(hd(Servers), 5),
+    [F1, F2 | _] = Servers -- [Leader],
+    ok = ra:stop_server(?SYS, F1),
+    ok = ra:stop_server(?SYS, F2),
+    %% flexible quorum is off by default so a classic majority is required
+    {timeout, _} = ra:process_command(Leader, 10, 500),
+    terminate_cluster(Servers).
+
+flexible_quorum_remove_leader_under_load(Config) ->
+    %% removing the leader from a 4 member cluster under load must not lose
+    %% any acknowledged commands. This is a smoke test: the window in which a
+    %% removed leader could use a too small quorum is narrow and is covered
+    %% deterministically by
+    %% ra_server_SUITE:append_entries_reply_success_even_quorum_removed_leader
+    Servers = start_even_cluster(Config, #{flexible_quorum => true}),
+    Leader = issue_op(hd(Servers), 1),
+    Remaining = Servers -- [Leader],
+    Self = self(),
+    Writer = spawn_link(fun () -> flexible_quorum_writer(Servers, 0, Self) end),
+    timer:sleep(200),
+    {ok, _, _} = ra:remove_member(Leader, Leader),
+    timer:sleep(1000),
+    Writer ! stop,
+    Acked = receive
+                {acked, A} -> A
+            after 10000 ->
+                      ct:fail(writer_did_not_stop)
+            end,
+    ct:pal("acked ~b commands", [Acked]),
+    ?assert(Acked > 0),
+    %% each command adds 1 to the initial value of 1, there may be more
+    %% than acked if commands timed out but were committed
+    {ok, Value, _} = ra:consistent_query(Remaining, ?IDMFA),
+    ?assert(Value >= Acked + 1),
+    [await_local_state(S, Value) || S <- Remaining],
+    terminate_cluster(Remaining).
+
+flexible_quorum_writer([Target | Rem] = Servers, Acked, Parent) ->
+    receive
+        stop ->
+            Parent ! {acked, Acked}
+    after 0 ->
+              case ra:process_command(Target, 1, 500) of
+                  {ok, _, Target} ->
+                      flexible_quorum_writer(Servers, Acked + 1, Parent);
+                  {ok, _, Leader} ->
+                      flexible_quorum_writer([Leader | Servers -- [Leader]],
+                                             Acked + 1, Parent);
+                  _ ->
+                      flexible_quorum_writer(Rem ++ [Target], Acked, Parent)
+              end
+    end.
+
+start_even_cluster(Config, ServerConf) ->
+    Name = ?config(test_name, Config),
+    Servers = [nth_server_name(Config, N) || N <- lists:seq(1, 4)],
+    [ok = ra:start_server(?SYS, Name, ServerConf#{id => S}, add_machine(),
+                          Servers) || S <- Servers],
+    ok = ra:trigger_election(hd(Servers)),
+    Servers.
+
+await_local_state(Server, Expected) ->
+    await_local_state(Server, Expected, 100).
+
+await_local_state(Server, Expected, 0) ->
+    ct:fail({unexpected_state, Server, Expected,
+             ra:local_query(Server, fun (S) -> S end)});
+await_local_state(Server, Expected, Attempts) ->
+    case ra:local_query(Server, fun (S) -> S end) of
+        {ok, {_, Expected}, _} ->
+            ok;
+        _ ->
+            timer:sleep(100),
+            await_local_state(Server, Expected, Attempts - 1)
+    end.
 
 start_local_cluster(Num, Name, Machine) ->
     Nodes = [{ra_server:name(Name, integer_to_list(N)), node()}

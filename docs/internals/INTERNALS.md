@@ -286,6 +286,54 @@ than recommended in the Raft paper. This is done to ensure follower
 liveness. In an idle system where all followers are in sync no further
 messages will be sent to reduce network bandwidth usage.
 
+### Flexible Quorum
+
+Classic Raft commits an entry once it is stored on a majority of voters
+(N div 2 + 1). Ra can optionally lower the commit quorum to N div 2 when the
+number of voters N is even and at least 4. This is disabled by default and is
+enabled per server with the `flexible_quorum => true` server config key (it is
+also a mutable config key).
+
+This is safe because the election quorum still requires a full majority of
+N div 2 + 1, so the commit quorum and the election quorum always intersect:
+(N div 2) + (N div 2 + 1) > N. Every committed entry is therefore present on at
+least one voter in any election and that voter will refuse to vote for a
+candidate whose log lacks the entry. This is the quorum intersection
+requirement described in
+[Flexible Paxos](https://arxiv.org/abs/1608.06696) (Howard et al.).
+
+Only the leader's commit rule changes, so members may disagree on the setting
+(e.g. during a rolling configuration change) without affecting safety.
+
+The reduced quorum is only used while `cluster_change_permitted` is true and
+the leader is itself a voter in its current cluster configuration:
+
+* `cluster_change_permitted` is false when a server becomes leader and only
+  becomes true once the leader has committed (and applied) the noop entry for
+  its own term using a classic majority. This ensures that any uncommitted
+  cluster configuration from a previous term can no longer win an election
+  before the reduced quorum is used (the same reason Raft single server
+  membership changes require the leader to commit an entry in its term
+  first).
+* `cluster_change_permitted` is also false while a cluster change is in flight
+  so that a classic majority of the new configuration is used, which
+  intersects any majority of the old configuration. As applying a noop for
+  the current term (e.g. one appended mid-term for a machine upgrade) also
+  sets `cluster_change_permitted`, the leader additionally checks that the
+  latest cluster change is committed before using the reduced quorum.
+* A leader that has removed itself from the cluster still counts its own log
+  index when computing the commit index. Using the reduced quorum in that case
+  would allow an entry to be committed on fewer than half of the remaining
+  voters.
+
+Trade-offs: entries are confirmed once N div 2 voters have written them, so
+a leader that can only reach N div 2 voters (including itself) keeps
+committing writes where the classic quorum would block. If those N div 2
+members are then permanently lost, confirmed entries are lost, including when
+recovering a cluster with forced membership changes.
+
+The query quorum (consistent queries) is deliberately untouched and always
+requires a classic majority.
 
 ### Failure Detection
 
