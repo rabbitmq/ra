@@ -2179,6 +2179,9 @@ become(leader, OldRaftState, #{cluster := Cluster,
                                cluster_change_permitted := CCP0,
                                log := Log0} = State) ->
     Log = ra_log:release_resources(maps:size(Cluster), sequential, Log0),
+    %% NB: cluster_change_permitted must stay false until the leader has
+    %% committed an entry in its own term. Both cluster changes and the
+    %% flexible commit quorum (see flexible_quorum_permitted/1) depend on this
     CCP = case OldRaftState of
               await_condition ->
                   CCP0;
@@ -3359,6 +3362,7 @@ apply_with({Idx, Term, {'$ra_cluster_change', CmdMeta, NewCluster, ReplyMode}},
                     ?DEBUG("~ts: committing ra cluster change at index ~b to ~tw",
                            [log_id(State0), Idx, maps:keys(NewCluster)]),
                     %% else just enable further cluster changes again
+                    %% (and the flexible commit quorum, if configured)
                     State0#{cluster_change_permitted => true}
             end,
     {Mod, Idx, State, MacSt, Effects, Notifys, LastTs};
@@ -3376,11 +3380,11 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
               cluster_index_term := {CITIdx, _},
               cluster_change_permitted := ClusterChangePerm0} = State0,
             MacSt, Effects, Notifys, LastTs}) ->
-    %% A noop for the current term enables cluster changes as the leader has
-    %% now committed an entry in its own term. Noops can also be appended
-    %% mid-term (machine upgrades) so only do so if there is no cluster change
-    %% after the noop that is still in flight, else wait for that cluster
-    %% change to be applied.
+    %% A noop for the current term enables cluster changes (and the flexible
+    %% commit quorum, if configured) as the leader has now committed an entry
+    %% in its own term. Noops can also be appended mid-term (machine upgrades)
+    %% so only do so if there is no cluster change after the noop that is
+    %% still in flight, else wait for that cluster change to be applied.
     ClusterChangePerm = case CurrentTerm of
                             Term when CITIdx =< Idx ->
                                 ?DEBUG("~ts: enabling ra cluster changes in"
@@ -3615,6 +3619,9 @@ append_cluster_change(Cluster, From, ReplyMode,
         Log ->
             NewState = State#{log => Log,
                               cluster => Cluster,
+                              %% NB: this also disables the flexible commit
+                              %% quorum until the change is committed and
+                              %% applied
                               cluster_change_permitted => false,
                               cluster_index_term => IdxTerm,
                               previous_cluster => {PrevCITIdx, PrevCITTerm,
