@@ -1209,14 +1209,13 @@ candidate_handles_append_entries_rpc(_Config) ->
     ok.
 
 append_entries_reply_success_promotes_nonvoter(_Config) ->
-    N1 = ?N1, N2 = ?N2, N3 = ?N3, N4 = ?N4,
+    N1 = ?N1, N2 = ?N2, N3 = ?N3,
     NonVoter = #{membership => promotable, target => 3, uid => <<"uid">>},
     Cluster = #{N1 => new_peer_with(#{next_index => 5, match_index => 4}),
                 N2 => new_peer_with(#{next_index => 1, match_index => 0,
                                       commit_index_sent => 3,
                                       voter_status => NonVoter}),
-                N3 => new_peer_with(#{next_index => 2, match_index => 1}),
-                N4 => new_peer_with(#{next_index => 2, match_index => 1})},
+                N3 => new_peer_with(#{next_index => 2, match_index => 1})},
     State0 = (base_state(3, ?FUNCTION_NAME))#{commit_index => 1,
                                               last_applied => 1,
                                               cluster => Cluster,
@@ -1240,28 +1239,20 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
         noreply}} = RaJoin}
      ]} = ra_server:handle_leader({N2, Ack}, State0),
 
-    % pipeline to N3 and N4
+    % pipeline to N3
     {leader, #{cluster := #{N3 := #{next_index := 4,
                                     match_index := 1}},
                commit_index := 1,
                last_applied := 1,
                machine_state := <<"hi1">>} = State2,
-     Effects} = ra_server:handle_leader(pipeline_rpcs, State1),
-    [{send_rpc, N3,
+     [{send_rpc, N3,
        #append_entries_rpc{term = 5, leader_id = N1,
                            prev_log_index = 1,
                            prev_log_term = 1,
                            leader_commit = 1,
                            entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
                                       {3, 5, {'$usr', _, <<"hi3">>, _}}]}
-      }, {send_rpc, N4,
-       #append_entries_rpc{term = 5, leader_id = N1,
-                           prev_log_index = 1,
-                           prev_log_term = 1,
-                           leader_commit = 1,
-                           entries = [{2, 3, {'$usr', _, <<"hi2">>, _}},
-                                      {3, 5, {'$usr', _, <<"hi3">>, _}}]}
-      }] = lists:keysort(2, Effects),
+      }]} = ra_server:handle_leader(pipeline_rpcs, State1),
 
     % ra_join translates into cluster update
     {leader, #{cluster := #{N2 := #{next_index := 5,
@@ -1272,8 +1263,7 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                commit_index := 1,
                last_applied := 1,
                machine_state := <<"hi1">>} = State3,
-     Effects2} = ra_server:handle_leader(RaJoin, State2),
-    [{send_rpc, N2,
+     [{send_rpc, N3,
        #append_entries_rpc{term = 5, leader_id = N1,
                            prev_log_index = 3,
                            prev_log_term = 5,
@@ -1282,36 +1272,29 @@ append_entries_reply_success_promotes_nonvoter(_Config) ->
                                               #{N2 := #{voter_status := #{membership := voter,
                                                                           uid := <<"uid">>}}},
                                               _}}]}},
-     {send_rpc, N3,
-      #append_entries_rpc{term = 5, leader_id = N1,
-                          prev_log_index = 3,
-                          prev_log_term = 5,
-                          leader_commit = 1,
-                          entries = [{4, 5, {'$ra_cluster_change', _,
-                                             #{N2 := #{voter_status := #{membership := voter,
-                                                                         uid := <<"uid">>}}},
-                                             _}}]}},
-     {send_rpc, N4,
-      #append_entries_rpc{term = 5, leader_id = N1,
-                          prev_log_index = 3,
-                          prev_log_term = 5,
-                          leader_commit = 1,
-                          entries = [{4, 5, {'$ra_cluster_change', _,
-                                             #{N2 := #{voter_status := #{membership := voter,
-                                                                         uid := <<"uid">>}}},
-                                             _}}]}}] = lists:keysort(2, Effects2),
+      {send_rpc, N2,
+       #append_entries_rpc{term = 5, leader_id = N1,
+                           prev_log_index = 3,
+                           prev_log_term = 5,
+                           leader_commit = 1,
+                           entries = [{4, 5, {'$ra_cluster_change', _,
+                                              #{N2 := #{voter_status := #{membership := voter,
+                                                                          uid := <<"uid">>}}},
+                                              _}}]}} |
+      _]} = ra_server:handle_leader(RaJoin, State2),
 
     Ack2 = #append_entries_reply{term = 5, success = true,
                                  next_index = 5,
                                  last_index = 4, last_term = 5},
 
-    % voter ack does not raise commit_index while cluster change is in flight (classic majority required)
+    % voter ack, raises commit_index
     {leader, #{cluster := #{N2 := #{next_index := 5,
                                     match_index := 4}},
-               commit_index := 1,
-               last_applied := 1,
-               machine_state := <<"hi1">>},
-     [{next_event, info, pipeline_rpcs}]} = ra_server:handle_leader({N2, Ack2}, State3),
+               commit_index := 3,
+               last_applied := 3,
+               machine_state := <<"hi3">>},
+     [{next_event, info, pipeline_rpcs},
+      {aux, eval}]} = ra_server:handle_leader({N2, Ack2}, State3),
     ok.
 
 follower_aer_dupe(_Config) ->
