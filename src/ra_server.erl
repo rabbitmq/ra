@@ -3725,18 +3725,26 @@ flexible_quorum_permitted(#{cfg := #cfg{id = Id,
 flexible_quorum_permitted(_State) ->
     false.
 
-increment_commit_index(#{current_term := CurrentTerm} = State0) ->
+increment_commit_index(#{current_term := CurrentTerm,
+                         commit_index := CommitIndex} = State0) ->
     MatchIdxs = match_indexes(State0),
     DataQuorumSize = data_commit_quorum_size(length(MatchIdxs),
                                              flexible_quorum_permitted(State0)),
-    PotentialNewCommitIndex = agreed_commit(MatchIdxs, DataQuorumSize),
-    % leaders can only increment their commit index if the corresponding
-    % log entry term matches the current term. See (§5.4.2)
-    case fetch_term(PotentialNewCommitIndex, State0) of
-        {CurrentTerm, State} ->
-            State#{commit_index => PotentialNewCommitIndex};
-        {_, State} ->
-            State
+    case agreed_commit(MatchIdxs, DataQuorumSize) of
+        PotentialNewCommitIndex when PotentialNewCommitIndex > CommitIndex ->
+            % leaders can only increment their commit index if the
+            % corresponding log entry term matches the current term.
+            % See (§5.4.2)
+            case fetch_term(PotentialNewCommitIndex, State0) of
+                {CurrentTerm, State} ->
+                    State#{commit_index => PotentialNewCommitIndex};
+                {_, State} ->
+                    State
+            end;
+        _ ->
+            % the commit index must never go backwards, e.g. when switching
+            % from the flexible to the classic quorum
+            State0
     end.
 
 query_indexes(#{cfg := #cfg{id = Id},

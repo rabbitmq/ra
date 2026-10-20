@@ -41,6 +41,7 @@ all() ->
      append_entries_reply_success_even_quorum_new_leader,
      append_entries_reply_success_even_quorum_removed_leader,
      append_entries_reply_success_even_quorum_uncommitted_cluster_change,
+     append_entries_reply_success_even_quorum_commit_index_does_not_regress,
      append_entries_reply_no_success,
      append_entries_reply_no_success_from_unknown_peer,
      follower_request_vote,
@@ -1552,6 +1553,32 @@ append_entries_reply_success_even_quorum_uncommitted_cluster_change(_Config) ->
     #{cluster_change_permitted := true,
       commit_index := 3,
       machine_state := <<"hi3">>} = State2,
+    ok.
+
+append_entries_reply_success_even_quorum_commit_index_does_not_regress(_Config) ->
+    N2 = ?N2, N5 = ?N5,
+    State0 = leader_append_hi4(
+               enable_flexible_quorum(base_state(4, ?FUNCTION_NAME))),
+    %% match indexes [4, 4, 3, 3]: the flexible quorum commits entry 4
+    {leader, State1, _} = ra_server:handle_leader(ack_hi4(N2), State0),
+    #{commit_index := 4,
+      last_applied := 4} = State1,
+    %% adding a non-voter disables the flexible quorum (cluster change in
+    %% flight) without changing the voters
+    {leader, #{cluster_change_permitted := false} = State2, _} =
+        ra_server:handle_leader({command, {'$ra_join', meta(),
+                                           #{id => N5,
+                                             membership => non_voter,
+                                             uid => <<"n5">>},
+                                           await_consensus}}, State1),
+    %% once the leader has persisted the cluster change the match indexes
+    %% are [5, 4, 3, 3] and the classic quorum selects entry 3, which is in
+    %% the current term: the commit index must not go backwards
+    {leader, State3, _} =
+        ra_server:handle_leader(written_evt(5, {5, 5}), State2),
+    #{commit_index := 4,
+      last_applied := 4,
+      machine_state := <<"hi4">>} = State3,
     ok.
 
 %% the leader appends and persists entry 4 so only it has that entry
