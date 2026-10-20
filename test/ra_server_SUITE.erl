@@ -64,6 +64,7 @@ all() ->
      recovery_checkpoint_reinitialises_aux_state,
      recovery_checkpoint_reinitialises_aux_state_same_version,
      leader_server_join,
+     leader_noop_does_not_permit_cluster_change_in_flight,
      leader_server_join_nonvoter,
      leader_server_leave,
      leader_is_removed,
@@ -2007,6 +2008,43 @@ recovery_checkpoint_reinitialises_aux_state_same_version(_Config) ->
                   effective_machine_module = Mod},
       machine_state := recovered_machine_state,
       aux_state := fresh_aux_state} = ra_server:recover(State00),
+    ok.
+
+leader_noop_does_not_permit_cluster_change_in_flight(_Config) ->
+    N2 = ?N2, N3 = ?N3, N4 = ?N4, N5 = ?N5,
+    State0 = base_state(3, ?FUNCTION_NAME),
+    %% a mid-term noop (e.g. for a machine upgrade) is appended at index 4
+    {leader, #{cluster_change_permitted := true} = State1, _} =
+        ra_server:handle_leader({command, {noop, meta(), 0}}, State0),
+    %% followed by a cluster change at index 5
+    {leader, #{cluster_change_permitted := false} = State2, _} =
+        ra_server:handle_leader({command, {'$ra_join', meta(),
+                                           N4, await_consensus}}, State1),
+    {leader, State3, _} =
+        ra_server:handle_leader(written_evt(5, {4, 5}), State2),
+    %% the noop, but not the cluster change, is committed and applied
+    %% (the new cluster has 4 voters so the leader + 2 acks are needed)
+    Ack4 = #append_entries_reply{success = true, term = 5, next_index = 5,
+                                 last_term = 5, last_index = 4},
+    {leader, State3b, _} = ra_server:handle_leader({N2, Ack4}, State3),
+    {leader, State4, _} = ra_server:handle_leader({N3, Ack4}, State3b),
+    %% applying the noop must not permit cluster changes as the cluster
+    %% change at index 5 is still in flight
+    #{commit_index := 4,
+      last_applied := 4,
+      cluster_change_permitted := false} = State4,
+    {leader, #{cluster := Cluster4}, _} =
+        ra_server:handle_leader({command, {'$ra_join', meta(),
+                                           N5, await_consensus}}, State4),
+    false = maps:is_key(N5, Cluster4),
+    %% once the cluster change is committed cluster changes are permitted
+    Ack5 = #append_entries_reply{success = true, term = 5, next_index = 6,
+                                 last_term = 5, last_index = 5},
+    {leader, State5, _} = ra_server:handle_leader({N2, Ack5}, State4),
+    {leader, State6, _} = ra_server:handle_leader({N3, Ack5}, State5),
+    #{commit_index := 5,
+      last_applied := 5,
+      cluster_change_permitted := true} = State6,
     ok.
 
 leader_server_join(_Config) ->

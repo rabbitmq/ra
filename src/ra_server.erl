@@ -3365,10 +3365,16 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
                           effective_machine_version = OldMacVer
                          } = Cfg0,
               current_term := CurrentTerm,
+              cluster_index_term := {CITIdx, _},
               cluster_change_permitted := ClusterChangePerm0} = State0,
             MacSt, Effects, Notifys, LastTs}) ->
+    %% A noop for the current term enables cluster changes as the leader has
+    %% now committed an entry in its own term. Noops can also be appended
+    %% mid-term (machine upgrades) so only do so if there is no cluster change
+    %% after the noop that is still in flight, else wait for that cluster
+    %% change to be applied.
     ClusterChangePerm = case CurrentTerm of
-                            Term ->
+                            Term when CITIdx =< Idx ->
                                 ?DEBUG("~ts: enabling ra cluster changes in"
                                        " ~b, index ~b", [LogId, Term, Idx]),
                                 true;
