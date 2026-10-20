@@ -36,6 +36,7 @@ all() ->
      follower_leader_change_before_written,
      append_entries_reply_success,
      append_entries_reply_success_even_quorum,
+     append_entries_reply_success_even_quorum_removed_leader,
      append_entries_reply_no_success,
      append_entries_reply_no_success_from_unknown_peer,
      follower_request_vote,
@@ -1466,6 +1467,26 @@ append_entries_reply_success_even_quorum(_Config) ->
       commit_index := 4,
       last_applied := 4,
       machine_state := <<"hi4">>} = State4,
+    ok.
+
+append_entries_reply_success_even_quorum_removed_leader(_Config) ->
+    N1 = ?N1, N2 = ?N2,
+    %% the leader has removed itself from a 4 member cluster and the
+    %% cluster change has been committed so the voters are now n2, n3 and n4
+    State0 = maps:update_with(cluster, fun (C) -> maps:remove(N1, C) end,
+                              base_state(4, ?FUNCTION_NAME)),
+    {leader, State1, _} = ra_server:handle_leader(usr_cmd(<<"hi4">>), State0),
+    {leader, State2, _} = ra_server:handle_leader(written_evt(5, {4, 4}), State1),
+    Msg = {N2, #append_entries_reply{success = true, term = 5,
+                                     next_index = 5, last_term = 5,
+                                     last_index = 4}},
+    %% only one of the three voters has entry 4 so it must not be committed
+    %% even though the leader counts its own index
+    {_, State3, _} = ra_server:handle_leader(Msg, State2),
+    #{cluster := #{N2 := #{next_index := 5, match_index := 4}},
+      commit_index := 3,
+      last_applied := 3,
+      machine_state := <<"hi3">>} = State3,
     ok.
 
 append_entries_reply_no_success(_Config) ->

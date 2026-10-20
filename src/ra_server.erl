@@ -3666,15 +3666,39 @@ evaluate_quorum(#{cfg := Cfg,
     maybe_emit_pending_release_cursor(State1, Effects1).
 
 data_commit_quorum_size(N, true) when N rem 2 =:= 0, N >= 4 ->
-    % Even and cluster change permitted: FlexiRaft quorum allows us to get away with one less committer
+    % Even and flexible quorum permitted: as the election quorum is
+    % N div 2 + 1 a commit quorum of N div 2 is enough for them to intersect
     N div 2;
-data_commit_quorum_size(N, _ClusterChange) ->
-    % Odd or cluster change not permitted: classic majority holds
+data_commit_quorum_size(N, _FlexiPermitted) ->
+    % Odd or flexible quorum not permitted: classic majority holds
     N div 2 + 1.
 
-increment_commit_index(State0 = #{current_term := CurrentTerm, cluster_change_permitted := ClusterChangePerm}) ->
+%% A reduced commit quorum is only safe when:
+%% - cluster_change_permitted is true: this is only the case after the leader
+%%   has committed an entry in its own term (the noop) and when there is no
+%%   uncommitted cluster change in flight.
+%% - the leader is a voter in its own cluster config: match_indexes/1 always
+%%   includes the leader's index so if the leader has removed itself the
+%%   number of match indexes would be one more than the number of voters.
+flexible_quorum_permitted(#{cfg := #cfg{id = Id},
+                            cluster := Cluster,
+                            cluster_change_permitted := true}) ->
+    case Cluster of
+        #{Id := #{voter_status := #{membership := Membership}}}
+          when Membership =/= voter ->
+            false;
+        #{Id := _} ->
+            true;
+        _ ->
+            false
+    end;
+flexible_quorum_permitted(_State) ->
+    false.
+
+increment_commit_index(#{current_term := CurrentTerm} = State0) ->
     MatchIdxs = match_indexes(State0),
-    DataQuorumSize = data_commit_quorum_size(length(MatchIdxs), ClusterChangePerm),
+    DataQuorumSize = data_commit_quorum_size(length(MatchIdxs),
+                                             flexible_quorum_permitted(State0)),
     PotentialNewCommitIndex = agreed_commit(MatchIdxs, DataQuorumSize),
     % leaders can only increment their commit index if the corresponding
     % log entry term matches the current term. See (§5.4.2)
