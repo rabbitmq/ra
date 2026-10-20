@@ -15,7 +15,9 @@
 -define(SYS, default).
 
 all() -> [
-          {group, tests}
+          {group, tests},
+          {group, flexible_quorum_4},
+          {group, flexible_quorum_6}
          ].
 
 groups() ->
@@ -23,7 +25,10 @@ groups() ->
              enq_drain_basic
              % prop_enq_drain
             ],
-    [{tests, [], Tests}].
+    [{tests, [], Tests},
+     %% even sized clusters with flexible_quorum enabled
+     {flexible_quorum_4, [], Tests},
+     {flexible_quorum_6, [], Tests}].
 
 init_per_suite(Config) ->
     application:set_env(kernel, prevent_overlapping_partitions, false),
@@ -32,6 +37,12 @@ init_per_suite(Config) ->
 end_per_suite(Config) ->
     Config.
 
+init_per_group(flexible_quorum_4, Config) ->
+    [{num_nodes, 4},
+     {server_config, #{flexible_quorum => true}} | Config];
+init_per_group(flexible_quorum_6, Config) ->
+    [{num_nodes, 6},
+     {server_config, #{flexible_quorum => true}} | Config];
 init_per_group(_, Config) ->
     Config.
 
@@ -44,12 +55,17 @@ init_per_testcase(print, Config0) ->
      {nodes, Nodes}, {servers, Servers},
      {name, print} | Config0];
 init_per_testcase(TestCase, Config0) ->
-    Nodes = erlang_nodes(5),
-    Servers = [{TestCase, N} || N <- Nodes],
+    NumNodes = proplists:get_value(num_nodes, Config0, 5),
+    Nodes = erlang_nodes(NumNodes),
+    %% the same test case may run in several groups so include the number
+    %% of nodes in the cluster name to keep data directories separate
+    Name = list_to_atom(atom_to_list(TestCase) ++ "_" ++
+                        integer_to_list(NumNodes)),
+    Servers = [{Name, N} || N <- Nodes],
     Config1 = prepare_erlang_cluster(Config0, Nodes),
-    Config = [{cluster_name, TestCase},
+    Config = [{cluster_name, Name},
               {nodes, Nodes}, {servers, Servers},
-              {name, TestCase} | Config1],
+              {name, Name} | Config1],
     Machine = {module, ra_fifo, #{}},
     ServerId = setup_ra_cluster(Config, Machine),
     %% Make sure nodes are synchronised
@@ -70,6 +86,7 @@ end_per_testcase(_, Config) ->
                   foo3@localhost |
                   foo4@localhost |
                   foo5@localhost.
+%% NB: prop_enq_drain only partitions nodes5()
 
 -type actions() :: {part, [nodes5()], 500..10000} |
                    {wait, 500..10000}.
@@ -217,14 +234,9 @@ drain0(S0, Acc) ->
             exit(Err)
     end.
 
-erlang_nodes(5) ->
-    [
-     foo1@localhost,
-     foo2@localhost,
-     foo3@localhost,
-     foo4@localhost,
-     foo5@localhost
-     ].
+erlang_nodes(Num) ->
+    [list_to_atom("foo" ++ integer_to_list(N) ++ "@localhost")
+     || N <- lists:seq(1, Num)].
 
 prepare_erlang_cluster(Config, Nodes) ->
     Config0 = tcp_inet_proxy_helpers:configure_dist_proxy(Config),
@@ -240,7 +252,10 @@ setup_ra_cluster(Config, Machine) ->
     Configs = lists:map(
                 fun(Node) ->
                         ct:pal("Start app on ~p", [Node]),
-                        C = make_server_config(Name, Nodes, Node, Machine),
+                        C = maps:merge(
+                              make_server_config(Name, Nodes, Node, Machine),
+                              proplists:get_value(server_config, Config,
+                                                  #{})),
                         ok = ct_rpc:call(Node, ?MODULE, node_setup, [DataDir]),
                         _ = ct_rpc:call(Node, application, stop, [ra]),
                         _ = ct_rpc:call(Node, application, load, [ra]),
