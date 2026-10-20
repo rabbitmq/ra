@@ -36,6 +36,9 @@ all() ->
      follower_leader_change_before_written,
      append_entries_reply_success,
      append_entries_reply_success_even_quorum,
+     append_entries_reply_success_even_quorum_6,
+     append_entries_reply_success_even_quorum_non_voter,
+     append_entries_reply_success_even_quorum_new_leader,
      append_entries_reply_success_even_quorum_removed_leader,
      append_entries_reply_no_success,
      append_entries_reply_no_success_from_unknown_peer,
@@ -1440,32 +1443,97 @@ append_entries_reply_success(_Config) ->
 append_entries_reply_success_even_quorum(_Config) ->
     N2 = ?N2,
     %% base_state has entries 1-3 replicated to, and applied by, all members
-    State0 = base_state(4, ?FUNCTION_NAME),
-    %% the leader appends and persists entry 4, so only it has that entry
-    {leader, State1, _} = ra_server:handle_leader(usr_cmd(<<"hi4">>), State0),
-    {leader, State2, _} = ra_server:handle_leader(written_evt(5, {4, 4}), State1),
+    Base = base_state(4, ?FUNCTION_NAME),
+    State0 = enable_flexible_quorum(Base),
+    State1 = leader_append_hi4(State0),
     %% the leader alone is never a quorum
     #{commit_index := 3,
       last_applied := 3,
+      machine_state := <<"hi3">>} = State1,
+
+    %% flexible quorum is disabled by default, classic majority required
+    {leader, State2, _} =
+        ra_server:handle_leader(ack_hi4(N2), leader_append_hi4(Base)),
+    #{cluster := #{N2 := #{next_index := 5, match_index := 4}},
+      commit_index := 3,
+      last_applied := 3,
       machine_state := <<"hi3">>} = State2,
 
-    Msg = {N2, #append_entries_reply{success = true, term = 5,
-                                     next_index = 5, last_term = 5,
-                                     last_index = 4}},
-    %% cluster_change_permitted blocks FlexiRaft eager commit, classic majority required
+    %% cluster_change_permitted = false blocks flexible quorum,
+    %% classic majority required
     {leader, State3, _} =
-        ra_server:handle_leader(Msg, State2#{cluster_change_permitted => false}),
+        ra_server:handle_leader(ack_hi4(N2),
+                                State1#{cluster_change_permitted => false}),
     #{cluster := #{N2 := #{next_index := 5, match_index := 4}},
       commit_index := 3,
       last_applied := 3,
       machine_state := <<"hi3">>} = State3,
 
-    %% 4 voters (even): FlexiRaft commit quorum is N/2, so leader + one ack
+    %% 4 voters (even): flexible commit quorum is N/2, so leader + one ack
     %% commits, and the entry is applied
-    {leader, State4, _} = ra_server:handle_leader(Msg, State2),
+    {leader, State4, _} = ra_server:handle_leader(ack_hi4(N2), State1),
     #{cluster := #{N2 := #{next_index := 5, match_index := 4}},
       commit_index := 4,
       last_applied := 4,
+      machine_state := <<"hi4">>} = State4,
+    ok.
+
+append_entries_reply_success_even_quorum_6(_Config) ->
+    N2 = ?N2, N3 = ?N3,
+    State0 = leader_append_hi4(
+               enable_flexible_quorum(base_state(6, ?FUNCTION_NAME))),
+    %% 6 voters: flexible commit quorum is 3, leader + one ack is not enough
+    {leader, State1, _} = ra_server:handle_leader(ack_hi4(N2), State0),
+    #{commit_index := 3,
+      machine_state := <<"hi3">>} = State1,
+    %% leader + two acks commits
+    {leader, State2, _} = ra_server:handle_leader(ack_hi4(N3), State1),
+    #{commit_index := 4,
+      machine_state := <<"hi4">>} = State2,
+    ok.
+
+append_entries_reply_success_even_quorum_non_voter(_Config) ->
+    N2 = ?N2, N5 = ?N5,
+    %% 4 voters and 1 non-voter, N is 4 so the flexible commit quorum is 2
+    NonVoter = #{membership => non_voter, uid => <<"n5">>},
+    State0 = maps:update_with(
+               cluster,
+               fun (C) ->
+                       C#{N5 => new_peer_with(#{next_index => 4,
+                                                match_index => 3,
+                                                voter_status => NonVoter})}
+               end, enable_flexible_quorum(base_state(4, ?FUNCTION_NAME))),
+    State1 = leader_append_hi4(State0),
+    %% an ack from the non-voter does not count towards the quorum
+    {leader, State2, _} = ra_server:handle_leader(ack_hi4(N5), State1),
+    #{cluster := #{N5 := #{match_index := 4}},
+      commit_index := 3,
+      machine_state := <<"hi3">>} = State2,
+    %% leader + one voter ack commits
+    {leader, State3, _} = ra_server:handle_leader(ack_hi4(N2), State2),
+    #{commit_index := 4,
+      machine_state := <<"hi4">>} = State3,
+    ok.
+
+append_entries_reply_success_even_quorum_new_leader(_Config) ->
+    N2 = ?N2,
+    State0 = enable_flexible_quorum(base_state(4, ?FUNCTION_NAME)),
+    %% a newly elected leader has not yet committed an entry in its own term
+    %% so cluster_change_permitted is false and the classic majority is used
+    {#{cluster_change_permitted := false} = State1, _} =
+        ra_server:handle_state_enter(leader, candidate, State0),
+    {leader, State2, _} =
+        ra_server:handle_leader(ack_hi4(N2), leader_append_hi4(State1)),
+    #{commit_index := 3,
+      machine_state := <<"hi3">>} = State2,
+    %% returning to leader from await_condition (e.g. after a timed out
+    %% leadership transfer) is the same term so cluster_change_permitted, and
+    %% thus the flexible quorum, is retained
+    {#{cluster_change_permitted := true} = State3, _} =
+        ra_server:handle_state_enter(leader, await_condition, State0),
+    {leader, State4, _} =
+        ra_server:handle_leader(ack_hi4(N2), leader_append_hi4(State3)),
+    #{commit_index := 4,
       machine_state := <<"hi4">>} = State4,
     ok.
 
@@ -1474,20 +1542,31 @@ append_entries_reply_success_even_quorum_removed_leader(_Config) ->
     %% the leader has removed itself from a 4 member cluster and the
     %% cluster change has been committed so the voters are now n2, n3 and n4
     State0 = maps:update_with(cluster, fun (C) -> maps:remove(N1, C) end,
-                              base_state(4, ?FUNCTION_NAME)),
-    {leader, State1, _} = ra_server:handle_leader(usr_cmd(<<"hi4">>), State0),
-    {leader, State2, _} = ra_server:handle_leader(written_evt(5, {4, 4}), State1),
-    Msg = {N2, #append_entries_reply{success = true, term = 5,
-                                     next_index = 5, last_term = 5,
-                                     last_index = 4}},
+                              enable_flexible_quorum(
+                                base_state(4, ?FUNCTION_NAME))),
+    State1 = leader_append_hi4(State0),
     %% only one of the three voters has entry 4 so it must not be committed
     %% even though the leader counts its own index
-    {_, State3, _} = ra_server:handle_leader(Msg, State2),
+    {_, State2, _} = ra_server:handle_leader(ack_hi4(N2), State1),
     #{cluster := #{N2 := #{next_index := 5, match_index := 4}},
       commit_index := 3,
       last_applied := 3,
-      machine_state := <<"hi3">>} = State3,
+      machine_state := <<"hi3">>} = State2,
     ok.
+
+%% the leader appends and persists entry 4 so only it has that entry
+leader_append_hi4(State0) ->
+    {leader, State1, _} = ra_server:handle_leader(usr_cmd(<<"hi4">>), State0),
+    {leader, State, _} = ra_server:handle_leader(written_evt(5, {4, 4}), State1),
+    State.
+
+ack_hi4(PeerId) ->
+    {PeerId, #append_entries_reply{success = true, term = 5,
+                                   next_index = 5, last_term = 5,
+                                   last_index = 4}}.
+
+enable_flexible_quorum(#{cfg := Cfg} = State) ->
+    State#{cfg => Cfg#cfg{flexible_quorum = true}}.
 
 append_entries_reply_no_success(_Config) ->
     N1 = ?N1, N2 = ?N2, N3 = ?N3,

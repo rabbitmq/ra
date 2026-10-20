@@ -263,7 +263,12 @@
                               %% minimum number of log entries since last
                               %% snapshot/checkpoint before writing a recovery
                               %% checkpoint on shutdown. 0 disables (default).
-                              min_recovery_checkpoint_interval => non_neg_integer()
+                              min_recovery_checkpoint_interval => non_neg_integer(),
+                              %% allow the leader to commit entries once
+                              %% they are on N div 2 voters (rather than
+                              %% N div 2 + 1) when N is even and >= 4.
+                              %% Default: false
+                              flexible_quorum => boolean()
                              }.
 
 -type ra_server_info_key() :: machine_version | atom().
@@ -299,7 +304,8 @@
                             %% minimum number of log entries since last
                             %% snapshot/checkpoint before writing a recovery
                             %% checkpoint on shutdown. 0 disables (default).
-                            min_recovery_checkpoint_interval => non_neg_integer()}.
+                            min_recovery_checkpoint_interval => non_neg_integer(),
+                            flexible_quorum => boolean()}.
 
 -type config() :: ra_server_config().
 
@@ -417,6 +423,7 @@ init(#{id := Id,
     CommitIndex = max(LastApplied, SnapshotIdx),
     MinRecoveryCheckpointInterval = maps:get(min_recovery_checkpoint_interval,
                                              Config, 0),
+    FlexibleQuorum = maps:get(flexible_quorum, Config, false),
     Cfg = #cfg{id = Id,
                uid = UId,
                log_id = LogId,
@@ -432,7 +439,8 @@ init(#{id := Id,
                max_append_entries_rpc_batch_size = MaxAERBatchSize,
                counter = maps:get(counter, Config, undefined),
                system_config = SystemConfig,
-               min_recovery_checkpoint_interval = MinRecoveryCheckpointInterval},
+               min_recovery_checkpoint_interval = MinRecoveryCheckpointInterval,
+               flexible_quorum = FlexibleQuorum},
     put_counter(Cfg, ?C_RA_SVR_METRIC_COMMIT_INDEX, CommitIndex),
     put_counter(Cfg, ?C_RA_SVR_METRIC_LAST_APPLIED, SnapshotIdx),
     put_counter(Cfg, ?C_RA_SVR_METRIC_TERM, CurrentTerm),
@@ -3673,14 +3681,16 @@ data_commit_quorum_size(N, _FlexiPermitted) ->
     % Odd or flexible quorum not permitted: classic majority holds
     N div 2 + 1.
 
-%% A reduced commit quorum is only safe when:
+%% A reduced commit quorum is only used when enabled with the flexible_quorum
+%% server config and is only safe when:
 %% - cluster_change_permitted is true: this is only the case after the leader
 %%   has committed an entry in its own term (the noop) and when there is no
 %%   uncommitted cluster change in flight.
 %% - the leader is a voter in its own cluster config: match_indexes/1 always
 %%   includes the leader's index so if the leader has removed itself the
 %%   number of match indexes would be one more than the number of voters.
-flexible_quorum_permitted(#{cfg := #cfg{id = Id},
+flexible_quorum_permitted(#{cfg := #cfg{id = Id,
+                                        flexible_quorum = true},
                             cluster := Cluster,
                             cluster_change_permitted := true}) ->
     case Cluster of
