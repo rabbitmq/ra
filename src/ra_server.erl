@@ -3679,7 +3679,7 @@ data_commit_quorum_size(N, true) when N rem 2 =:= 0, N >= 4 ->
     N div 2;
 data_commit_quorum_size(N, _FlexiPermitted) ->
     % Odd or flexible quorum not permitted: classic majority holds
-    N div 2 + 1.
+    required_quorum_count(N).
 
 %% A reduced commit quorum is only used when enabled with the flexible_quorum
 %% server config and is only safe when:
@@ -3745,14 +3745,15 @@ match_indexes(#{cfg := #cfg{id = Id},
               end, [LWIdx], Cluster).
 
 -spec agreed_commit(list()) -> ra_index().
-agreed_commit(Indexes) ->  %% highest commit index agreed by a majority
-    Nth = trunc(length(Indexes) / 2) + 1,
-    agreed_commit(Indexes, Nth).
+agreed_commit(Indexes) ->
+    %% highest index agreed by a majority
+    agreed_commit(Indexes, required_quorum_count(length(Indexes))).
 
 -spec agreed_commit(list(), pos_integer()) -> ra_index().
-agreed_commit(Indexes, CommitQuorumSize) ->  %% return Nth highest
+agreed_commit(Indexes, QuorumSize) ->
+    %% highest index agreed by QuorumSize members, i.e. the Nth highest
     SortedIdxs = lists:sort(fun erlang:'>'/2, Indexes),
-    lists:nth(min(CommitQuorumSize, length(SortedIdxs)), SortedIdxs).
+    lists:nth(QuorumSize, SortedIdxs).
 
 log_unhandled_msg(RaState, Msg, #{cfg := #cfg{log_id = LogId}}) ->
     ?DEBUG("~ts: ~w received unhandled msg: ~W", [LogId, RaState, Msg, 6]).
@@ -4326,9 +4327,6 @@ agreed_commit_test() ->
     3 = agreed_commit([5, 5, 3, 2, 1], 3),
     % one way ahead of the rest
     1 = agreed_commit([5, 2, 1, 1, 1], 4),
-
-    % degenerate clamping
-    2 = agreed_commit([3, 3, 2], 15),
 
     ok.
 
