@@ -40,6 +40,7 @@ all() ->
      append_entries_reply_success_even_quorum_non_voter,
      append_entries_reply_success_even_quorum_new_leader,
      append_entries_reply_success_even_quorum_removed_leader,
+     append_entries_reply_success_even_quorum_uncommitted_cluster_change,
      append_entries_reply_no_success,
      append_entries_reply_no_success_from_unknown_peer,
      follower_request_vote,
@@ -1534,6 +1535,21 @@ append_entries_reply_success_even_quorum_removed_leader(_Config) ->
     #{cluster := #{N2 := #{next_index := 5, match_index := 4}},
       commit_index := 3,
       last_applied := 3,
+      machine_state := <<"hi3">>} = State2,
+    ok.
+
+append_entries_reply_success_even_quorum_uncommitted_cluster_change(_Config) ->
+    N2 = ?N2,
+    %% cluster_change_permitted can be true while a cluster change is still
+    %% uncommitted, e.g. when a mid-term (machine upgrade) noop appended before
+    %% the cluster change is applied. Pretend that entry 4 is such a cluster
+    %% change: the flexible quorum must not be used to commit it
+    State0 = (enable_flexible_quorum(base_state(4, ?FUNCTION_NAME)))#{
+               cluster_index_term => {4, 5}},
+    State1 = leader_append_hi4(State0),
+    {leader, State2, _} = ra_server:handle_leader(ack_hi4(N2), State1),
+    #{cluster_change_permitted := true,
+      commit_index := 3,
       machine_state := <<"hi3">>} = State2,
     ok.
 

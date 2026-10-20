@@ -3696,13 +3696,21 @@ data_commit_quorum_size(N, _FlexiPermitted) ->
 %% - cluster_change_permitted is true: this is only the case after the leader
 %%   has committed an entry in its own term (the noop) and when there is no
 %%   uncommitted cluster change in flight.
+%% - the latest cluster change has been committed. This is checked explicitly
+%%   as cluster_change_permitted is also set to true when applying a noop
+%%   for the current term, which can be appended mid-term (machine upgrades)
+%%   ahead of a cluster change that is still in flight when the noop is
+%%   applied.
 %% - the leader is a voter in its own cluster config: match_indexes/1 always
 %%   includes the leader's index so if the leader has removed itself the
 %%   number of match indexes would be one more than the number of voters.
 flexible_quorum_permitted(#{cfg := #cfg{id = Id,
                                         flexible_quorum = true},
                             cluster := Cluster,
-                            cluster_change_permitted := true}) ->
+                            cluster_change_permitted := true,
+                            cluster_index_term := {CITIdx, _},
+                            commit_index := CommitIdx})
+  when CommitIdx >= CITIdx ->
     case Cluster of
         #{Id := #{voter_status := #{membership := Membership}}}
           when Membership =/= voter ->
