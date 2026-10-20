@@ -19,7 +19,8 @@
          await_condition_timeout,
          max_pipeline_count,
          ra_event_formatter,
-         min_recovery_checkpoint_interval]).
+         min_recovery_checkpoint_interval,
+         flexible_quorum]).
 
 %% API functions
 -export([start_server/2,
