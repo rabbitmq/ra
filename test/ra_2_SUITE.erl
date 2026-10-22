@@ -328,9 +328,9 @@ cluster_is_deleted(Config) ->
     Leader = ra_leaderboard:lookup_leader(ClusterName),
     ?assert(lists:member(Leader, Peers)),
     %% redeclaring the same cluster should fail
-    {error, cluster_not_formed} = ra:start_cluster(?SYS, ClusterName,
-                                                   {module, ?MODULE, #{}},
-                                                   Peers),
+    {error, {members_exist, Existing}} =
+        ra:start_cluster(?SYS, ClusterName, {module, ?MODULE, #{}}, Peers),
+    ?assertEqual(lists:sort(Peers), lists:sort(Existing)),
     {ok, _} = ra:delete_cluster(Peers),
     %% Assert all ETS tables are deleted for each UId
 
