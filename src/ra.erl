@@ -467,13 +467,21 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
 %% Servers that are stopped but still registered are not detected, and another
 %% caller can start a member between this check and our own start attempt.
 existing_members(ServerConfigs, Timeout) ->
-    [Id || #{id := {Name, Node} = Id} <- ServerConfigs,
-           try erpc:call(Node, erlang, whereis, [Name], Timeout) of
-               undefined -> false;
-               _Pid -> true
-           catch _:_ ->
-                     false
-           end].
+    Check = fun (#{id := {Name, Node}}) ->
+                    try erpc:call(Node, erlang, whereis, [Name], Timeout) of
+                        undefined -> false;
+                        _Pid -> true
+                    catch _:_ ->
+                              false
+                    end
+            end,
+    %% checked in parallel so the whole check is bounded by Timeout. Nodes
+    %% that do not answer in time are treated like unreachable ones.
+    Existing = case ra_lib:partition_parallel(Check, ServerConfigs, Timeout) of
+                   {ok, E, _} -> E;
+                   {error, {partition_parallel_timeout, E, _, _}} -> E
+               end,
+    [Id || #{id := Id} <- Existing].
 
 do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
     case ra_lib:partition_parallel(
@@ -515,12 +523,12 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
                         Err ->
                             ?WARN("ra: failed to form new cluster ~tw. "
                                 "Error: ~w", [ClusterName, Err]),
-                            _ = [force_delete_server(System, N) || N <- StartedIds],
+                            delete_owned_servers(System, Started, Timeout),
                             % we do not have a functioning cluster
                             {error, cluster_not_formed}
                     end
             end;
-        {error, {partition_parallel_timeout, Started, _Failed, Pending}} ->
+        {error, {partition_parallel_timeout, Started, Failed, Pending}} ->
             ?WARN("ra: a member of cluster ~tw failed to start within the expected time interval (~w)", [ClusterName, Timeout]),
             %% only clean up servers this attempt may have created, identified
             %% by uid. Servers that failed to start are left alone as they may
@@ -532,16 +540,27 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
             %%   queued start is processed.
             %% - a pending server that has not registered yet has nothing to
             %%   delete so it is missed (see above).
+            %% - workers that returned false are left alone, only workers that
+            %%   crashed (which may have registered a server) are cleaned up.
             %% - a delete that times out (e.g. unresponsive node or supervisor)
             %%   is not retried and its result is ignored.
             %% - the pre-check in existing_members/2 and the uid check in
             %%   delete_server/4 are not atomic with starting servers, so a
             %%   concurrent start of the same name can slip through.
             %% Leftover servers can be removed with ra:force_delete_server/2.
-            _ = [ra_server_sup_sup:delete_server(System, Id, UId, Timeout)
-                 || #{id := Id, uid := UId} <- Started ++ Pending],
+            Crashed = [C || {C, _Reason} <- Failed],
+            delete_owned_servers(System, Started ++ Pending ++ Crashed, Timeout),
             {error, cluster_not_formed}
     end.
+
+%% deletes the servers in parallel, but only if they still have the uid we
+%% started them with so servers we did not create are never removed.
+delete_owned_servers(System, ServerConfigs, Timeout) ->
+    _ = ra_lib:partition_parallel(
+          fun (#{id := Id, uid := UId}) ->
+                  ra_server_sup_sup:delete_server(System, Id, UId, Timeout) == ok
+          end, ServerConfigs, Timeout),
+    ok.
 
 %% @doc Starts an individual ra server of a cluster.
 %% @param System the system name.

@@ -416,26 +416,39 @@ partition_parallel(F, Es, Timeout) ->
                                       Parent ! {self(), F(E)}
                               end), E}
                || E <- Es],
-    case collect(Running, {[], []}, Timeout) of
+    Deadline = deadline(Timeout),
+    case collect(Running, {[], []}, Deadline) of
         {error, _} = E ->
             E;
         {Successes, Failures} ->
             {ok, Successes, Failures}
     end.
 
-collect([], Acc, _Timeout) ->
+deadline(infinity) ->
+    infinity;
+deadline(Timeout) ->
+    erlang:monotonic_time(millisecond) + Timeout.
+
+%% remaining time until the deadline, never negative
+remaining(infinity) ->
+    infinity;
+remaining(Deadline) ->
+    max(0, Deadline - erlang:monotonic_time(millisecond)).
+
+%% the Timeout applies to the operation as a whole, not to each worker
+collect([], Acc, _Deadline) ->
     Acc;
-collect([{{Pid, MRef}, E} | Next] = Rem, {Left, Right}, Timeout) ->
+collect([{{Pid, MRef}, E} | Next] = Rem, {Left, Right}, Deadline) ->
     receive
         {Pid, true} ->
             erlang:demonitor(MRef, [flush]),
-            collect(Next, {[E | Left], Right}, Timeout);
+            collect(Next, {[E | Left], Right}, Deadline);
         {Pid, false} ->
             erlang:demonitor(MRef, [flush]),
-            collect(Next, {Left, [E | Right]}, Timeout);
+            collect(Next, {Left, [E | Right]}, Deadline);
         {'DOWN', MRef, process, Pid, Reason} ->
-            collect(Next, {Left, [{E, Reason} | Right]}, Timeout)
-    after Timeout ->
+            collect(Next, {Left, [{E, Reason} | Right]}, Deadline)
+    after remaining(Deadline) ->
         %% pick up anything that has completed but not yet been collected,
         %% the rest is pending
         {Left1, Right1, Pending} = drain(Rem, Left, Right, []),
@@ -446,7 +459,10 @@ collect([{{Pid, MRef}, E} | Next] = Rem, {Left, Right}, Timeout) ->
                  %% delivered so this effectively waits for the process to
                  %% exit if it is still running at this stage
                  _ = erlang:is_process_alive(P),
-                 erlang:demonitor(M, [flush])
+                 erlang:demonitor(M, [flush]),
+                 %% the worker may have sent its result after the drain
+                 %% so make sure it does not linger in our mailbox
+                 receive {P, _} -> ok after 0 -> ok end
              end || {{P, M}, _} <- Rem],
         {error, {partition_parallel_timeout, Left1, Right1,
                  lists:reverse(Pending)}}
