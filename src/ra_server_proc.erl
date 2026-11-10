@@ -540,12 +540,7 @@ leader(EventType, {command, low, Cmd}, #state{} = State) ->
     %% non user low priority commands are upgraded to normal priority
     leader(EventType, {command, normal, Cmd}, State);
 leader(EventType, {aux_command, Cmd}, State0) ->
-    {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType,
-                                                     Cmd, State0#state.server_state),
-    {State, Actions} =
-        ?HANDLE_EFFECTS(Effects, EventType,
-                        State0#state{server_state = ServerState}),
-    {keep_state, State, Actions};
+    handle_aux_command(?FUNCTION_NAME, EventType, Cmd, State0);
 leader(EventType, flush_commands,
        #state{conf = #conf{flush_commands_size = Size},
               low_priority_commands = Delayed0} = State0) ->
@@ -692,12 +687,7 @@ candidate({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 candidate(EventType, {aux_command, Cmd}, State0) ->
-    {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType, Cmd,
-                                                     State0#state.server_state),
-    {State, Actions} =
-        ?HANDLE_EFFECTS(Effects, EventType,
-                        State0#state{server_state = ServerState}),
-    {keep_state, State, Actions};
+    handle_aux_command(?FUNCTION_NAME, EventType, Cmd, State0);
 candidate({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, candidate}}]};
 candidate(info, {'DOWN', _MRef, process, Pid, Info}, State0) ->
@@ -758,12 +748,7 @@ pre_vote({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 pre_vote(EventType, {aux_command, Cmd}, State0) ->
-    {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType, Cmd,
-                                                     State0#state.server_state),
-    {State, Actions} =
-        ?HANDLE_EFFECTS(Effects, EventType,
-                        State0#state{server_state = ServerState}),
-    {keep_state, State, Actions};
+    handle_aux_command(?FUNCTION_NAME, EventType, Cmd, State0);
 pre_vote({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, pre_vote}}]};
 pre_vote(info, {node_event, _Node, _Evt}, State) ->
@@ -853,12 +838,7 @@ follower({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 follower(EventType, {aux_command, Cmd}, State0) ->
-    {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType, Cmd,
-                                                     State0#state.server_state),
-    {State, Actions} =
-        ?HANDLE_EFFECTS(Effects, EventType,
-                        State0#state{server_state = ServerState}),
-    {keep_state, State, Actions};
+    handle_aux_command(?FUNCTION_NAME, EventType, Cmd, State0);
 follower({call, From}, trigger_election, State) ->
     ?DEBUG("~ts: election triggered by ~w", [log_id(State), element(1, From)]),
     {keep_state, State, [{reply, From, ok},
@@ -987,12 +967,7 @@ receive_snapshot({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 receive_snapshot(EventType, {aux_command, Cmd}, State0) ->
-    {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType, Cmd,
-                                                     State0#state.server_state),
-    {State, Actions} =
-        ?HANDLE_EFFECTS(Effects, EventType,
-                        State0#state{server_state = ServerState}),
-    {keep_state, State, Actions};
+    handle_aux_command(?FUNCTION_NAME, EventType, Cmd, State0);
 receive_snapshot(info, {'DOWN', MRef, process, _Pid, _Info},
          #state{leader_monitor = MRef} = State) ->
     %% leader is down
@@ -1132,12 +1107,7 @@ await_condition({call, From}, {state_query, Spec}, State) ->
     Reply = {ok, do_state_query(Spec, State), id(State)},
     {keep_state, State, [{reply, From, Reply}]};
 await_condition(EventType, {aux_command, Cmd}, State0) ->
-    {_, ServerState, Effects} = ra_server:handle_aux(?FUNCTION_NAME, EventType,
-                                                     Cmd, State0#state.server_state),
-    {State, Actions} =
-        ?HANDLE_EFFECTS(Effects, EventType,
-                        State0#state{server_state = ServerState}),
-    {keep_state, State, Actions};
+    handle_aux_command(?FUNCTION_NAME, EventType, Cmd, State0);
 await_condition({call, From}, ping, State) ->
     {keep_state, State, [{reply, From, {pong, await_condition}}]};
 await_condition({call, From}, trigger_election, State) ->
@@ -2483,6 +2453,15 @@ record_cluster_change(#state{conf = #conf{cluster_name = ClusterName},
     Leader = ra_server:state_query(leader, ServerState),
     Members = ra_server:state_query(members, ServerState),
     ok = ra_leaderboard:record(ClusterName, Leader, Members).
+
+handle_aux_command(RaftState, EventType, Cmd, State0) ->
+    ok = incr_counter(State0#state.conf, ?C_RA_SRV_AUX_COMMANDS, 1),
+    {_, ServerState, Effects} = ra_server:handle_aux(RaftState, EventType, Cmd,
+                                                     State0#state.server_state),
+    {State, Actions} =
+        ?HANDLE_EFFECTS(Effects, EventType,
+                        State0#state{server_state = ServerState}),
+    {keep_state, State, Actions}.
 
 incr_counter(#conf{counter = Cnt}, Ix, N) when Cnt =/= undefined ->
     counters:add(Cnt, Ix, N);

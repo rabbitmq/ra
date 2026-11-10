@@ -692,7 +692,9 @@ aux_handler_not_impl(Config) ->
                 end),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
     {ok, _, Leader} = ra:members(ServerId1),
+    Count = aux_command_count(Leader),
     {error, aux_handler_not_implemented} = ra:aux_command(Leader, emit),
+    ?assertEqual(Count + 1, aux_command_count(Leader)),
     ok.
 
 consistent_aux(Config) ->
@@ -729,13 +731,23 @@ consistent_aux(Config) ->
                 end),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
     timer:sleep(100),
-    {ok, banana, _} = ra:consistent_aux(ServerId1, banana, 500),
-    ra:stop_server(?SYS, ServerId2),
-    {ok, banana, _} = ra:consistent_aux(ServerId1, banana, 500),
-    ra:stop_server(?SYS, ServerId3),
-    {timeout, ServerId1} = ra:consistent_aux(ServerId1, banana, 500),
-    ra:restart_server(?SYS, ServerId2),
-    ra:restart_server(?SYS, ServerId3),
+    {ok, _, Leader} = ra:members(ServerId1),
+    [Follower1, Follower2] = Cluster -- [Leader],
+    Count = aux_command_count(Leader),
+    #{consistent_queries := ConsistentCount} =
+        ra_counters:counters(Leader, [consistent_queries]),
+    {ok, banana, Leader} = ra:consistent_aux(Leader, banana, 500),
+    ?assertEqual(Count + 1, aux_command_count(Leader)),
+    ?assertEqual(ConsistentCount + 1,
+                 maps:get(consistent_queries,
+                          ra_counters:counters(Leader, [consistent_queries]))),
+    ra:stop_server(?SYS, Follower1),
+    {ok, banana, Leader} = ra:consistent_aux(Leader, banana, 500),
+    ?assertEqual(Count + 2, aux_command_count(Leader)),
+    ra:stop_server(?SYS, Follower2),
+    {timeout, Leader} = ra:consistent_aux(Leader, banana, 500),
+    ra:restart_server(?SYS, Follower1),
+    ra:restart_server(?SYS, Follower2),
     ra:delete_cluster(Cluster),
     ok.
 
@@ -772,17 +784,27 @@ aux_command(Config) ->
                 end),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
     {ok, _, Leader} = ra:members(ServerId1),
+    [ServerId2, ServerId3] = Cluster -- [Leader],
+    LeaderCount = aux_command_count(Leader),
+    Follower2Count = aux_command_count(ServerId2),
+    Follower3Count = aux_command_count(ServerId3),
     ok = ra:cast_aux_command(Leader, banana),
     {leader, banana} = ra:aux_command(Leader, emit),
-    [ServerId2, ServerId3] = Cluster -- [Leader],
+    ?assertEqual(LeaderCount + 2, aux_command_count(Leader)),
     {follower, undefined} = ra:aux_command(ServerId2, emit),
     ok = ra:cast_aux_command(ServerId2, apple),
     {follower, apple} = ra:aux_command(ServerId2, emit),
+    ?assertEqual(Follower2Count + 3, aux_command_count(ServerId2)),
     {follower, undefined} = ra:aux_command(ServerId3, emit),
     ok = ra:cast_aux_command(ServerId3, orange),
     {follower, orange} = ra:aux_command(ServerId3, emit),
+    ?assertEqual(Follower3Count + 3, aux_command_count(ServerId3)),
     ra:delete_cluster(Cluster),
     ok.
+
+aux_command_count(ServerId) ->
+    #{aux_commands := Count} = ra_counters:counters(ServerId, [aux_commands]),
+    Count.
 
 aux_command_v2(Config) ->
     ClusterName = ?config(cluster_name, Config),
@@ -946,6 +968,7 @@ aux_eval(Config) ->
                 end),
     ok = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
     {ok, _, Leader} = ra:members(ServerId1),
+    Counts = [{ServerId, aux_command_count(ServerId)} || ServerId <- Cluster],
 
     ok = ra:pipeline_command(Leader, dummy),
     receive
@@ -966,6 +989,8 @@ aux_eval(Config) ->
               flush(),
               exit(got_eval_3)
     end,
+    [?assertEqual(Count, aux_command_count(ServerId)) ||
+        {ServerId, Count} <- Counts],
     ra:delete_cluster(Cluster),
     ok.
 
