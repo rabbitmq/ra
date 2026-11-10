@@ -1237,9 +1237,11 @@ recovery(Config) ->
     {14, 2} = ra_log:last_index_term(Log2),
     Log3 = write_n(15, 21, 3, Log2),
     {20, 3} = ra_log:last_index_term(Log3),
-    % Log4 = deliver_all_log_events(Log3, 200),
+    %% wait for the last entries to be written before stopping, else they may
+    %% not have been processed by the WAL and are (legitimately) lost
     Pred = fun (L) ->
-                   {20, 3} =:= ra_log:last_index_term(L)
+                   {20, 3} =:= ra_log:last_index_term(L) andalso
+                   {20, 3} =:= ra_log:last_written(L)
            end,
     Log4 = assert_log_events(Log3, Pred, 2000),
     ra_log:close(Log4),
