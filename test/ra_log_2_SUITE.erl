@@ -687,8 +687,15 @@ read_plan(Config) ->
 
 read_plan_missing_index(Config) ->
     Log0 = ra_log_init(Config),
-    Log1 = write_and_roll(1, 500, 1, Log0, 50),
-    Log2 = deliver_all_log_events(Log1, 100),
+    Log1 = write_and_roll_no_deliver(1, 500, 1, Log0),
+    %% the entries must be in segments before updating the release cursor
+    %% else no snapshot is taken
+    Log2 = assert_log_events(Log1,
+                             fun (L) ->
+                                     #{segments_range := SegRange} =
+                                         ra_log:overview(L),
+                                     SegRange == {0, 499}
+                             end),
     {Log3, Effs} = ra_log:update_release_cursor(300, #{}, macctx(),
                                                 [1, 299], Log2),
     ct:pal("Effs ~p", [Effs]),
@@ -1237,9 +1244,11 @@ recovery(Config) ->
     {14, 2} = ra_log:last_index_term(Log2),
     Log3 = write_n(15, 21, 3, Log2),
     {20, 3} = ra_log:last_index_term(Log3),
-    % Log4 = deliver_all_log_events(Log3, 200),
+    %% wait for the last entries to be written before stopping, else they may
+    %% not have been processed by the WAL and are (legitimately) lost
     Pred = fun (L) ->
-                   {20, 3} =:= ra_log:last_index_term(L)
+                   {20, 3} =:= ra_log:last_index_term(L) andalso
+                   {20, 3} =:= ra_log:last_written(L)
            end,
     Log4 = assert_log_events(Log3, Pred, 2000),
     ra_log:close(Log4),
