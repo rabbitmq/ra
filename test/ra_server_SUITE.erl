@@ -1542,10 +1542,11 @@ append_entries_reply_success_even_quorum_removed_leader(_Config) ->
 
 append_entries_reply_success_even_quorum_uncommitted_cluster_change(_Config) ->
     N2 = ?N2,
-    %% cluster_change_permitted can be true while a cluster change is still
-    %% uncommitted, e.g. when a mid-term (machine upgrade) noop appended before
-    %% the cluster change is applied. Pretend that entry 4 is such a cluster
-    %% change: the flexible quorum must not be used to commit it
+    %% even if cluster_change_permitted is true while a cluster change is
+    %% still uncommitted, the explicit check that the latest cluster change is
+    %% committed must prevent the flexible quorum from being used. Pretend
+    %% that entry 4 is such a cluster change: it must not be committed by the
+    %% flexible quorum
     State0 = (enable_flexible_quorum(base_state(4, ?FUNCTION_NAME)))#{
                cluster_index_term => {4, 5}},
     State1 = leader_append_hi4(State0),

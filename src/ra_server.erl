@@ -3698,11 +3698,11 @@ data_commit_quorum_size(N, _FlexiPermitted) ->
 %% - cluster_change_permitted is true: this is only the case after the leader
 %%   has committed an entry in its own term (the noop) and when there is no
 %%   uncommitted cluster change in flight.
-%% - the latest cluster change has been committed. This is checked explicitly
-%%   as cluster_change_permitted is also set to true when applying a noop
-%%   for the current term, which can be appended mid-term (machine upgrades)
-%%   ahead of a cluster change that is still in flight when the noop is
-%%   applied.
+%% - the latest cluster change has been committed. Applying a noop for the
+%%   current term (which can be appended mid-term for machine upgrades) does
+%%   not set cluster_change_permitted while a later cluster change is still in
+%%   flight, but this is checked explicitly as well so that the reduced
+%%   quorum never depends on cluster_change_permitted alone.
 %% - the leader is a voter in its own cluster config: match_indexes/1 always
 %%   includes the leader's index so if the leader has removed itself the
 %%   number of match indexes would be one more than the number of voters.
@@ -3925,7 +3925,8 @@ update_peer_query_index(PeerId, QueryIndex, #{cluster := Cluster} = State0) ->
     end.
 
 get_current_query_quorum(State) ->
-    %% Explicitly not implemented for FlexiRaft
+    %% consistent queries always use a classic majority, even when the
+    %% flexible commit quorum is enabled (see INTERNALS.md)
     agreed_commit(query_indexes(State)).
 
 -spec take_from_queue_while(fun((El) -> {true, Res} | false),

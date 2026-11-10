@@ -317,10 +317,10 @@ the leader is itself a voter in its current cluster configuration:
   first).
 * `cluster_change_permitted` is also false while a cluster change is in flight
   so that a classic majority of the new configuration is used, which
-  intersects any majority of the old configuration. As applying a noop for
-  the current term (e.g. one appended mid-term for a machine upgrade) also
-  sets `cluster_change_permitted`, the leader additionally checks that the
-  latest cluster change is committed before using the reduced quorum.
+  intersects any majority of the old configuration. As a safeguard the
+  leader also checks explicitly that the latest cluster change is committed
+  before using the reduced quorum, so that it never depends on
+  `cluster_change_permitted` alone.
 * A leader that has removed itself from the cluster still counts its own log
   index when computing the commit index. Using the reduced quorum in that case
   would allow an entry to be committed on fewer than half of the remaining
