@@ -430,9 +430,18 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %% call are deleted by uid and servers that failed to start are left alone.
 %% It does not guarantee that nothing is left behind. For example a start
 %% that was already queued on a slow or suspended supervisor may still complete
-%% after this function has returned, and a member started concurrently by
-%% another caller may not be detected. Leftover servers can be removed with
+%% after this function has returned. Leftover servers can be removed with
 %% {@link force_delete_server/2}.
+%%
+%% Concurrent cluster operations on the same members are not supported. This
+%% includes concurrent calls to `start_cluster' as well as starting, restarting
+%% or deleting the same servers while a cluster is being started. The checks
+%% made before and during startup are not atomic, so racing operations can
+%% result in servers being missed or incorrectly cleaned up. Servers that are
+%% registered but not running (for example stopped servers) are not detected
+%% by the pre-check, so do not reuse the uid of such a server in a new cluster
+%% configuration as it may be deleted if startup times out.
+%% Use an external lock service or equivalent to serialise cluster operations.
 %% @end
 -spec start_cluster(atom(), [ra_server:ra_server_config()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
@@ -545,8 +554,8 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
             %% - a delete that times out (e.g. unresponsive node or supervisor)
             %%   is not retried and its result is ignored.
             %% - the pre-check in existing_members/2 and the uid check in
-            %%   delete_server/4 are not atomic with starting servers, so a
-            %%   concurrent start of the same name can slip through.
+            %%   delete_server/4 are not atomic with starting servers.
+            %%   Concurrent cluster operations are documented as unsupported.
             %% Leftover servers can be removed with ra:force_delete_server/2.
             Crashed = [C || {C, _Reason} <- Failed],
             delete_owned_servers(System, Started ++ Pending ++ Crashed, Timeout),
