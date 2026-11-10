@@ -63,7 +63,7 @@
                     ClusterName :: atom(),
                     Config :: #{members := [ra_server_id()]}) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed}.
+    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
 start_cluster(System, ClusterName, #{members := ServerIds})
   when is_atom(ClusterName) andalso
        is_atom(System) ->

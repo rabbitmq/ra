@@ -35,6 +35,7 @@ all_tests() ->
      nonvoter_catches_up_after_leader_restart,
      start_stop_restart_delete_on_remote,
      start_cluster,
+     start_cluster_members_exist,
      start_or_restart_cluster,
      delete_one_server_cluster,
      delete_two_server_cluster,
@@ -136,6 +137,31 @@ start_cluster(Config) ->
     PingResults = [{pong, _} = ra_server_proc:ping(N, 500) || N <- ServerIds],
     % assert one node is leader
     ?assert(lists:any(fun ({pong, S}) -> S =:= leader end, PingResults)),
+    stop_peers(Peers),
+    ok.
+
+start_cluster_members_exist(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
+    Machine = {module, ?MODULE, #{}},
+    {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+    ?assertEqual(lists:sort(ServerIds), lists:sort(Started)),
+    %% a second attempt with overlapping members bails before starting
+    %% or deleting anything
+    {error, {members_exist, Existing}} =
+        ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
+    ?assertEqual(lists:sort(ServerIds), lists:sort(Existing)),
+    %% the original members are untouched
+    [?assertMatch({pong, _}, ra_server_proc:ping(N, 500)) || N <- ServerIds],
+    {ok, _, _} = ra:members(hd(ServerIds)),
+    %% the cluster name is informational only, a running member under a
+    %% different cluster name is also a conflict
+    {error, {members_exist, Existing2}} =
+        ra:start_cluster(?SYS, other_cluster_name, Machine, ServerIds),
+    ?assertEqual(lists:sort(ServerIds), lists:sort(Existing2)),
+    [?assertMatch({pong, _}, ra_server_proc:ping(N, 500)) || N <- ServerIds],
     stop_peers(Peers),
     ok.
 

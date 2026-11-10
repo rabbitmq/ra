@@ -287,6 +287,9 @@ force_delete_server(System, ServerId, Timeout) ->
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
+%% `{error, {members_exist, ServerIds}}' if any of the members are already
+%% running. In this case nothing is started or deleted.
+%%
 %% If there was no existing cluster and a new cluster could not be formed
 %% any servers that did manage to start are
 %% forcefully deleted.
@@ -294,7 +297,7 @@ force_delete_server(System, ServerId, Timeout) ->
 -spec start_or_restart_cluster(atom(), ra_cluster_name(), ra_server:machine_conf(),
                                [ra_server_id()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed}.
+    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
 start_or_restart_cluster(System, ClusterName, Machine, ServerIds) ->
     start_or_restart_cluster(System, ClusterName, Machine, ServerIds, ?START_TIMEOUT).
 
@@ -311,6 +314,9 @@ start_or_restart_cluster(System, ClusterName, Machine, ServerIds) ->
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
+%% `{error, {members_exist, ServerIds}}' if any of the members are already
+%% running. In this case nothing is started or deleted.
+%%
 %% If there was no existing cluster and a new cluster could not be formed
 %% any servers that did manage to start are
 %% forcefully deleted.
@@ -319,7 +325,7 @@ start_or_restart_cluster(System, ClusterName, Machine, ServerIds) ->
 -spec start_or_restart_cluster(atom(), ra_cluster_name(), ra_server:machine_conf(),
                                [ra_server_id()], non_neg_integer()) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed}.
+    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
 start_or_restart_cluster(System, ClusterName, Machine,
                          [FirstServer | RemServers] = ServerIds, Timeout) ->
     case ra_server_sup_sup:restart_server(System, FirstServer, #{}) of
@@ -346,6 +352,9 @@ start_or_restart_cluster(System, ClusterName, Machine,
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
+%% `{error, {members_exist, ServerIds}}' if any of the members are already
+%% running. In this case nothing is started or deleted.
+%%
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
 %% @end
@@ -354,7 +363,7 @@ start_or_restart_cluster(System, ClusterName, Machine,
                     ra_server:machine_conf(),
                     [ra_server_id()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed}.
+    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
 start_cluster(System, ClusterName, Machine, ServerIds)
   when is_atom(System) ->
     start_cluster(System, ClusterName, Machine, ServerIds, ?START_TIMEOUT).
@@ -373,6 +382,9 @@ start_cluster(System, ClusterName, Machine, ServerIds)
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
+%% `{error, {members_exist, ServerIds}}' if any of the members are already
+%% running. In this case nothing is started or deleted.
+%%
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
 %% @end
@@ -382,7 +394,7 @@ start_cluster(System, ClusterName, Machine, ServerIds)
                     [ra_server_id()],
                     non_neg_integer()) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed}.
+    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
 start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
   when is_atom(System) ->
     Configs = [begin
@@ -407,12 +419,33 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
+%% `{error, {members_exist, ServerIds}}' if any of the members are already
+%% running. In this case nothing is started or deleted.
+%%
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
+%%
+%% Cleanup after a startup timeout is best effort and aims to cover the
+%% common cases only: servers that started, or may have started, as part of this
+%% call are deleted by uid and servers that failed to start are left alone.
+%% It does not guarantee that nothing is left behind. For example a start
+%% that was already queued on a slow or suspended supervisor may still complete
+%% after this function has returned. Leftover servers can be removed with
+%% {@link force_delete_server/2}.
+%%
+%% Concurrent cluster operations on the same members are not supported. This
+%% includes concurrent calls to `start_cluster' as well as starting, restarting
+%% or deleting the same servers while a cluster is being started. The checks
+%% made before and during startup are not atomic, so racing operations can
+%% result in servers being missed or incorrectly cleaned up. Servers that are
+%% registered but not running (for example stopped servers) are not detected
+%% by the pre-check, so do not reuse the uid of such a server in a new cluster
+%% configuration as it may be deleted if startup times out.
+%% Use an external lock service or equivalent to serialise cluster operations.
 %% @end
 -spec start_cluster(atom(), [ra_server:ra_server_config()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed}.
+    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
 start_cluster(System, ServerConfigs)
   when is_atom(System) ->
     start_cluster(System, ServerConfigs, ?START_TIMEOUT).
@@ -425,9 +458,41 @@ start_cluster(System, ServerConfigs)
 -spec start_cluster(atom(),
                     [ra_server:ra_server_config()], non_neg_integer()) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed}.
+    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
 start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
               Timeout) when is_atom(System) ->
+    case existing_members(ServerConfigs, Timeout) of
+        [] ->
+            do_start_cluster(System, ClusterName, ServerConfigs, Timeout);
+        Existing ->
+            ?WARN("ra: not starting cluster ~tw, members already exist: ~tw",
+                  [ClusterName, Existing]),
+            {error, {members_exist, Existing}}
+    end.
+
+%% returns the ids of any members whose server is already running on its node.
+%% The cluster name is informational only so is not considered. Unreachable
+%% nodes are ignored here as starting a server on them will fail anyway.
+%% Servers that are stopped but still registered are not detected, and another
+%% caller can start a member between this check and our own start attempt.
+existing_members(ServerConfigs, Timeout) ->
+    Check = fun (#{id := {Name, Node}}) ->
+                    try erpc:call(Node, erlang, whereis, [Name], Timeout) of
+                        undefined -> false;
+                        _Pid -> true
+                    catch _:_ ->
+                              false
+                    end
+            end,
+    %% checked in parallel so the whole check is bounded by Timeout. Nodes
+    %% that do not answer in time are treated like unreachable ones.
+    Existing = case ra_lib:partition_parallel(Check, ServerConfigs, Timeout) of
+                   {ok, E, _} -> E;
+                   {error, {partition_parallel_timeout, E, _, _}} -> E
+               end,
+    [Id || #{id := Id} <- Existing].
+
+do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
     case ra_lib:partition_parallel(
             fun (C) ->
                 case start_server(System, C) of
@@ -437,7 +502,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
                               [C, Err]),
                         false
                 end
-            end, ServerConfigs) of
+            end, ServerConfigs, Timeout) of
         {ok, Started, NotStarted} ->
             case Started of
                 [] ->
@@ -467,17 +532,44 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
                         Err ->
                             ?WARN("ra: failed to form new cluster ~tw. "
                                 "Error: ~w", [ClusterName, Err]),
-                            _ = [force_delete_server(System, N) || N <- StartedIds],
+                            delete_owned_servers(System, Started, Timeout),
                             % we do not have a functioning cluster
                             {error, cluster_not_formed}
                     end
             end;
-        {error, {partition_parallel_timeout, Started, _}} ->
-            StartedIds = sort_by_local([I || #{id := I} <- Started], []),
+        {error, {partition_parallel_timeout, Started, Failed, Pending}} ->
             ?WARN("ra: a member of cluster ~tw failed to start within the expected time interval (~w)", [ClusterName, Timeout]),
-            _ = [force_delete_server(System, N) || N <- StartedIds],
+            %% only clean up servers this attempt may have created, identified
+            %% by uid. Servers that failed to start are left alone as they may
+            %% be pre-existing.
+            %% This is best effort and cannot be made perfect:
+            %% - killing a pending worker does not cancel a supervisor:start_child
+            %%   it has already issued. If the target supervisor is suspended or
+            %%   slow the server may still start after we return, once the
+            %%   queued start is processed.
+            %% - a pending server that has not registered yet has nothing to
+            %%   delete so it is missed (see above).
+            %% - workers that returned false are left alone, only workers that
+            %%   crashed (which may have registered a server) are cleaned up.
+            %% - a delete that times out (e.g. unresponsive node or supervisor)
+            %%   is not retried and its result is ignored.
+            %% - the pre-check in existing_members/2 and the uid check in
+            %%   delete_server/4 are not atomic with starting servers.
+            %%   Concurrent cluster operations are documented as unsupported.
+            %% Leftover servers can be removed with ra:force_delete_server/2.
+            Crashed = [C || {C, _Reason} <- Failed],
+            delete_owned_servers(System, Started ++ Pending ++ Crashed, Timeout),
             {error, cluster_not_formed}
     end.
+
+%% deletes the servers in parallel, but only if they still have the uid we
+%% started them with so servers we did not create are never removed.
+delete_owned_servers(System, ServerConfigs, Timeout) ->
+    _ = ra_lib:partition_parallel(
+          fun (#{id := Id, uid := UId}) ->
+                  ra_server_sup_sup:delete_server(System, Id, UId, Timeout) == ok
+          end, ServerConfigs, Timeout),
+    ok.
 
 %% @doc Starts an individual ra server of a cluster.
 %% @param System the system name.

@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp_version: [26, 27, 28]
+        otp_version: [27, 28, 29]
         os: [ubuntu-latest, windows-latest]
         # Pin ImageOS per OS: windows-latest reports win25-vs2026, which the
         # pinned setup-beam can't map. Drop once erlef/setup-beam#461 ships.
@@ -38,7 +38,7 @@ jobs:
       if: ${{ matrix.os == 'ubuntu-latest'}}
       run: rebar3 xref
     - name: Dialyze
-      if: ${{ matrix.otp_version == 28 && matrix.os == 'ubuntu-latest'}}
+      if: ${{ matrix.otp_version == 29 && matrix.os == 'ubuntu-latest'}}
       run: rebar3 dialyzer
     - name: Build
       run: rebar3 compile

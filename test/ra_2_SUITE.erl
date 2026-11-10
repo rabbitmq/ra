@@ -32,6 +32,7 @@ all_tests() ->
      server_is_force_deleted,
      server_is_force_deleted_with_timeout,
      force_delete_server_times_out,
+     start_cluster_timeout_cleanup,
      force_deleted_server_mem_tables_are_cleaned_up,
      leave_and_delete_server,
      cluster_is_deleted,
@@ -328,9 +329,9 @@ cluster_is_deleted(Config) ->
     Leader = ra_leaderboard:lookup_leader(ClusterName),
     ?assert(lists:member(Leader, Peers)),
     %% redeclaring the same cluster should fail
-    {error, cluster_not_formed} = ra:start_cluster(?SYS, ClusterName,
-                                                   {module, ?MODULE, #{}},
-                                                   Peers),
+    {error, {members_exist, Existing}} =
+        ra:start_cluster(?SYS, ClusterName, {module, ?MODULE, #{}}, Peers),
+    ?assertEqual(lists:sort(Peers), lists:sort(Existing)),
     {ok, _} = ra:delete_cluster(Peers),
     %% Assert all ETS tables are deleted for each UId
 
@@ -1011,6 +1012,56 @@ enq_deq_n(N, ServerId, Acc) ->
     Deq = dequeue(ServerId),
     true = Deq /= empty,
     enq_deq_n(N-1, ServerId, [Deq | Acc]).
+
+start_cluster_timeout_cleanup(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    PrivDir = ?config(priv_dir, Config),
+    Id1 = ?config(server_id, Config),
+    Id2 = ?config(server_id2, Config),
+    Id3 = ?config(server_id3, Config),
+    {Name2, _} = Id2,
+    UId1 = ?config(uid, Config),
+    UId2 = ?config(uid2, Config),
+    UId3 = ?config(uid3, Config),
+    Peers = [Id1, Id2, Id3],
+    %% a stopped server that is still registered is not detected by the
+    %% pre-check. Its start in the cluster below, using the same uid, is
+    %% rejected (not_new) and it must be left alone when the cleanup runs
+    _ = ra:start_server(?SYS, conf(ClusterName, UId3, Id3, PrivDir, Peers)),
+    ok = ra:stop_server(?SYS, Id3),
+    {Name3, _} = Id3,
+    ?assertEqual(UId3, ra_directory:uid_of(?SYS, Name3)),
+    Confs = [conf(ClusterName, UId1, Id1, PrivDir, Peers),
+             conf(ClusterName, UId2, Id2, PrivDir, Peers),
+             conf(ClusterName, UId3, Id3, PrivDir, Peers)],
+    %% make the start of the second server hang so the call times out
+    meck:new(ra_server_sup_sup, [passthrough]),
+    meck:expect(ra_server_sup_sup, start_server_rpc,
+                fun(Sys, UId, #{id := {N, _}} = C) when N =:= Name2 ->
+                        timer:sleep(30000),
+                        meck:passthrough([Sys, UId, C]);
+                   (Sys, UId, C) ->
+                        meck:passthrough([Sys, UId, C])
+                end),
+    try
+        T0 = erlang:monotonic_time(millisecond),
+        ?assertEqual({error, cluster_not_formed},
+                     ra:start_cluster(?SYS, Confs, 1000)),
+        %% the call is bounded by the timeout rather than the hung start
+        ?assert(erlang:monotonic_time(millisecond) - T0 < 10000)
+    after
+        meck:unload(ra_server_sup_sup)
+    end,
+    %% the server that did start has been deleted
+    {Name1, _} = Id1,
+    ?assertEqual(undefined, ra_directory:uid_of(?SYS, Name1)),
+    ?assertEqual(undefined, ra_directory:where_is(?SYS, UId1)),
+    %% the hung server never started
+    ?assertEqual(undefined, ra_directory:uid_of(?SYS, Name2)),
+    %% the pre-existing server was not touched
+    ?assertEqual(UId3, ra_directory:uid_of(?SYS, Name3)),
+    ok = ra:force_delete_server(?SYS, Id3),
+    ok.
 
 start_server_noproc(Config) ->
     ClusterName = ?config(cluster_name, Config),

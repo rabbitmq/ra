@@ -27,6 +27,7 @@
          stop_server/2,
          stop_server/3,
          delete_server/3,
+         delete_server/4,
          remove_all/1,
          start_link/1,
          recover_config/2,
@@ -34,6 +35,7 @@
          start_server_rpc/3,
          restart_server_rpc/3,
          delete_server_rpc/2,
+         delete_owned_server_rpc/3,
          prepare_server_stop_rpc/2]).
 
 %% Supervisor callbacks
@@ -172,6 +174,41 @@ delete_server(System, ServerId, Timeout) when is_atom(System) ->
         ok ->
             rpc:call(Node, ?MODULE, delete_server_rpc, [System, Name], Timeout);
         {error, _} = Err -> Err
+    end.
+
+%% @doc Deletes a server only if it is registered with the given UId. This
+%% stops a failed startup attempt from deleting a server it did not create.
+%% The whole operation, including stopping the server, runs on the server's node
+%% and is bounded by the timeout.
+-spec delete_server(atom(), ServerId :: ra_server_id(), ra_uid(),
+                    Timeout :: timeout()) ->
+    ok | {error, term()} | {badrpc, term()}.
+delete_server(System, ServerId, UId, Timeout) when is_atom(System) ->
+    Node = ra_lib:ra_server_id_node(ServerId),
+    Name = ra_lib:ra_server_id_to_local_name(ServerId),
+    rpc:call(Node, ?MODULE, delete_owned_server_rpc, [System, Name, UId],
+             Timeout).
+
+delete_owned_server_rpc(System, RaName, UId) ->
+    case ra_system:fetch(System) of
+        undefined ->
+            {error, system_not_started};
+        #{names := Names} ->
+            case ra_directory:uid_of(Names, RaName) of
+                UId ->
+                    _ = case prepare_server_stop_rpc(System, RaName) of
+                            {ok, Pid, SrvSup} when is_pid(Pid) ->
+                                supervisor:terminate_child(SrvSup, Pid);
+                            _ ->
+                                ok
+                        end,
+                    delete_server_rpc(System, RaName);
+                undefined ->
+                    %% nothing registered, nothing to delete
+                    ok;
+                _ ->
+                    {error, not_owner}
+            end
     end.
 
 delete_server_rpc(System, RaName) ->

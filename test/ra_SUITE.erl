@@ -34,6 +34,7 @@ all() ->
 all_tests() ->
     [
      single_server_processes_command,
+     delete_server_checks_uid,
      pipeline_commands,
      stop_server_idemp,
      minority,
@@ -141,6 +142,27 @@ single_server_processes_command(Config) ->
     {ok, 5, _} = ra:process_command(N1, 5, 2000),
     {ok, 10, _} = ra:process_command(N1, 5, 2000),
     terminate_cluster([N1]),
+    ok.
+
+delete_server_checks_uid(Config) ->
+    Name = ?config(test_name, Config),
+    {_RaName, _} = N1 = nth_server_name(Config, 1),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
+    {RaName, _} = N1,
+    UId = ra_directory:uid_of(default, RaName),
+    ?assert(is_binary(UId)),
+    %% a uid we do not own must not delete the server
+    ?assertEqual({error, not_owner},
+                 ra_server_sup_sup:delete_server(default, N1,
+                                                 <<"not_my_uid">>, 5000)),
+    ?assertEqual(UId, ra_directory:uid_of(default, RaName)),
+    ?assert(is_pid(whereis(RaName))),
+    %% the owning uid deletes it
+    ?assertEqual(ok, ra_server_sup_sup:delete_server(default, N1, UId, 5000)),
+    ?assertEqual(undefined, ra_directory:uid_of(default, RaName)),
+    ?assertEqual(undefined, whereis(RaName)),
+    %% nothing registered is a no-op
+    ?assertEqual(ok, ra_server_sup_sup:delete_server(default, N1, UId, 5000)),
     ok.
 
 pipeline_commands(Config) ->
