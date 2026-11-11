@@ -1024,21 +1024,21 @@ start_cluster_timeout_cleanup(Config) ->
     UId2 = ?config(uid2, Config),
     UId3 = ?config(uid3, Config),
     Peers = [Id1, Id2, Id3],
-    %% a stopped server that is still registered is not detected by the
-    %% pre-check. Its start in the cluster below, using the same uid, is
-    %% rejected (not_new) and it must be left alone when the cleanup runs
-    _ = ra:start_server(?SYS, conf(ClusterName, UId3, Id3, PrivDir, Peers)),
-    ok = ra:stop_server(?SYS, Id3),
     {Name3, _} = Id3,
-    ?assertEqual(UId3, ra_directory:uid_of(?SYS, Name3)),
     Confs = [conf(ClusterName, UId1, Id1, PrivDir, Peers),
              conf(ClusterName, UId2, Id2, PrivDir, Peers),
              conf(ClusterName, UId3, Id3, PrivDir, Peers)],
-    %% make the start of the second server hang so the call times out
+    %% make the start of the second server hang so the call times out.
+    %% The third server is registered and stopped after the pre-check, so
+    %% its start is rejected (not_new) and the cleanup must leave it alone
     meck:new(ra_server_sup_sup, [passthrough]),
     meck:expect(ra_server_sup_sup, start_server_rpc,
                 fun(Sys, UId, #{id := {N, _}} = C) when N =:= Name2 ->
                         timer:sleep(30000),
+                        meck:passthrough([Sys, UId, C]);
+                   (Sys, UId, #{id := {N, _} = Id} = C) when N =:= Name3 ->
+                        {ok, _} = meck:passthrough([Sys, UId, C]),
+                        ok = ra:stop_server(Sys, Id),
                         meck:passthrough([Sys, UId, C]);
                    (Sys, UId, C) ->
                         meck:passthrough([Sys, UId, C])

@@ -304,8 +304,8 @@ force_delete_server(System, ServerId, UId, Timeout) ->
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
 %% `{error, {members_exist, Existing}}' if any of the members are already
-%% running, as a list of `{ServerId, UId}' pairs (`UId' is `undefined' if it
-%% could not be read). In this case nothing is
+%% registered or running, as a list of `{ServerId, UId}' pairs (`UId' is
+%% `undefined' if it could not be read). In this case nothing is
 %% started or deleted. A stale member can be removed with
 %% {@link force_delete_server/4}.
 %%
@@ -334,8 +334,8 @@ start_or_restart_cluster(System, ClusterName, Machine, ServerIds) ->
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
 %% `{error, {members_exist, Existing}}' if any of the members are already
-%% running, as a list of `{ServerId, UId}' pairs (`UId' is `undefined' if it
-%% could not be read). In this case nothing is
+%% registered or running, as a list of `{ServerId, UId}' pairs (`UId' is
+%% `undefined' if it could not be read). In this case nothing is
 %% started or deleted. A stale member can be removed with
 %% {@link force_delete_server/4}.
 %%
@@ -375,8 +375,8 @@ start_or_restart_cluster(System, ClusterName, Machine,
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
 %% `{error, {members_exist, Existing}}' if any of the members are already
-%% running, as a list of `{ServerId, UId}' pairs (`UId' is `undefined' if it
-%% could not be read). In this case nothing is
+%% registered or running, as a list of `{ServerId, UId}' pairs (`UId' is
+%% `undefined' if it could not be read). In this case nothing is
 %% started or deleted. A stale member can be removed with
 %% {@link force_delete_server/4}.
 %%
@@ -408,8 +408,8 @@ start_cluster(System, ClusterName, Machine, ServerIds)
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
 %% `{error, {members_exist, Existing}}' if any of the members are already
-%% running, as a list of `{ServerId, UId}' pairs (`UId' is `undefined' if it
-%% could not be read). In this case nothing is
+%% registered or running, as a list of `{ServerId, UId}' pairs (`UId' is
+%% `undefined' if it could not be read). In this case nothing is
 %% started or deleted. A stale member can be removed with
 %% {@link force_delete_server/4}.
 %%
@@ -448,8 +448,8 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
 %% `{error, {members_exist, Existing}}' if any of the members are already
-%% running, as a list of `{ServerId, UId}' pairs (`UId' is `undefined' if it
-%% could not be read). In this case nothing is
+%% registered or running, as a list of `{ServerId, UId}' pairs (`UId' is
+%% `undefined' if it could not be read). In this case nothing is
 %% started or deleted. A stale member can be removed with
 %% {@link force_delete_server/4}.
 %%
@@ -468,10 +468,7 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %% includes concurrent calls to `start_cluster' as well as starting, restarting
 %% or deleting the same servers while a cluster is being started. The checks
 %% made before and during startup are not atomic, so racing operations can
-%% result in servers being missed or incorrectly cleaned up. Servers that are
-%% registered but not running (for example stopped servers) are not detected
-%% by the pre-check, so do not reuse the uid of such a server in a new cluster
-%% configuration as it may be deleted if startup times out.
+%% result in servers being missed or incorrectly cleaned up.
 %% Use an external lock service or equivalent to serialise cluster operations.
 %% @end
 -spec start_cluster(atom(), [ra_server:ra_server_config()]) ->
@@ -501,16 +498,19 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
             {error, {members_exist, Existing}}
     end.
 
-%% returns the ids of any members whose server is already running on its node.
+%% returns the ids and UIds of any members whose server is already registered
+%% or running on its node, including stopped servers.
 %% The cluster name is informational only so is not considered. Unreachable
 %% nodes are ignored here as starting a server on them will fail anyway.
-%% Servers that are stopped but still registered are not detected, and another
-%% caller can start a member between this check and our own start attempt.
+%% Another caller can start a member between this check and our own start
+%% attempt.
 existing_members(System, ServerConfigs, Timeout) ->
     Check = fun (#{id := {Name, Node}}) ->
-                    try erpc:call(Node, erlang, whereis, [Name], Timeout) of
-                        undefined -> false;
-                        _Pid -> true
+                    try {erpc:call(Node, ra_directory, uid_of, [System, Name],
+                                   Timeout),
+                         erpc:call(Node, erlang, whereis, [Name], Timeout)} of
+                        {undefined, undefined} -> false;
+                        _ -> true
                     catch _:_ ->
                               false
                     end
