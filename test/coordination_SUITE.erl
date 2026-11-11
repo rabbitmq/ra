@@ -152,7 +152,14 @@ start_cluster_members_exist(Config) ->
     %% or deleting anything
     {error, {members_exist, Existing}} =
         ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    ?assertEqual(lists:sort(ServerIds), lists:sort(Existing)),
+    ?assertEqual(lists:sort(ServerIds), lists:sort([Id || {Id, _} <- Existing])),
+    [?assert(is_binary(UId)) || {_, UId} <- Existing],
+    %% a delete guarded by the wrong UId leaves the member in place
+    [Id1 | _] = ServerIds,
+    ?assertEqual({error, not_owner},
+                 erpc:call(ra_lib:ra_server_id_node(Id1), ra, force_delete_server,
+                           [?SYS, Id1, <<"not-the-uid">>, 5000])),
+    ?assertMatch({pong, _}, ra_server_proc:ping(Id1, 500)),
     %% the original members are untouched
     [?assertMatch({pong, _}, ra_server_proc:ping(N, 500)) || N <- ServerIds],
     {ok, _, _} = ra:members(hd(ServerIds)),
@@ -160,7 +167,7 @@ start_cluster_members_exist(Config) ->
     %% different cluster name is also a conflict
     {error, {members_exist, Existing2}} =
         ra:start_cluster(?SYS, other_cluster_name, Machine, ServerIds),
-    ?assertEqual(lists:sort(ServerIds), lists:sort(Existing2)),
+    ?assertEqual(lists:sort(Existing), lists:sort(Existing2)),
     [?assertMatch({pong, _}, ra_server_proc:ping(N, 500)) || N <- ServerIds],
     stop_peers(Peers),
     ok.
