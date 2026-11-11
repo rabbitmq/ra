@@ -53,13 +53,95 @@ init([#{data_dir := DataDir,
                             [SegWriterConf]},
                   shutdown => 30_000},
     WalConf = make_wal_conf(Cfg),
+    %% the registry first: a stale one left by an earlier run in this VM must
+    %% not make the migration look in a store that is not running
+    ok = snap_store_registry(Cfg),
+    ok = maybe_migrate_snapshot_store(Cfg),
+    SnapStore = snap_store_children(Cfg),
     SupFlags = #{strategy => one_for_all,
                  intensity => 5,
                  period => 5},
     WalSup = #{id => ra_log_wal_sup,
                type => supervisor,
                start => {ra_log_wal_sup, start_link, [WalConf]}},
-    {ok, {SupFlags, [PreInit, Meta] ++ LogSyncWorkers ++ [SegWriter, WalSup]}}.
+    %% the snapshot store comes first as everything that initialises a
+    %% member's snapshot state (PreInit included) may read from it
+    {ok, {SupFlags, SnapStore ++ [PreInit, Meta] ++ LogSyncWorkers ++
+              [SegWriter, WalSup]}}.
+
+%% When the snapshot store is not configured but files from an earlier run
+%% with it are there, the snapshots in them are moved back to directories
+%% before anything reads a member's snapshots, otherwise members would start
+%% without the snapshots their (truncated) logs depend on.
+maybe_migrate_snapshot_store(#{snapshot_store := _}) ->
+    ok;
+maybe_migrate_snapshot_store(#{data_dir := DataDir}) ->
+    Dir = filename:join(DataDir, "snapshot_store"),
+    case ra_log_snap_store:has_files(Dir) of
+        true ->
+            ?INFO("ra_log_sup: the snapshot store is not configured but ~ts "
+                  "has snapshot files, moving them to snapshot directories",
+                  [Dir]),
+            LiveFun = fun (UId, _Epoch) ->
+                              ra_log_snap_store:member_dir_exists(
+                                filename:join(DataDir, ra_lib:to_list(UId)))
+                      end,
+            case ra_log_snap_store:migrate_out(#{dir => Dir,
+                                                 data_dir => DataDir,
+                                                 live_fun => LiveFun}) of
+                ok ->
+                    ok;
+                {error, Reason} ->
+                    %% carrying on would start members without the snapshots
+                    %% their logs depend on
+                    ?ERROR("ra_log_sup: could not move snapshots out of the "
+                           "snapshot store: ~p", [Reason]),
+                    exit({snapshot_store_migration_failed, Reason})
+            end;
+        false ->
+            ok
+    end.
+
+%% How ra_log_snapshot finds out that a snapshot store is configured for the
+%% members in a data dir. Owned here, and not by the store process, so that it
+%% is still there while the store is restarting: members that start then must
+%% wait for it, not carry on without.
+snap_store_registry(#{snapshot_store := StoreCfg,
+                      data_dir := DataDir,
+                      name := System,
+                      names := Names}) ->
+    Name = maps:get(snap_store, Names,
+                    maps:get(snap_store, ra_system:derive_names(System))),
+    MaxSize = maps:get(max_size, StoreCfg, ?SNAPSHOT_STORE_MAX_SIZE),
+    persistent_term:put(ra_log_snap_store:registry_key(DataDir),
+                        #{name => Name, max_size => MaxSize});
+snap_store_registry(#{data_dir := DataDir}) ->
+    _ = persistent_term:erase(ra_log_snap_store:registry_key(DataDir)),
+    ok.
+
+snap_store_children(#{snapshot_store := StoreCfg,
+                      data_dir := DataDir,
+                      name := System,
+                      names := Names}) ->
+    Name = maps:get(snap_store, Names,
+                    maps:get(snap_store, ra_system:derive_names(System))),
+    MinFileBytes = maps:get(min_file_bytes, StoreCfg,
+                            ?SNAPSHOT_STORE_MIN_FILE_BYTES),
+    %% a snapshot is dead when its member's directory is gone
+    LiveFun = fun (UId, _Epoch) ->
+                      ra_log_snap_store:member_dir_exists(
+                        filename:join(DataDir, ra_lib:to_list(UId)))
+              end,
+    Conf = #{name => Name,
+             system => System,
+             dir => filename:join(DataDir, "snapshot_store"),
+             min_file_bytes => MinFileBytes,
+             live_fun => LiveFun},
+    [#{id => ra_log_snap_store,
+       start => {ra_log_snap_store, start_link, [Conf]},
+       shutdown => 30_000}];
+snap_store_children(_) ->
+    [].
 
 
 make_wal_conf(#{data_dir := DataDir,

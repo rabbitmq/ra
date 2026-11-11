@@ -25,7 +25,8 @@
                    segment_writer := atom(),
                    server_sup := atom(),
                    directory := atom(),
-                   directory_rev := atom()}.
+                   directory_rev := atom(),
+                   snap_store => atom()}.
 
 
 %% NB: keep this below 32 keys to ensure it is always a small map
@@ -58,7 +59,14 @@
                     low_priority_commands_flush_size => non_neg_integer(),
                     low_priority_commands_in_memory_size => non_neg_integer(),
                     server_recovery_strategy => undefined | registered | {module(), atom(), list()},
-                    machine_upgrade_strategy => ra_server:machine_upgrade_strategy()
+                    machine_upgrade_strategy => ra_server:machine_upgrade_strategy(),
+                    %% when present small snapshots are kept in a shared
+                    %% snapshot log instead of one directory per snapshot, see
+                    %% ra_log_snap_store. max_size is the biggest snapshot
+                    %% (including its live indexes) that goes in the log,
+                    %% min_file_bytes the size before its files are rolled
+                    snapshot_store => #{max_size => pos_integer(),
+                                        min_file_bytes => pos_integer()}
                    }.
 
 -export_type([
@@ -78,6 +86,16 @@ start_default() ->
 
 -spec default_config() -> ra_system:config().
 default_config() ->
+    %% NB: not part of the base config to keep it a small map, only present
+    %% when set
+    case application:get_env(ra, snapshot_store) of
+        {ok, #{} = SnapshotStore} ->
+            (default_config0())#{snapshot_store => SnapshotStore};
+        _ ->
+            default_config0()
+    end.
+
+default_config0() ->
     SegmentMaxEntries = application:get_env(ra, segment_max_entries,
                                             ?SEGMENT_MAX_ENTRIES),
     SegmentMaxPending = application:get_env(ra, segment_max_pending,
@@ -156,7 +174,8 @@ default_config() ->
                  segment_writer => ra_log_segment_writer,
                  server_sup => ra_server_sup_sup,
                  directory => ra_directory,
-                 directory_rev => ra_directory_reverse
+                 directory_rev => ra_directory_reverse,
+                 snap_store => ra_log_snap_store
                 }}.
 
 derive_names(SysName) when is_atom(SysName) ->
@@ -170,7 +189,8 @@ derive_names(SysName) when is_atom(SysName) ->
       segment_writer => derive(SysName, <<"segment_writer">>),
       server_sup => derive(SysName, <<"server_sup_sup">>),
       directory => derive(SysName, <<"directory">>),
-      directory_rev => derive(SysName, <<"directory_reverse">>)
+      directory_rev => derive(SysName, <<"directory_reverse">>),
+      snap_store => derive(SysName, <<"snap_store">>)
      }.
 
 -spec store(config()) -> ok.

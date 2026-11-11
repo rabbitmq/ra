@@ -120,6 +120,34 @@ the server will try to load the next available older snapshot, if available.
 Raft index and term as well as a list of member servers.
 
 
+### Optional callbacks
+
+A snapshot implementation can take over where, and how, its snapshots are
+stored by implementing some optional callbacks. When absent `ra_snapshot` uses
+one directory per snapshot, as described under "On disk layout".
+
+- `write/5`: like `write/4` but also receives the live indexes of the snapshot
+and is responsible for persisting them (`ra_snapshot` writes no `indexes`
+file). `ra_snapshot` does not create the `Location` directory before calling
+it. Used for snapshots only, not checkpoints. It returns `{ok, Bytes, durable}`
+if the snapshot and its indexes are already durable, in which case nothing more
+is done, or `{ok, Bytes, directory}` if it wrote to the `Location` directory
+(which it created) and `ra_snapshot` should write the indexes file and
+synchronise as usual.
+
+- `list/1`: the names of all the snapshots the implementation holds for a
+member, in the form `ra_snapshot:snapshot_name/2` makes. Defaults to the entries
+of the snapshots directory. Each name is passed on as a `Location` to the other
+callbacks (`validate/1`, `read_meta/1`, `recover/1` and so on) so an
+implementation that does not keep snapshots in directories has to handle
+`Location`s that do not exist.
+
+- `delete/1` deletes a snapshot (or checkpoint) given its `Location`. Defaults
+to a recursive delete of the directory.
+
+- `indexes/1` returns the live indexes of a snapshot. Defaults to reading the
+`indexes` file in the `Location` directory.
+
 ## On disk layout
 
 Snapshots, checkpoints, and recovery checkpoints are stored in separate
@@ -147,3 +175,142 @@ format: `Term_Index` in 64 bit hex encoded and zero padded format.
   `ra_snapshot` implementation)
 
 
+
+
+## The snapshot log
+
+With many Ra clusters in one system, each taking small snapshots frequently, the
+cost of the default layout is dominated by the file system rather than by the
+data: each snapshot is a new directory with two files that all need creating,
+syncing and later deleting. Measured on ext4 this was around 60KB of device
+writes and three quarters of a journal commit for every 1KB snapshot, and
+limited a node to a few hundred snapshots per second however many clusters it
+hosted.
+
+`ra_log_snap_store` keeps small snapshots in an append-only log shared by all
+the members of a system instead. A single process batches the snapshots written
+by all members into appends to one file with one `fsync` per batch. The default
+snapshot module (`ra_log_snapshot`) uses it through the optional callbacks
+above, so `ra_snapshot` and the rest of Ra do not know about it.
+
+It is off by default. It is enabled by the `snapshot_store` key of the system
+configuration, or the `snapshot_store` application environment key for the
+default system:
+
+```erlang
+#{snapshot_store => #{max_size => 16384,            %% bytes, default 16KB
+                      min_file_bytes => 67108864}}  %% default 64MB
+```
+
+A snapshot goes into the log if its encoded image plus live indexes is no
+bigger than `max_size`. Larger snapshots, all checkpoints and recovery
+checkpoints, and any snapshot that the log fails to take (e.g. the disk is
+full), are written as directories as before. A member can have snapshots in
+either, the newest wins when it starts.
+
+### How the log works
+
+- Files are `<data_dir>/snapshot_store/NNNNNNNN.snap`. Each starts with a header
+and holds records (member uid, index, term, snapshot image, live indexes) with
+a CRC each. Batches are padded to 4KB boundaries.
+- Only the latest snapshot of each member is live; a newer one supersedes it,
+nothing is deleted individually. An in memory ETS table points at the live
+record of each member. It is updated only after the batch that has the record
+has been fsynced, so an entry always refers to durable data.
+- When the records in the active file (not counting padding) reach `max(min_file_bytes, 2 * live bytes)` it is rolled
+over to a new file. The writer then retires the oldest file: it copies the
+records in it that are still live into the next batches it writes and deletes
+the file once those are durable. Space use is bounded by a small multiple of the
+live data and every byte is rewritten about once.
+- If a write or fsync fails the callers get an error (and fall back to a
+directory), nothing is published, the fsync is not retried, and a new file is
+started. The header of the new file records how much of the previous one was
+acknowledged so that anything written after that is ignored when recovering.
+- On start the files are scanned in order and the newest record of each member
+is kept. A record is dead if its member's directory is gone (any other error
+looking for it counts as alive). A record whose contents do not validate is
+skipped, the ones after it are independent; where not even the length of a record
+can be trusted the scan carries on from the next block boundary (every batch
+starts on one and every record is checked). A file with a damaged header is set aside as
+`.bad`, not deleted, unless it is the newest and tiny (a file that was being
+created when the node stopped). A file is never appended to after a restart.
+- Snapshots the scan can not reach (in a batch behind a record that could not be
+read) are found again from where the store knows them to be, and copied before
+the file goes. Only a snapshot that can not be read at all is given up on
+(`lost_snapshots`): it could not be served anyway. The file is then set aside as
+`.bad`, not deleted, and the log reports `snapshots_lost` until it is restarted.
+Read errors are retried after a delay.
+- A file is rolled when the records in it, not counting padding, reach
+`max(min_file_bytes, 2 * live bytes)`, so copying the live data of a file forward
+can never roll the next one by itself. Retiring reads in proportion to what a
+batch appends so files are retired as fast as they are made.
+- Deleting a snapshot (`release`) removes a member's entry only if it is that
+exact snapshot (index and term). The snapshot being written when a failure
+happens is deleted by `ra_snapshot`, which must not take the current one.
+- Reads (recovery, validation, sending a snapshot to a follower) go through the
+ETS table, with the whole snapshot read into memory. A snapshot that has been
+superseded since it was looked up gives `{error, superseded}`.
+- The ETS table only becomes visible once recovery of the files is complete.
+- Whether a snapshot log is configured is recorded by `ra_log_sup` (not by the
+log process) so that it is known while the log is restarting. A member that
+starts while the log is restarting waits for it (up to `snapshot_store_wait_ms`
+in the `ra` application environment, 15 s) and then fails to start, rather than
+start without a snapshot that its (truncated) log depends on. Recovering a
+snapshot while the log is not answering is an error too, not "no snapshot".
+Taking a snapshot while the log is not answering writes a directory instead.
+- `min_file_bytes` is raised to at least four blocks (16KB): with less, copying
+the live data of a file forward could make the next file roll immediately.
+
+### Metrics and health
+
+The log registers counters with `ra_counters`, like the WAL does, under its
+process name (`ra_counters:overview(Name)`, labelled with the system and module
+so they are exported with the other Ra metrics). `ra:overview(System)` also
+returns `snapshot_store` with the same values and the health when it is
+configured.
+
+| counter | |
+|---|---|
+| `puts` | snapshots appended |
+| `batches` | batches written, one fsync each; `puts / batches` is how well it batches |
+| `bytes_written` | bytes appended, including records copied forward and padding |
+| `copies` | records copied forward when retiring files; `copies / puts` is the extra work of reclaiming space |
+| `rolls`, `retired_files` | files rolled over and deleted |
+| `retire_blocked` | files kept because snapshots in them could not be copied out |
+| `errors` | batches that failed to be written, or files that could not be created |
+| `stale_puts` | snapshots refused as older than the member's current one |
+| `corrupt_records` | invalid records skipped when recovering or retiring |
+| `fsync_time_us` | time spent writing and syncing; divide by `batches` for the average |
+| `live_bytes`, `entries`, `files` | gauges: size of the live snapshots, members with one, files on disk |
+| `lost_snapshots` | snapshots given up on because they could not be read when retiring a file |
+| `recovery_time_ms` | gauge: how long recovering the files took at start |
+| `degraded` | gauge: 1 if the log is unhealthy |
+
+`ra_log_snap_store:status/1` says why it is unhealthy, one or more of:
+`no_active_file` (it could not create a file after a failure so puts fail, and
+members fall back to directories), `write_errors` (the last batch could not be
+written), `retire_read_errors` (files could not be read to retire them, it is
+retrying), `files_blocked` (files are kept because snapshots in them could not
+be copied out, this lasts until restart and needs a look at the disk),
+`snapshots_lost` (a snapshot could not be read when retiring a file and was given
+up on, the file is kept as `.bad`; lasts until restart, the counter
+`lost_snapshots` says how many). Changes in health are logged. Alert on
+`degraded`.
+
+### Turning it off
+
+Snapshots that exist only in the log would be invisible without it while their
+members' logs are already truncated. So when a system starts without
+`snapshot_store` and snapshot log files from an earlier run exist, the live
+snapshots in them are first written back as ordinary snapshot directories (and
+synced) and then the log files are removed. Each snapshot is written to a
+staging directory in the member's directory and renamed into place, so an
+interrupted move never leaves a partial snapshot where the member looks for
+one, and it can safely be run again. A snapshot directory that is already there
+only counts if it validates. A snapshot in the log that is itself damaged is
+reported and skipped; any other failure leaves the log in place and startup
+fails.
+
+Older versions of Ra do not know about the log. To downgrade, disable the
+feature, restart the system so that its snapshots are moved out, then
+downgrade.

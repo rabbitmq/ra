@@ -21,6 +21,7 @@
          begin_read/2,
          read_chunk/3,
          delete/2,
+         delete/3,
 
          init/7,
          init/8,
@@ -54,6 +55,10 @@
          take_extra_checkpoints/1,
 
          make_snapshot_dir/3,
+         snapshot_name/2,
+         parse_snapshot_name/1,
+         delete_effect/3,
+         delete_all/1,
          write_indexes/2,
          indexes/1,
 
@@ -128,7 +133,11 @@
 -export_type([state/0]).
 
 -optional_callbacks([context/0,
-                     get_size/1]).
+                     get_size/1,
+                     write/5,
+                     list/1,
+                     delete/1,
+                     indexes/1]).
 
 %% Side effect function
 %% Turn the current state into immutable reference.
@@ -147,6 +156,42 @@
     ok |
     {ok, Bytes :: non_neg_integer()} |
     {error, file_err() | term()}.
+
+%% Optional. A snapshot module can take over where, and how, a snapshot is
+%% persisted. Like write/4 but also receives the live indexes of the snapshot
+%% (computed by ra_snapshot) and is responsible for persisting them, ra_snapshot
+%% will not write an indexes file. ra_snapshot also does not create `Location'
+%% before calling this, the module creates it if it uses it. Only used for
+%% snapshots (not checkpoints). Runs in a separate process.
+%% The result says what is left to do:
+%%   `durable': the snapshot and its indexes are durable, nothing more is done
+%%   `directory': the module wrote the snapshot to the `Location' directory
+%%   (which it created), ra_snapshot writes the indexes file and synchronises
+%%   as it would after write/4.
+-callback write(Location :: file:filename_all(),
+                Meta :: meta(),
+                Ref :: term(),
+                Indexes :: ra_seq:state(),
+                Sync :: boolean()) ->
+    {ok, Bytes :: non_neg_integer(), durable | directory} |
+    {error, file_err() | term()}.
+
+%% Optional. The names (relative to `SnapshotsDir') of the snapshots the
+%% module holds for a member, in the form made by snapshot_name/2. Defaults to
+%% the entries of the directory. Lets a module report snapshots that are not
+%% stored as directories. Each name is a candidate `Location' for the other
+%% callbacks (validate/1, read_meta/1, recover/1 etc).
+-callback list(SnapshotsDir :: file:filename_all()) ->
+    [file:filename()].
+
+%% Optional. Deletes a snapshot (or checkpoint). Defaults to a recursive
+%% delete of the `Location' directory.
+-callback delete(Location :: file:filename_all()) -> ok.
+
+%% Optional. The live indexes of a snapshot. Defaults to reading the indexes
+%% file in the `Location' directory.
+-callback indexes(Location :: file:filename_all()) ->
+    {ok, ra_seq:state()} | {error, term()}.
 
 %% Synchronizes the snapshot to disk.
 -callback sync(Location :: file:filename_all()) ->
@@ -264,12 +309,12 @@ find_snapshots(#?MODULE{uid = UId,
                         machine = Machine,
                         snapshot_directory = SnapshotsDir} = State) ->
     true = ra_lib:is_dir(SnapshotsDir),
-    {ok, Snaps0} = prim_file:list_dir(SnapshotsDir),
+    Snaps0 = list_snapshots(Module, SnapshotsDir),
     Snaps = lists:reverse(lists:sort(Snaps0)),
     %% /snapshots/term_index/
     case pick_first_valid(UId, Module, SnapshotsDir, Snaps) of
         undefined ->
-            ok = delete_snapshots(SnapshotsDir, Snaps),
+            ok = delete_snapshots(Module, SnapshotsDir, Snaps),
             %% initialise snapshots table even if no snapshots have been taken
             %% this ensure these is an entry when the WAL queries it
             ok = ra_log_snapshot_state:insert(?ETSTBL, UId, -1, 0, []),
@@ -289,7 +334,7 @@ find_snapshots(#?MODULE{uid = UId,
                                error:undef ->
                                    undefined
                            end,
-            Indexes = case indexes(Current) of
+            Indexes = case read_indexes(Module, Current) of
                           {ok, Idxs} ->
                               Idxs;
                           {error, Err} ->
@@ -306,7 +351,8 @@ find_snapshots(#?MODULE{uid = UId,
             ok = ra_log_snapshot_state:insert(?ETSTBL, UId, Idx, SmallestLiveIdx,
                                               Indexes),
 
-            ok = delete_snapshots(SnapshotsDir, lists:delete(Current0, Snaps)),
+            ok = delete_snapshots(Module, SnapshotsDir,
+                                  lists:delete(Current0, Snaps)),
             %% delete old snapshots if any
             State#?MODULE{current = {Idx, Term},
                           snapshot_size = SnapshotSize}
@@ -322,7 +368,7 @@ recover_indexes(UId, Module, Machine, SnapDir, Err) ->
                        Machine, MacVer),
             Idxs = ra_machine:live_indexes(
                      MacMod, MacState),
-            ok = write_indexes(SnapDir, Idxs),
+            ok = maybe_write_indexes(SnapDir, Idxs),
             ?INFO("ra_snapshot: ~ts: indexes file recovered "
                   "~b live indexes recovered from snapshot",
                   [UId, ra_seq:length(Idxs)]),
@@ -335,10 +381,46 @@ recover_indexes(UId, Module, Machine, SnapDir, Err) ->
             []
     end.
 
-delete_snapshots(Dir, Snaps) ->
-    Old = [filename:join(Dir, O) || O <- Snaps],
-    lists:foreach(fun ra_lib:recursive_delete/1, Old),
+delete_snapshots(Module, Dir, Snaps) ->
+    lists:foreach(fun (O) -> delete_location(Module, filename:join(Dir, O)) end,
+                  Snaps),
     ok.
+
+list_snapshots(Module, Dir) ->
+    case exports(Module, list, 1) of
+        true ->
+            Module:list(Dir);
+        false ->
+            {ok, Snaps} = prim_file:list_dir(Dir),
+            Snaps
+    end.
+
+delete_location(Module, Location) ->
+    case exports(Module, delete, 1) of
+        true ->
+            Module:delete(Location);
+        false ->
+            ra_lib:recursive_delete(Location)
+    end.
+
+read_indexes(Module, Location) ->
+    case exports(Module, indexes, 1) of
+        true ->
+            Module:indexes(Location);
+        false ->
+            indexes(Location)
+    end.
+
+%% the indexes file only exists when the snapshot is a directory
+maybe_write_indexes(Dir, Indexes) ->
+    case ra_lib:is_dir(Dir) of
+        true -> write_indexes(Dir, Indexes);
+        false -> ok
+    end.
+
+exports(Module, Fun, Arity) ->
+    _ = code:ensure_loaded(Module),
+    erlang:function_exported(Module, Fun, Arity).
 
 pick_first_valid(_, _, _, []) ->
     undefined;
@@ -578,52 +660,86 @@ begin_snapshot(#{index := Idx,
     %% write the snapshot in a separate process
     Self = self(),
     IdxTerm = {Idx, Term},
-    BgWorkFun = fun () ->
-                        SnapDir = make_snapshot_dir(Dir, Idx, Term),
-                        StartTime = erlang:monotonic_time(),
-                        ok = ra_lib:make_dir(SnapDir),
-                        %% Write without fsync. For snapshots, the sync is
-                        %% batched through the per-system ra_log_sync process
-                        %% to avoid N parallel fsyncs saturating the disk.
-                        SnapshotSize = case Mod:write(SnapDir, Meta, Ref, false) of
-                                           ok ->
-                                               undefined;
-                                           {ok, BytesWritten} ->
-                                               counters_add(Counter, CounterIdx,
-                                                            BytesWritten),
-                                               BytesWritten
-                                       end,
+    BgWorkFun =
+        fun () ->
+                SnapDir = make_snapshot_dir(Dir, Idx, Term),
+                StartTime = erlang:monotonic_time(),
+                %% a module can take over persisting snapshots (not
+                %% checkpoints), see the optional write/5 callback
+                ModOwnsWrite = SnapKind == snapshot andalso
+                    exports(Mod, write, 5),
+                %% if the Ref returned by ra_snapshot:prepare/2 is
+                %% the same as the mac state then indexes can be
+                %% calculated here
+                {SnapshotSize, LiveIndexes, Durable} =
+                    case ModOwnsWrite of
+                        true ->
+                            LI0 = case PostPrepareEqualsMacState of
+                                      true ->
+                                          ra_machine:live_indexes(MacMod, Ref);
+                                      false ->
+                                          LiveIndexes0
+                                  end,
+                            case Mod:write(SnapDir, Meta, Ref, LI0, false) of
+                                {ok, Bytes, durable} ->
+                                    counters_add(Counter, CounterIdx, Bytes),
+                                    {Bytes, LI0, true};
+                                {ok, Bytes, directory} ->
+                                    counters_add(Counter, CounterIdx, Bytes),
+                                    LI0 == [] orelse
+                                        (ok = write_indexes(SnapDir, LI0)),
+                                    {Bytes, LI0, false}
+                            end;
+                        false ->
+                            ok = ra_lib:make_dir(SnapDir),
+                            %% Write without fsync. For snapshots, the sync is
+                            %% batched through the per-system ra_log_sync
+                            %% process to avoid N parallel fsyncs saturating
+                            %% the disk.
+                            Size = case Mod:write(SnapDir, Meta, Ref, false) of
+                                       ok ->
+                                           undefined;
+                                       {ok, BytesWritten} ->
+                                           counters_add(Counter, CounterIdx,
+                                                        BytesWritten),
+                                           BytesWritten
+                                   end,
+                            LI1 = case PostPrepareEqualsMacState of
+                                      true ->
+                                          case ra_machine:live_indexes(MacMod, Ref) of
+                                              [] ->
+                                                  [];
+                                              LI ->
+                                                  ok = write_indexes(SnapDir, LI),
+                                                  LI
+                                          end;
+                                      false ->
+                                          %% the machine state was not what
+                                          %% was written so the indexes have
+                                          %% been calculated up front
+                                          LiveIndexes0 == [] orelse
+                                              (ok = write_indexes(SnapDir,
+                                                                  LiveIndexes0)),
+                                          LiveIndexes0
+                                  end,
+                            {Size, LI1, false}
+                    end,
 
-                        %% if the Ref returned by ra_snapshot:prepare/2 is
-                        %% the same as the mac state then indexes can be
-                        %% calculated here
-                        LiveIndexes =
-                            case PostPrepareEqualsMacState of
-                                true ->
-                                    case ra_machine:live_indexes(MacMod, Ref) of
-                                        [] ->
-                                            [];
-                                        LI ->
-                                            ok = write_indexes(SnapDir, LI),
-                                            LI
-                                    end;
-                                false ->
-                                    LiveIndexes0
-                            end,
+                %% Snapshots must be fsync'd. Checkpoints skip fsync
+                %% and are synced later when promoted to snapshots.
+                ok = case Durable of
+                         true -> ok;
+                         false -> maybe_sync(SnapKind, SyncServer, Mod, SnapDir)
+                     end,
 
-                        %% Snapshots must be fsync'd. Checkpoints skip fsync
-                        %% and are synced later when promoted to snapshots.
-                        ok = maybe_sync(SnapKind, SyncServer,
-                                        Mod, SnapDir),
-
-                        EndTime = erlang:monotonic_time(),
-                        Duration = erlang:convert_time_unit(EndTime - StartTime,
-                                                            native, millisecond),
-                        Self ! {ra_log_event,
-                                {snapshot_written, IdxTerm,
-                                 LiveIndexes, SnapKind, SnapshotSize, Duration}},
-                        ok
-                end,
+                EndTime = erlang:monotonic_time(),
+                Duration = erlang:convert_time_unit(EndTime - StartTime,
+                                                    native, millisecond),
+                Self ! {ra_log_event,
+                        {snapshot_written, IdxTerm,
+                         LiveIndexes, SnapKind, SnapshotSize, Duration}},
+                ok
+        end,
 
     %% record snapshot in progress
     %% emit an effect that monitors the current snapshot attempt
@@ -657,7 +773,7 @@ promote_checkpoint(PromotionIdx,
                           ok = ra_file:rename(Checkpoint, Snapshot),
                           _ = ra_lib:sync_dir(CheckpointDir),
                           _ = ra_lib:sync_dir(SnapDir),
-                          Indexes = case indexes(Snapshot) of
+                          Indexes = case read_indexes(Mod, Snapshot) of
                                         {ok, Idxs} ->
                                             Idxs;
                                         _ ->
@@ -781,7 +897,7 @@ complete_accept(Chunk, Num, Machine,
                    [Current, PendIdxTerm]
            end,
     Eff = {bg_work,
-           fun() -> [delete(Dir, Del) || Del <- Dels] end,
+           fun() -> [delete(Mod, Dir, Del) || Del <- Dels] end,
            fun (_) -> ok end},
     State = State0#?MODULE{accepting = undefined,
                            %% reset any pending snapshot writes
@@ -804,6 +920,9 @@ complete_accept(Chunk, Num, Machine,
     AcceptMarker = filename:join(SnapDir, <<"accepting">>),
     _ = prim_file:delete(AcceptMarker),
     _ = ra_lib:sync_dir(SnapDir),
+    %% the old snapshot is deleted after this, make sure the entry of the new
+    %% one is durable first
+    _ = ra_lib:sync_dir(Dir),
     %% assert accepting marker is no longer there
     ?assertNot(filelib:is_file(AcceptMarker)),
     SmallestIdx = case ra_seq:first(LiveIndexes) of
@@ -855,7 +974,8 @@ context(#?MODULE{module = Mod}, Node) ->
 -spec handle_error({ra:index(), ra_term()}, Error :: term(), state()) ->
     state().
 handle_error(IDX_TERM = IdxTerm, _Error,
-            #?MODULE{snapshot_directory = SnapshotDir,
+            #?MODULE{module = Mod,
+                     snapshot_directory = SnapshotDir,
                      checkpoint_directory = CheckpointDir,
                      pending = {IDX_TERM, SnapKind}} = State) ->
     %% delete the pending snapshot/checkpoint directory
@@ -863,18 +983,36 @@ handle_error(IDX_TERM = IdxTerm, _Error,
               snapshot -> SnapshotDir;
               checkpoint -> CheckpointDir
           end,
-    ok = delete(Dir, IdxTerm),
+    ok = delete(Mod, Dir, IdxTerm),
     State#?MODULE{pending = undefined};
 handle_error(_IdxTerm, _Error, #?MODULE{} = State) ->
     %% ignore if not referring to the current pending, if any
     State.
 
-delete(_, undefined) ->
+delete(Dir, IdxTerm) ->
+    delete(undefined, Dir, IdxTerm).
+
+delete(_, _, undefined) ->
     ok;
-delete(Dir, {Idx, Term}) ->
+delete(Mod, Dir, {Idx, Term}) ->
     SnapDir = make_snapshot_dir(Dir, Idx, Term),
-    ok = ra_lib:recursive_delete(SnapDir),
+    ok = case Mod of
+             undefined -> ra_lib:recursive_delete(SnapDir);
+             _ -> delete_location(Mod, SnapDir)
+         end,
     ok.
+
+%% @doc the effect that deletes a snapshot or checkpoint in the background
+-spec delete_effect(state(), kind(), ra_idxterm()) ->
+    {delete_snapshot, module(), file:filename_all(), ra_idxterm()}.
+delete_effect(#?MODULE{module = Mod} = State, Kind, IdxTerm) ->
+    {delete_snapshot, Mod, directory(State, Kind), IdxTerm}.
+
+%% @doc deletes every snapshot the module holds for the member, e.g. when the
+%% member is deleted.
+-spec delete_all(state()) -> ok.
+delete_all(#?MODULE{module = Mod, snapshot_directory = Dir}) ->
+    delete_snapshots(Mod, Dir, list_snapshots(Mod, Dir)).
 
 -spec begin_read(State :: state(), Context :: map()) ->
     {ok, Meta :: meta(), ReadState} |
@@ -1078,9 +1216,28 @@ find_checkpoint_to_delete(_, _) ->
     undefined.
 
 make_snapshot_dir(Dir, Index, Term) ->
+    filename:join(Dir, snapshot_name(Index, Term)).
+
+%% @doc the name of the snapshot (or checkpoint) with the given index and term
+%% within its parent directory
+-spec snapshot_name(ra_index(), ra_term()) -> binary().
+snapshot_name(Index, Term) ->
     I = ra_lib:zpad_hex(Index),
     T = ra_lib:zpad_hex(Term),
-    filename:join(Dir, <<T/binary, "_", I/binary>>).
+    <<T/binary, "_", I/binary>>.
+
+-spec parse_snapshot_name(file:filename_all()) ->
+    {ok, ra_idxterm()} | error.
+parse_snapshot_name(Name) ->
+    try binary:split(iolist_to_binary(Name), <<"_">>) of
+        [T, I] ->
+            {ok, {binary_to_integer(I, 16), binary_to_integer(T, 16)}};
+        _ ->
+            error
+    catch
+        _:_ ->
+            error
+    end.
 
 counters_add(undefined, _, _) ->
     ok;

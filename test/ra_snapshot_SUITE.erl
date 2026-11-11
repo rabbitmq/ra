@@ -60,7 +60,9 @@ all_tests() ->
      recovery_checkpoint_write_and_recover,
      recovery_checkpoint_deleted_when_snapshot_overtakes,
      recovery_checkpoint_corrupt_fallback,
-     checkpoint_complete_does_not_clobber_pending_snapshot
+     checkpoint_complete_does_not_clobber_pending_snapshot,
+     indexes_written_when_prepare_returns_other_than_state,
+     accept_syncs_the_snapshots_directory
     ].
 
 groups() ->
@@ -886,6 +888,65 @@ checkpoint_complete_does_not_clobber_pending_snapshot(Config) ->
     undefined = ra_snapshot:pending(State6),
     {55, 2} = ra_snapshot:current(State6),
     55 = ra_snapshot:last_index_for(UId),
+    ok.
+
+%% when prepare/2 returns something other than the machine state the live
+%% indexes are calculated before the write and must still be persisted
+indexes_written_when_prepare_returns_other_than_state(Config) ->
+    UId = ?config(uid, Config),
+    SnapDir = ?config(snap_dir, Config),
+    State0 = ra_snapshot:init(UId, ra_test_snapshot_mod,
+                              SnapDir,
+                              ?config(checkpoint_dir, Config),
+                              ?config(recovery_checkpoint_dir, Config),
+                              undefined, undefined,
+                              ?config(max_checkpoints, Config)),
+    MacMod = indexes_machine,
+    meck:new(MacMod, [non_strict]),
+    meck:expect(MacMod, version, fun () -> 1 end),
+    meck:expect(MacMod, live_indexes, fun (_) -> [3, 5, 9] end),
+    try
+        Meta = meta(55, 2, [node()]),
+        {State1, [{bg_work, Fun, _}]} =
+            ra_snapshot:begin_snapshot(Meta, MacMod, the_state, snapshot,
+                                       State0),
+        Fun(),
+        receive
+            {ra_log_event, {snapshot_written, {55, 2} = IdxTerm, Indexes,
+                            snapshot, Size, _}} ->
+                ?assertEqual(ra_seq:from_list([3, 5, 9]), Indexes),
+                State = ra_snapshot:complete_snapshot(IdxTerm, snapshot,
+                                                      Indexes, Size, State1),
+                SnapshotDir = ra_snapshot:current_snapshot_dir(State),
+                ?assertEqual({ok, ra_seq:from_list([3, 5, 9])},
+                             ra_snapshot:indexes(SnapshotDir))
+        after 5000 ->
+                  ct:fail(snapshot_event_timeout)
+        end
+    after
+        meck:unload(MacMod)
+    end,
+    ok.
+
+accept_syncs_the_snapshots_directory(Config) ->
+    %% the directory holding the new snapshot is synced as well as the
+    %% snapshot's, before the old snapshot is deleted
+    State0 = init_state(Config),
+    Meta = meta(55, 2, [node()]),
+    MacBin = term_to_binary(crypto:strong_rand_bytes(500)),
+    MetaBin = term_to_binary(Meta),
+    Crc = erlang:crc32([<<(size(MetaBin)):32/unsigned>>, MetaBin, MacBin]),
+    {ok, S1} = ra_snapshot:begin_accept(Meta, State0),
+    Machine = {machine, ?MODULE, #{}},
+    meck:new(ra_lib, [passthrough]),
+    try
+        {_, _, _, _} = ra_snapshot:complete_accept(<<Crc:32/integer,
+                                                     MacBin/binary>>,
+                                                   1, Machine, S1),
+        ?assert(meck:called(ra_lib, sync_dir, [?config(snap_dir, Config)]))
+    after
+        meck:unload(ra_lib)
+    end,
     ok.
 
 init_state(Config) ->
