@@ -1770,7 +1770,7 @@ snapshot_written_after_installation(Config) ->
     {ok, Log3, _} = ra_log:install_snapshot({15, 2}, ?MODULE, LiveIndexes,
                                             ra_log:set_snapshot_state(SnapState, Log2)),
     %% write some more to create another segment
-    Log4 = write_and_roll(16, 20, 2, Log3),
+    Log4 = assert_last_written(19, write_and_roll(16, 20, 2, Log3)),
     {Log5, Efx4} = ra_log:handle_event(DelayedSnapWritten, Log4),
     {19, _} = ra_log:last_index_term(Log5),
     {19, _} = ra_log:last_written(Log5),
@@ -1823,7 +1823,9 @@ oldcheckpoints_deleted_after_snapshot_install(Config) ->
                                                 ra_log:set_snapshot_state(SnapState, Log3)),
     ?assert(lists:any(fun (E) -> element(1, E) == delete_snapshot end, Effs4)),
     %% write some more to create another segment
-    Log5 = write_and_roll(16, 20, 2, Log4),
+    %% write_and_roll/4 only waits for 200ms of mailbox idleness so on a slow
+    %% WAL fsync the written event may not have been processed yet
+    Log5 = assert_last_written(19, write_and_roll(16, 20, 2, Log4)),
     {19, _} = ra_log:last_index_term(Log5),
     {19, _} = ra_log:last_written(Log5),
 
@@ -2717,7 +2719,7 @@ dual_flush_does_not_delete_needed_segments(Config) ->
 
     %% Write 256 entries (fills 2 full segments of 128) and flush to segments.
     Log0 = ra_log_init(Config),
-    Log1 = write_and_roll(1, 257, 1, Log0),
+    Log1 = assert_last_written(256, write_and_roll(1, 257, 1, Log0)),
     {256, 1} = ra_log:last_written(Log1),
 
     %% Write another 256 entries (indexes 257-512).
@@ -2906,6 +2908,11 @@ deliver_all_log_events(Log0, Timeout) ->
 
 assert_log_events(Log0, AssertPred) ->
     assert_log_events(Log0, AssertPred, 2000).
+
+assert_last_written(Idx, Log) ->
+    assert_log_events(Log, fun (L) ->
+                                   element(1, ra_log:last_written(L)) == Idx
+                           end).
 
 assert_log_events(Log0, AssertPred, Timeout) ->
     case AssertPred(Log0) of
