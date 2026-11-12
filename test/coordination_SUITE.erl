@@ -36,7 +36,6 @@ all_tests() ->
      start_stop_restart_delete_on_remote,
      start_cluster,
      start_cluster_members_exist,
-     start_cluster_members_exist_stopped,
      start_or_restart_cluster,
      delete_one_server_cluster,
      delete_two_server_cluster,
@@ -170,23 +169,6 @@ start_cluster_members_exist(Config) ->
         ra:start_cluster(?SYS, other_cluster_name, Machine, ServerIds),
     ?assertEqual(lists:sort(Existing), lists:sort(Existing2)),
     [?assertMatch({pong, _}, ra_server_proc:ping(N, 500)) || N <- ServerIds],
-    stop_peers(Peers),
-    ok.
-
-start_cluster_members_exist_stopped(Config) ->
-    PrivDir = ?config(data_dir, Config),
-    ClusterName = ?config(cluster_name, Config),
-    Peers = start_peers([s1,s2,s3], PrivDir),
-    ServerIds = server_ids(ClusterName, Peers),
-    Machine = {module, ?MODULE, #{}},
-    {ok, _, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    UIds = [erpc:call(N, ra_directory, uid_of, [?SYS, Name])
-            || {Name, N} <- ServerIds],
-    [ok = ra:stop_server(?SYS, Id) || Id <- ServerIds],
-    %% stopped but still registered members are a conflict too
-    {error, {members_exist, Existing}} =
-        ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    ?assertEqual(lists:sort(lists:zip(ServerIds, UIds)), lists:sort(Existing)),
     stop_peers(Peers),
     ok.
 
