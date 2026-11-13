@@ -9,7 +9,7 @@
 %% sequences are ordered high -> low but ranges are ordered
 %% {low, high} so a typical sequence could look like
 %% [55, {20, 52}, 3]
--type state() :: [ra:index() | ra:range()].
+-type state() :: [ra:index() | {ra:index(), ra:index()}].
 
 -record(i, {seq :: state()}).
 -opaque iter() :: #i{}.
@@ -42,12 +42,14 @@
 
 -spec append(ra:index(), state()) -> state().
 append(Idx, [IdxN1, IdxN2 | Rem])
-  when Idx == IdxN1 + 1 andalso
+  when is_list(Rem) andalso
+       Idx == IdxN1 + 1 andalso
        Idx == IdxN2 + 2 ->
     %% we can compact into a range
     [{IdxN2, Idx} | Rem];
 append(Idx, [{IdxN, IdxN1} | Rem])
-  when Idx == IdxN1 + 1 ->
+  when is_list(Rem) andalso
+       Idx == IdxN1 + 1 ->
     %% Extend the raage
     [{IdxN, Idx} | Rem];
 append(Idx, [])
@@ -55,6 +57,7 @@ append(Idx, [])
     [Idx];
 append(Idx, [Prev | _] = Seq)
   when is_integer(Idx) andalso
+       is_list(Seq) andalso
        ((is_tuple(Prev) andalso
          Idx > element(2, Prev)) orelse
         Idx > Prev) ->

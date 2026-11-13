@@ -6,19 +6,11 @@
 
 -compile(nowarn_export_all).
 -compile(export_all).
--dialyzer({nowarn_function, [follower_handles_append_entries_rpc/1, leader_consistent_query_delay/1, leader_consistent_query/1]}).
 
 -include("src/ra.hrl").
 -include("src/ra_server.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% TODO: make so this is not needed
--dialyzer({nowarn_function,
-           [init_test/1,
-            higher_term_detected/1,
-            follower_aer_term_mismatch_snapshot/1,
-            follower_aer_term_mismatch_at_snapshot/1,
-            setup_log/0]}).
 
 all() ->
     [

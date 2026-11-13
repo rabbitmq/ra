@@ -2241,6 +2241,7 @@ follower_catchup_cond(_, _Msg, State) ->
     {false, State}.
 
 wal_down_condition(_Msg, #{log := Log} = State) ->
+    _ = _Msg,
     {ra_log:can_write(Log), State}.
 
 transfer_leadership_condition(#append_entries_rpc{term = Term},
@@ -2716,6 +2717,7 @@ terminate(#{cfg := #cfg{log_id = LogId}} = State, Reason) ->
 %% @doc Maybe write a recovery checkpoint during shutdown.
 %% Only writes if min_recovery_checkpoint_interval is configured (> 0) and
 %% enough entries have been applied since the last snapshot/checkpoint.
+-spec maybe_write_recovery_checkpoint(ra_server_state()) -> ra_server_state().
 maybe_write_recovery_checkpoint(#{cfg := #cfg{log_id = LogId,
                                               machine = Machine},
                                   log := Log0,
@@ -2730,7 +2732,9 @@ maybe_write_recovery_checkpoint(#{cfg := #cfg{log_id = LogId,
             State;
         _ ->
             HighestIdx = ra_snapshot:highest_idx(SnapState),
-            case LastApplied - HighestIdx >= MinInterval of
+            case is_integer(LastApplied) andalso
+                 LastApplied >= 0 andalso
+                 LastApplied - HighestIdx >= MinInterval of
                 true ->
                     %% Fetch the term for the LastApplied index
                     {Term, Log} = ra_log:fetch_term(LastApplied, Log0),

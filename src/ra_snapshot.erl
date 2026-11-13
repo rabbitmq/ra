@@ -1117,7 +1117,14 @@ maybe_sync(snapshot, SyncServer, Mod, Dir) ->
 %% @doc Write a recovery checkpoint synchronously during shutdown.
 %% Recovery checkpoints store the machine state to skip log replay on restart.
 %% They don't include live indexes - those are recovered from the last snapshot/checkpoint.
--spec write_recovery_checkpoint(meta(), term(), module(), state()) ->
+-type recovery_checkpoint_meta() ::
+    #{index := ra:index(),
+      term := ra:term(),
+      cluster => map(),
+      machine_version => ra_machine:version(),
+      atom() => term()}.
+
+-spec write_recovery_checkpoint(recovery_checkpoint_meta(), term(), module(), state()) ->
     {ok, state()} | {error, term()}.
 write_recovery_checkpoint(#{index := Idx, term := Term} = Meta, MacState,
                           SnapModule,

@@ -44,15 +44,15 @@ fetch(Name) ->
 delete(Name) ->
     seshat:delete(ra, Name).
 
--spec overview() -> #{name() => #{atom() => non_neg_integer()}}.
+-spec overview() -> #{name() => #{atom() => integer()}}.
 overview() ->
     seshat:counters(ra).
 
--spec overview(name()) -> #{atom() => non_neg_integer()} | undefined.
+-spec overview(name()) -> #{atom() => integer()} | undefined.
 overview(Name) ->
     seshat:counters(ra, Name).
 
 -spec counters(name(), [atom()]) ->
-    #{atom() => non_neg_integer()} | undefined.
+    #{atom() => integer()} | undefined.
 counters(Name, Fields) ->
     seshat:counters(ra, Name, Fields).

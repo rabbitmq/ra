@@ -8,4 +8,6 @@
               {applications,[kernel,stdlib,sasl,crypto,aten,gen_batch_server,
                              seshat]},
               {mod,{ra_app,[]}},
-              {env,[]}]}.
+              {env,[]},
+              {files,["src","include","rebar.config","rebar.lock",
+                      "README.md","LICENSE*","ra_*.pplt"]}]}.

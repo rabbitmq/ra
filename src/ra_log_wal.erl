@@ -266,8 +266,8 @@ fill_ratio(WalName) ->
 
 -spec start_link(Config :: wal_conf()) ->
     {ok, pid()} |
-    {error, {already_started, pid()}} |
-    {error, wal_checksum_validation_failure}.
+    ignore |
+    {error, {already_started, pid()} | wal_checksum_validation_failure | term()}.
 start_link(#{dir := _,
              system := _,
              names := #{wal := Name}} = Config)
@@ -287,7 +287,6 @@ start_link(#{dir := _,
                {max_batch_size, WalMaxBatchSize}
                | Opts0],
 
-    % eqwalizer:ignore
     gen_batch_server:start_link({local, Name}, ?MODULE, Config, Options).
 
 %%% Callbacks
@@ -771,7 +770,6 @@ prepare_file(File, Modes) ->
     end.
 
 make_tmp(File) when is_list(File) ->
-    % eqwalizer:ignore
     Tmp = filename:rootname(File) ++ ".tmp",
     ok = ra_lib:write_file(Tmp, <<?MAGIC, ?CURRENT_VERSION:8/unsigned>>),
     Tmp.
@@ -844,7 +842,7 @@ complete_batch_writer(Pid, #batch_writer{smallest_live_idx = SmallestIdx,
                                          old = undefined}, Ranges) ->
     Seq = ra_seq:floor(SmallestIdx, Seq0),
     Pid ! {ra_log_event, {written, Term, Seq}},
-    update_ranges(Ranges, UId, MtTid, SmallestIdx, Seq);
+    update_ranges(Ranges, UId, MtTid, Seq);
 complete_batch_writer(Pid, #batch_writer{old = #batch_writer{} = OldBw} = Bw,
                       Ranges0) ->
     Ranges = complete_batch_writer(Pid, OldBw, Ranges0),
@@ -948,7 +946,7 @@ recover_records(#conf{names = Names} = Conf, Fd,
                     State1 = handle_trunc(Conf, Trunc == 1, UId, Idx, State0),
                     case recover_entry(Names, UId,
                                        {Idx, Term, binary_to_term(EntryData)},
-                                       SmallestIdx, State1) of
+                                       State1) of
                         {ok, State} ->
                             recover_records(Conf, Fd, Rest, Cache, State);
                         {retry, State} ->
@@ -987,7 +985,7 @@ recover_records(#conf{names = Names} = Conf, Fd,
                     State1 = handle_trunc(Conf, Trunc == 1, UId, Idx, State0),
                     case recover_entry(Names, UId,
                                        {Idx, Term, binary_to_term(EntryData)},
-                                       SmallestIdx, State1) of
+                                       State1) of
                         {ok, State} ->
                             recover_records(Conf, Fd, Rest, Cache, State);
                         {retry, State} ->
@@ -1107,7 +1105,7 @@ should_roll_wal(#state{conf = #conf{max_entries = MaxEntries},
 smallest_live_index(#conf{ra_log_snapshot_state_tid = Tid}, ServerUId) ->
     ra_log_snapshot_state:smallest(Tid, ServerUId).
 
-update_ranges(Ranges, UId, MtTid = MT_TID, _SmallestIdx, AddSeq) ->
+update_ranges(Ranges, UId, MtTid = MT_TID, AddSeq) ->
     case Ranges of
         #{UId := [{MT_TID, Seq0} | Seqs]} ->
             %% limit the old range by the add end start as in some resend
@@ -1121,7 +1119,7 @@ update_ranges(Ranges, UId, MtTid = MT_TID, _SmallestIdx, AddSeq) ->
             Ranges#{UId => [{MtTid, AddSeq}]}
     end.
 
-recover_entry(Names, UId, {Idx, _, _} = Entry, SmallestIdx,
+recover_entry(Names, UId, {Idx, _, _} = Entry,
               #recovery{mode = initial,
                         ranges = Ranges0,
                         writers = Writers,
@@ -1144,7 +1142,7 @@ recover_entry(Names, UId, {Idx, _, _} = Entry, SmallestIdx,
     case ra_mt:insert_sparse(Entry, PrevIdx, Mt0) of
         {ok, Mt1} ->
             Ranges = update_ranges(Ranges0, UId, ra_mt:tid(Mt1),
-                                   SmallestIdx, [Idx]),
+                                   [Idx]),
             {ok, State#recovery{ranges = Ranges,
                                 writers = Writers#{UId => {in_seq, Idx}},
                                 tables = Tables#{UId => Mt1}}};
@@ -1161,7 +1159,7 @@ recover_entry(Names, UId, {Idx, _, _} = Entry, SmallestIdx,
                    [UId, Idx, PrevIdx]),
             exit({gap_detected, UId, Idx, PrevIdx})
     end;
-recover_entry(Names, UId, {Idx, Term, _}, SmallestIdx,
+recover_entry(Names, UId, {Idx, Term, _},
               #recovery{mode = post_boot,
                         ranges = Ranges0,
                         writers = Writers,
@@ -1184,7 +1182,7 @@ recover_entry(Names, UId, {Idx, Term, _}, SmallestIdx,
                                 tables = Tables#{UId => Mt0}}};
         Tid ->
             Ranges = update_ranges(Ranges0, UId, Tid,
-                                   SmallestIdx, [Idx]),
+                                   [Idx]),
             {ok, State#recovery{ranges = Ranges,
                                 writers = Writers#{UId => {in_seq, Idx}},
                                 tables = Tables#{UId => Mt0}}}

@@ -795,7 +795,7 @@ leave_and_terminate(System, ServerRef, ServerId, Timeout) ->
 %% @end
 -spec leave_and_delete_server(atom(), ra_server_id() | [ra_server_id()],
                               ra_server_id()) ->
-    ok | timeout | {error, noproc}.
+    ok | timeout | {error, term()} | {badrpc, term()}.
 leave_and_delete_server(System, ServerRef, ServerId) ->
     leave_and_delete_server(System, ServerRef, ServerId, ?DEFAULT_TIMEOUT).
 
@@ -807,7 +807,7 @@ leave_and_delete_server(System, ServerRef, ServerId) ->
 %% @end
 -spec leave_and_delete_server(atom(), ra_server_id() | [ra_server_id()],
                               ra_server_id(), timeout()) ->
-    ok | timeout | {error, noproc | nodedown}.
+    ok | timeout | {error, term()} | {badrpc, term()}.
 leave_and_delete_server(System, ServerRef, ServerId, Timeout) ->
     LeaveCmd = {'$ra_leave', ServerId, await_consensus},
     case ra_server_proc:command(ServerRef, LeaveCmd, Timeout) of
@@ -1074,8 +1074,7 @@ local_query(ServerId, QueryFun, Options) when is_map(Options) ->
                    QueryFun :: query_mfa()) ->
     ra_server_proc:ra_leader_call_ret({ra_idxterm(), Reply :: term()}) |
     {ok, {ra_idxterm(), Reply :: term()}, not_known}.
-leader_query(ServerId, QueryMFA)
-  when is_tuple(QueryMFA) ->
+leader_query(ServerId, QueryMFA) ->
     leader_query(ServerId, QueryMFA, ?DEFAULT_TIMEOUT).
 
 %% @doc Same as `leader_query/2' but accepts a custom timeout or a map of
