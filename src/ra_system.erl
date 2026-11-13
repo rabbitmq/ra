@@ -179,7 +179,6 @@ store(#{name := Name} = Config) ->
 
 -spec fetch(atom()) -> config() | undefined.
 fetch(Name) when is_atom(Name) ->
-    % eqwalizer: ignore
     persistent_term:get({'$ra_system', Name}, undefined).
 
 -spec fetch(atom(), Node :: atom()) -> config() | undefined | {badrpc, term()}.

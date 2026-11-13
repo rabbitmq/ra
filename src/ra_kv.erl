@@ -156,7 +156,9 @@ put(ServerId, Key, Value, Timeout) ->
     case ra:process_command(ServerId, Put, Timeout) of
         {ok, {ok, Meta}, LeaderId} ->
             {ok, Meta#{leader => LeaderId}};
-        Err ->
+        {error, _} = Err ->
+            Err;
+        {timeout, _} = Err ->
             Err
     end.
 
@@ -226,7 +228,7 @@ read_entry({_, Node} = ServerId, Idxs, Members, Timeout) ->
     end.
 
 -spec delete(ra:server_id(), key(), non_neg_integer()) ->
-    {ok, map()} | {error, not_found} | {error, term()} | {timeout, ra:server_id()}.
+    {ok, map()} | {error, {not_found, ra:server_id()}} | {error, term()} | {timeout, ra:server_id()}.
 delete(ServerId, Key, Timeout) ->
     Delete = #delete{key = Key},
     case ra:process_command(ServerId, Delete, Timeout) of
@@ -234,7 +236,9 @@ delete(ServerId, Key, Timeout) ->
             {ok, Meta#{leader => LeaderId}};
         {ok, {error, not_found}, LeaderId} ->
             {error, {not_found, LeaderId}};
-        Err ->
+        {error, _} = Err ->
+            Err;
+        {timeout, _} = Err ->
             Err
     end.
 
@@ -247,9 +251,6 @@ take_snapshot(ServerId) ->
 init(_) ->
     #?MODULE{}.
 
-%% we use improper lists in this module
-% elp:ignore W0048 (no_dialyzer_attribute)
--dialyzer({no_improper_lists, [apply/3]}).
 
 apply(#{index := Idx} = Meta,
       #put{key = Key,

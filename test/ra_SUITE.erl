@@ -17,14 +17,6 @@
 -define(SYS, default).
 -define(IDMFA, {ra_lib, id, []}).
 
-%% The dialyzer catches that the given reply mode is not included in the
-%% `ra_server:command_reply_mode()' type:
--dialyzer({nowarn_function, [process_command_with_unknown_reply_mode/1]}).
-
-%% The following testcases simulate an erroneous or unsupported call that is
-%% outside of the spec.
--dialyzer({nowarn_function, [unknown_leader_call/1,
-                             unknown_local_call/1]}).
 
 all() ->
     [

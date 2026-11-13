@@ -773,13 +773,11 @@ validate_consistency(State) ->
 
 -spec perform_consistency_check(state(), [ra:server_id()]) -> state().
 perform_consistency_check(State, MembersToValidate) ->
-    RefMap = maps:get(reference_map, State),
-
     % Wait for all nodes to converge to the same applied index
     wait_for_applied_index_convergence(MembersToValidate, 300), % Wait up to 30 seconds
 
     % Check that all members have the same view
-    ValidationResults = [validate_member_consistency(Member, RefMap)
+    ValidationResults = [validate_member_consistency(Member)
                          || Member <- MembersToValidate],
 
     Result1 = hd(ValidationResults),
@@ -858,8 +856,8 @@ analyze_field_differences(Results) ->
 
     [LiveIndexDiff, NumKeysDiff].
 
--spec validate_member_consistency(ra:server_id(), map()) -> map() | error.
-validate_member_consistency(Member, _RefMap) ->
+-spec validate_member_consistency(ra:server_id()) -> map() | error.
+validate_member_consistency(Member) ->
     case ra_kv:member_overview(Member) of
         #{log := Log,
           machine := #{live_indexes := Live, num_keys := Num}} ->

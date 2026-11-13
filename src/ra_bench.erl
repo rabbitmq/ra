@@ -170,22 +170,22 @@ send_n(Leader, Data, N, Counter) ->
     send_n(Leader, Data, N-1, Counter).
 
 
-client_loop(0, 0, _Leader, _Data, _Counter) ->
+client_loop(0, 0, _Data, _Counter) ->
     ok;
-client_loop(Num, Sent, _Leader, Data, Counter) ->
+client_loop(Num, Sent, Data, Counter) ->
     receive
         {ra_event, Leader, {applied, Applied}} ->
             N = length(Applied),
             ToSend = min(Sent, N),
             send_n(Leader, Data, ToSend, Counter),
-            client_loop(Num - N, Sent - ToSend, Leader, Data, Counter);
+            client_loop(Num - N, Sent - ToSend, Data, Counter);
         {ra_event, _, {rejected, {not_leader, NewLeader, _}}} ->
             io:format("new leader ~w~n", [NewLeader]),
             send_n(NewLeader, Data, 1, Counter),
-            client_loop(Num, Sent, NewLeader, Data, Counter);
-        {ra_event, Leader, Evt} ->
+            client_loop(Num, Sent, Data, Counter);
+        {ra_event, _Leader, Evt} ->
             io:format("unexpected ra_event ~w~n", [Evt]),
-            client_loop(Num, Sent, Leader, Data, Counter)
+            client_loop(Num, Sent, Data, Counter)
     end.
 
 spawn_client(Parent, Leader, Num, DataSize, Pipe, Counter) ->
@@ -197,7 +197,7 @@ spawn_client(Parent, Leader, Num, DataSize, Pipe, Counter) ->
               receive
                   go ->
                       send_n(Leader, Data, Pipe, Counter),
-                      ok = client_loop(Num, Num - Pipe, Leader, Data, Counter),
+                      ok = client_loop(Num, Num - Pipe, Data, Counter),
                       Parent ! {done, self()}
               end
       end).

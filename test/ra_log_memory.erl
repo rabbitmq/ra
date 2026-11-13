@@ -42,7 +42,6 @@
 
 -include("src/ra.hrl").
 
--dialyzer({nowarn_function, install_snapshot/4}).
 
 -type ra_log_memory_meta() :: #{atom() => term()}.
 
@@ -291,10 +290,7 @@ write_meta(_Key, _Value, _State) ->
 -spec write_meta_f(term(), term(), ra_log_memory_state()) ->
     ra_log_memory_state().
 write_meta_f(Key, Value, #state{meta = Meta} = State) ->
-    State#state{meta = Meta#{Key => Value}};
-write_meta_f(_Key, _Value, State) ->
-    %% dummy case to satisfy dialyzer
-    State.
+    State#state{meta = Meta#{Key => Value}}.
 
 can_write(_Log) ->
     true.
@@ -318,11 +314,6 @@ release_resources(_, _, State) ->
     State.
 
 -spec to_list(any()) -> list().
-to_list(LogState) ->
-    State = case LogState of
-                #state{} -> LogState;
-                _ -> LogState % dialyzer trick
-            end,
-    #state{entries = Log} = State,
+to_list(#state{entries = Log}) ->
     [{Idx, Term, Data} || {Idx, {Term, Data}} <- maps:to_list(Log)].
 

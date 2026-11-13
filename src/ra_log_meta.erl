@@ -39,7 +39,7 @@
 -export_type([state/0]).
 
 -spec start_link(ra_system:config()) ->
-    {ok, pid()} | {error, {already_started, pid()}}.
+    {ok, pid()} | ignore | {error, {already_started, pid()} | term()}.
 start_link(#{names := #{log_meta := Name}} = Cfg) ->
     gen_batch_server:start_link({local, Name}, ?MODULE, Cfg, []).
 
@@ -149,8 +149,18 @@ fetch(MetaName, Id, last_applied) ->
 -spec fetch(atom(), ra_uid(), current_term, T) -> T | ra:index();
            (atom(), ra_uid(), voted_for, T) -> T | ra:server_id();
            (atom(), ra_uid(), last_applied, T) -> T | ra:index().
-fetch(MetaName, Id, Key, Default) ->
-    case fetch(MetaName, Id, Key) of
+fetch(MetaName, Id, current_term, Default) ->
+    case fetch(MetaName, Id, current_term) of
+        undefined -> Default;
+        Value -> Value
+    end;
+fetch(MetaName, Id, voted_for, Default) ->
+    case fetch(MetaName, Id, voted_for) of
+        undefined -> Default;
+        Value -> Value
+    end;
+fetch(MetaName, Id, last_applied, Default) ->
+    case fetch(MetaName, Id, last_applied) of
         undefined -> Default;
         Value -> Value
     end.

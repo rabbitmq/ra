@@ -37,9 +37,9 @@ jobs:
     - name: Xref
       if: ${{ matrix.os == 'ubuntu-latest'}}
       run: rebar3 xref
-    - name: Dialyze
+    - name: Prisma
       if: ${{ matrix.otp_version == 29 && matrix.os == 'ubuntu-latest'}}
-      run: rebar3 dialyzer
+      run: rebar3 prisma
     - name: Build
       run: rebar3 compile
     - name: EUnit

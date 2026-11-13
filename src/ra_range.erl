@@ -101,10 +101,14 @@ truncate(UpToIncl, {Start, End})
        is_integer(Start) andalso
        UpToIncl >= Start ->
     {UpToIncl + 1, End};
-truncate(UpToIncl, Range)
+truncate(UpToIncl, {Start, End})
   when is_integer(UpToIncl) andalso
-       ?IS_RANGE(Range) ->
-    Range.
+       is_integer(Start) andalso
+       is_integer(End) ->
+    {Start, End};
+truncate(UpToIncl, undefined)
+  when is_integer(UpToIncl) ->
+    undefined.
 
 size(undefined) ->
     0;

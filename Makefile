@@ -24,8 +24,6 @@ dep_eunit_formatters = git https://github.com/seancribbs/eunit_formatters main
 
 DEP_PLUGINS = elvis_mk
 
-PLT_APPS += eunit proper syntax_tools erts kernel stdlib common_test inets aten mnesia ssh ssl meck gen_batch_server inet_tcp_proxy
-
 EDOC_OUTPUT = docs
 EDOC_OPTS = {pretty_printer, erl_pp}, {sort_functions, false}
 
@@ -45,7 +43,11 @@ all::
 escript-zip::
 	mkdir -p $(DEPS_DIR)/elvis_mk/ebin
 
-DIALYZER_OPTS += --src -r test
+prisma:
+	rebar3 prisma
+
+dialyze: prisma
+
 EUNIT_OPTS = no_tty, {report, {eunit_progress, [colored, profile]}}
 include $(if $(ERLANG_MK_FILENAME),$(ERLANG_MK_FILENAME),erlang.mk)
 
