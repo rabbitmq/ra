@@ -36,6 +36,7 @@
          start_server_rpc/3,
          restart_server_rpc/3,
          delete_server_rpc/2,
+         delete_server_rpc/3,
          delete_owned_server_rpc/3,
          prepare_server_stop_rpc/2]).
 
@@ -203,7 +204,7 @@ delete_owned_server_rpc(System, RaName, UId) ->
                             _ ->
                                 ok
                         end,
-                    delete_server_rpc(System, RaName);
+                    delete_server_rpc(System, RaName, UId);
                 undefined ->
                     %% nothing registered, nothing to delete
                     ok;
@@ -216,15 +217,24 @@ delete_server_rpc(System, RaName) ->
     case ra_system:fetch(System) of
         undefined ->
             {error, system_not_started};
-        #{data_dir := _SysDir,
-          names := #{log_meta := Meta,
+        #{names := Names} ->
+            %% TODO: better handle and report errors
+            %% UId could be `undefined' here
+            delete_server_rpc(System, RaName,
+                              ra_directory:uid_of(Names, RaName))
+    end.
+
+%% A server with the same name and a new UId can start while this runs, so
+%% everything except the state kept by name is deleted by UId.
+delete_server_rpc(System, RaName, UId) ->
+    case ra_system:fetch(System) of
+        undefined ->
+            {error, system_not_started};
+        #{names := #{log_meta := Meta,
                      server_sup := SrvSup} = Names} ->
             ?INFO("Deleting server ~w and its data directory.",
                   [RaName]),
-            %% TODO: better handle and report errors
-            %% UId could be `undefined' here
-            UId = ra_directory:uid_of(Names, RaName),
-            Pid = ra_directory:where_is(Names, RaName),
+            Pid = ra_directory:where_is(Names, UId),
             ra_log_meta:delete(Meta, UId),
             Dir = ra_env:server_data_dir(System, UId),
             _ = supervisor:terminate_child(SrvSup, UId),
@@ -233,10 +243,15 @@ delete_server_rpc(System, RaName) ->
             %% forcefully clean up ETS tables
             ?CATCH(ets:delete(ra_log_metrics, UId)),
             ?CATCH(ets:delete(ra_log_snapshot_state, UId)),
-            ?CATCH(ets:delete(ra_state, RaName)),
             ?CATCH(ets:delete(ra_open_file_metrics, Pid)),
-            ?CATCH(ra_counters:delete({RaName, node()})),
-            ?CATCH(ra_leaderboard:clear(RaName)),
+            case ra_directory:uid_of(Names, RaName) of
+                undefined ->
+                    ?CATCH(ets:delete(ra_state, RaName)),
+                    ?CATCH(ra_counters:delete({RaName, node()})),
+                    ?CATCH(ra_leaderboard:clear(RaName));
+                _ ->
+                    ok
+            end,
             ok
     end.
 

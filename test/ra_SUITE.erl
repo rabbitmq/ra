@@ -35,6 +35,8 @@ all_tests() ->
     [
      single_server_processes_command,
      delete_server_checks_uid,
+     delete_server_keeps_replacement,
+     terminating_leader_stops_on_stop,
      pipeline_commands,
      stop_server_idemp,
      minority,
@@ -166,6 +168,56 @@ delete_server_checks_uid(Config) ->
     ?assertEqual(undefined, whereis(RaName)),
     %% nothing registered is a no-op
     ?assertEqual(ok, ra_server_sup_sup:delete_server(default, N1, UId, 5000)),
+    ok.
+
+delete_server_keeps_replacement(Config) ->
+    Name = ?config(test_name, Config),
+    {RaName, _} = N1 = nth_server_name(Config, 1),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
+    OldUId = ra_directory:uid_of(default, RaName),
+    ok = ra:stop_server(default, N1),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
+    NewUId = ra_directory:uid_of(default, RaName),
+    ?assertNotEqual(OldUId, NewUId),
+    ?assertEqual(ok, ra_server_sup_sup:delete_server_rpc(default, RaName,
+                                                         OldUId)),
+    ?assertEqual(NewUId, ra_directory:uid_of(default, RaName)),
+    ?assert(filelib:is_dir(ra_env:server_data_dir(default, NewUId))),
+    ?assert(is_pid(whereis(RaName))),
+    terminate_cluster([N1]),
+    ok.
+
+terminating_leader_stops_on_stop(Config) ->
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
+    Name = ?config(test_name, Config),
+    {ok, [Leader0, _, _], []} = ra:start_cluster(default, Name,
+                                                 {module, ra_queue, #{}},
+                                                 [N1, N2, N3]),
+    {ok, _, Leader} = ra:members(Leader0),
+    [Down | _] = [N1, N2, N3] -- [Leader],
+    ok = ra:stop_server(?SYS, Down),
+    %% the stopped follower keeps the leader in `terminating_leader'
+    {ok, _} = ra:delete_cluster([Leader]),
+    {RaName, _} = Leader,
+    Pid = whereis(RaName),
+    ?assert(is_pid(Pid)),
+    MRef = erlang:monitor(process, Pid),
+    meck:new(ra_server, [passthrough]),
+    meck:expect(ra_server, handle_leader,
+                fun (_, State) -> {stop, State, []} end),
+    try
+        ok = gen_statem:cast(Pid, stop_please),
+        receive
+            {'DOWN', MRef, process, Pid, Reason} ->
+                ?assertEqual({shutdown, delete}, Reason)
+        after 10000 ->
+                  ct:fail(leader_did_not_stop)
+        end
+    after
+        meck:unload(ra_server)
+    end,
     ok.
 
 pipeline_commands(Config) ->

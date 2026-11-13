@@ -1039,16 +1039,21 @@ terminating_leader(_EvtType, {command, _, _}, State0) ->
 terminating_leader(EvtType, Msg, State0) ->
     LogName = log_id(State0),
     ?DEBUG("~ts: terminating leader received ~W", [LogName, Msg, 10]),
-    {State, Actions} = case leader(EvtType, Msg, State0) of
-                           {next_state, terminating_leader, S, A} ->
-                               {S, A};
-                           {keep_state, S, A} ->
-                               {S, A};
-                           {stop, shutdown, S} ->
-                               {S, []};
-                           {stop, {shutdown, delete}, S} ->
-                               {S, []}
-                       end,
+    case leader(EvtType, Msg, State0) of
+        {stop, shutdown, State} ->
+            terminating_leader_continue(LogName, Msg, State, []);
+        {stop, {shutdown, delete}, State} ->
+            terminating_leader_continue(LogName, Msg, State, []);
+        %% For example when a membership change removes this server.
+        {stop, _, State} ->
+            {stop, {shutdown, delete}, State};
+        {next_state, _, State, Actions} ->
+            terminating_leader_continue(LogName, Msg, State, Actions);
+        {keep_state, State, Actions} ->
+            terminating_leader_continue(LogName, Msg, State, Actions)
+    end.
+
+terminating_leader_continue(LogName, Msg, State, Actions) ->
     NS = State#state.server_state,
     case ra_server:is_fully_replicated(NS) of
         true ->

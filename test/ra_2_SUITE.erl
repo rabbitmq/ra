@@ -331,7 +331,7 @@ cluster_is_deleted(Config) ->
     %% redeclaring the same cluster should fail
     {error, {members_exist, Existing}} =
         ra:start_cluster(?SYS, ClusterName, {module, ?MODULE, #{}}, Peers),
-    ?assertEqual(lists:sort(Peers), lists:sort(Existing)),
+    ?assertEqual(lists:sort(lists:zip(Peers, UIds)), lists:sort(Existing)),
     {ok, _} = ra:delete_cluster(Peers),
     %% Assert all ETS tables are deleted for each UId
 
