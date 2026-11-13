@@ -35,6 +35,7 @@ all_tests() ->
     [
      single_server_processes_command,
      delete_server_checks_uid,
+     delete_server_keeps_replacement,
      pipeline_commands,
      stop_server_idemp,
      minority,
@@ -166,6 +167,23 @@ delete_server_checks_uid(Config) ->
     ?assertEqual(undefined, whereis(RaName)),
     %% nothing registered is a no-op
     ?assertEqual(ok, ra_server_sup_sup:delete_server(default, N1, UId, 5000)),
+    ok.
+
+delete_server_keeps_replacement(Config) ->
+    Name = ?config(test_name, Config),
+    {RaName, _} = N1 = nth_server_name(Config, 1),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
+    OldUId = ra_directory:uid_of(default, RaName),
+    ok = ra:stop_server(default, N1),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
+    NewUId = ra_directory:uid_of(default, RaName),
+    ?assertNotEqual(OldUId, NewUId),
+    ?assertEqual(ok, ra_server_sup_sup:delete_server_rpc(default, RaName,
+                                                         OldUId)),
+    ?assertEqual(NewUId, ra_directory:uid_of(default, RaName)),
+    ?assert(filelib:is_dir(ra_env:server_data_dir(default, NewUId))),
+    ?assert(is_pid(whereis(RaName))),
+    terminate_cluster([N1]),
     ok.
 
 pipeline_commands(Config) ->

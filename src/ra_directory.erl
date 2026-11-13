@@ -101,7 +101,8 @@ unregister_name(#{directory := Directory,
                   directory_rev := DirRev}, UId) ->
     case ets:take(Directory, UId) of
         [{_, _, _, ServerName, _}] ->
-            ok = dets:delete(DirRev, ServerName),
+            %% The name can have been registered again with another UId.
+            ok = dets:delete_object(DirRev, {ServerName, UId}),
             UId;
         [] ->
             _ = dets:select_delete(DirRev, [{{'_', UId}, [], [true]}]),
