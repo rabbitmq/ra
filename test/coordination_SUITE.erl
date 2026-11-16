@@ -36,6 +36,7 @@ all_tests() ->
      start_stop_restart_delete_on_remote,
      start_cluster,
      start_cluster_members_exist,
+     start_cluster_some_members_exist,
      start_or_restart_cluster,
      delete_one_server_cluster,
      delete_two_server_cluster,
@@ -148,12 +149,9 @@ start_cluster_members_exist(Config) ->
     Machine = {module, ?MODULE, #{}},
     {ok, Started, []} = ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
     ?assertEqual(lists:sort(ServerIds), lists:sort(Started)),
-    %% a second attempt with overlapping members bails before starting
-    %% or deleting anything
     {error, {members_exist, Existing}} =
         ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    ?assertEqual(lists:sort(ServerIds), lists:sort([Id || {Id, _} <- Existing])),
-    [?assert(is_binary(UId)) || {_, UId} <- Existing],
+    ?assertEqual(lists:sort(ServerIds), lists:sort(Existing)),
     %% a delete guarded by the wrong UId leaves the member in place
     [Id1 | _] = ServerIds,
     ?assertEqual({error, not_owner},
@@ -169,6 +167,23 @@ start_cluster_members_exist(Config) ->
         ra:start_cluster(?SYS, other_cluster_name, Machine, ServerIds),
     ?assertEqual(lists:sort(Existing), lists:sort(Existing2)),
     [?assertMatch({pong, _}, ra_server_proc:ping(N, 500)) || N <- ServerIds],
+    stop_peers(Peers),
+    ok.
+
+start_cluster_some_members_exist(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    [{Name, Node1} = Id1 | Rest] = ServerIds = server_ids(ClusterName, Peers),
+    Machine = {module, ?MODULE, #{}},
+    ok = ra:start_server(?SYS, ClusterName, Id1, Machine, [Id1]),
+    UId1 = erpc:call(Node1, ra_directory, uid_of, [?SYS, Name]),
+    ?assertEqual({error, {members_exist, [Id1]}},
+                 ra:start_cluster(?SYS, ClusterName, Machine, ServerIds)),
+    ?assertEqual(UId1, erpc:call(Node1, ra_directory, uid_of, [?SYS, Name])),
+    ?assertMatch({pong, _}, ra_server_proc:ping(Id1, 500)),
+    [?assertEqual(undefined, erpc:call(N, ra_directory, uid_of, [?SYS, Name]))
+     || {_, N} <- Rest],
     stop_peers(Peers),
     ok.
 
