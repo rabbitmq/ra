@@ -1040,13 +1040,26 @@ terminating_leader(EvtType, Msg, State0) ->
     LogName = log_id(State0),
     ?DEBUG("~ts: terminating leader received ~W", [LogName, Msg, 10]),
     case leader(EvtType, Msg, State0) of
-        {stop, shutdown, State} ->
-            terminating_leader_continue(LogName, Msg, State, []);
         {stop, {shutdown, delete}, State} ->
             terminating_leader_continue(LogName, Msg, State, []);
-        %% For example when a membership change removes this server.
-        {stop, _, State} ->
+        %% A membership change removed this server: the cluster is being
+        %% deleted anyway so delete rather than just stop.
+        {stop, normal, State} ->
             {stop, {shutdown, delete}, State};
+        %% Any other stop (e.g. the worker crashed or shut down) keeps its
+        %% reason so that the data is not deleted and the cause is not
+        %% hidden. The server cannot carry on without its worker.
+        {stop, _, _} = Stop ->
+            Stop;
+        %% Stepping down (e.g. a higher term was seen): this server must
+        %% stop acting as leader. The delete command has already been
+        %% applied here so it will not be applied again: wait as a
+        %% terminating follower until the log is persisted, then delete.
+        {next_state, follower, State, Actions} ->
+            ?DEBUG("~ts: terminating leader stepping down", [LogName]),
+            next_state(terminating_follower, State, Actions);
+        %% Still the leader in the same term, e.g. `await_condition' when
+        %% the WAL is down or a leadership transfer was requested.
         {next_state, _, State, Actions} ->
             terminating_leader_continue(LogName, Msg, State, Actions);
         {keep_state, State, Actions} ->

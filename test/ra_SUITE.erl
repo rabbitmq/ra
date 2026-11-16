@@ -38,6 +38,9 @@ all_tests() ->
      delete_server_keeps_replacement,
      start_cluster_when_member_exits,
      terminating_leader_stops_on_stop,
+     terminating_leader_steps_down,
+     terminating_leader_keeps_stop_reason,
+     terminating_leader_stops_on_worker_shutdown,
      pipeline_commands,
      stop_server_idemp,
      minority,
@@ -244,6 +247,69 @@ terminating_leader_stops_on_stop(Config) ->
         meck:unload(ra_server)
     end,
     ok.
+
+terminating_leader_steps_down(Config) ->
+    {Pid, MRef} = terminating_leader_setup(Config),
+    meck:new(ra_server, [passthrough]),
+    meck:expect(ra_server, handle_leader,
+                fun (step_down_please, State) -> {follower, State, []};
+                    (Msg, State) -> meck:passthrough([Msg, State])
+                end),
+    try
+        ok = gen_statem:cast(Pid, step_down_please),
+        ?assertMatch({terminating_follower, _}, sys:get_state(Pid))
+    after
+        meck:unload(ra_server)
+    end,
+    %% the delete command was applied as leader so the server still deletes
+    receive
+        {'DOWN', MRef, process, Pid, Reason} ->
+            ?assertEqual({shutdown, delete}, Reason)
+    after 10000 ->
+              ct:fail(follower_did_not_stop)
+    end,
+    ok.
+
+terminating_leader_keeps_stop_reason(Config) ->
+    %% a worker crash is not a delete
+    terminating_leader_worker_down(Config, boom).
+
+terminating_leader_stops_on_worker_shutdown(Config) ->
+    %% the server cannot carry on without its worker
+    terminating_leader_worker_down(Config, shutdown).
+
+terminating_leader_worker_down(Config, WorkerReason) ->
+    {Pid, MRef} = terminating_leader_setup(Config),
+    {dictionary, Dict} = process_info(Pid, dictionary),
+    [SupPid | _] = proplists:get_value('$ancestors', Dict),
+    [WorkerPid] = [W || {ra_worker, W, _, _} <- supervisor:which_children(SupPid)],
+    Pid ! {'DOWN', make_ref(), process, WorkerPid, WorkerReason},
+    receive
+        {'DOWN', MRef, process, Pid, Reason} ->
+            ?assertEqual(WorkerReason, Reason)
+    after 10000 ->
+              ct:fail(leader_did_not_stop)
+    end,
+    ok.
+
+%% returns a leader held in `terminating_leader' by a stopped follower
+terminating_leader_setup(Config) ->
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
+    Name = ?config(test_name, Config),
+    {ok, [Leader0, _, _], []} = ra:start_cluster(default, Name,
+                                                 {module, ra_queue, #{}},
+                                                 [N1, N2, N3]),
+    {ok, _, Leader} = ra:members(Leader0),
+    [Down | _] = [N1, N2, N3] -- [Leader],
+    ok = ra:stop_server(?SYS, Down),
+    {ok, _} = ra:delete_cluster([Leader]),
+    {RaName, _} = Leader,
+    Pid = whereis(RaName),
+    ?assert(is_pid(Pid)),
+    ?assertMatch({terminating_leader, _}, sys:get_state(Pid)),
+    {Pid, erlang:monitor(process, Pid)}.
 
 pipeline_commands(Config) ->
     Name = ?config(test_name, Config),
