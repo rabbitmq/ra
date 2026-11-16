@@ -36,6 +36,7 @@ all_tests() ->
      single_server_processes_command,
      delete_server_checks_uid,
      delete_server_keeps_replacement,
+     start_cluster_when_member_exits,
      terminating_leader_stops_on_stop,
      pipeline_commands,
      stop_server_idemp,
@@ -185,6 +186,30 @@ delete_server_keeps_replacement(Config) ->
     ?assert(filelib:is_dir(ra_env:server_data_dir(default, NewUId))),
     ?assert(is_pid(whereis(RaName))),
     terminate_cluster([N1]),
+    ok.
+
+start_cluster_when_member_exits(Config) ->
+    Name = ?config(test_name, Config),
+    [{RaName1, _} = N1, N2, N3] = Ids =
+        [nth_server_name(Config, I) || I <- [1, 2, 3]],
+    meck:new(ra_server_proc, [passthrough]),
+    try
+        meck:expect(ra_server_proc, trigger_election,
+                    fun (_, _) -> exit(noproc) end),
+        ?assertEqual({error, cluster_not_formed},
+                     ra:start_cluster(default, Name, {module, ra_queue, #{}}, Ids)),
+        [?assertEqual(undefined, ra_directory:uid_of(default, N))
+         || {N, _} <- Ids],
+        meck:expect(ra_server_proc, trigger_election,
+                    fun ({N, _}, _) when N =:= RaName1 -> exit(noproc);
+                        (Id, T) -> meck:passthrough([Id, T])
+                    end),
+        ?assertMatch({ok, _, []},
+                     ra:start_cluster(default, Name, {module, ra_queue, #{}}, Ids))
+    after
+        meck:unload(ra_server_proc)
+    end,
+    terminate_cluster([N1, N2, N3]),
     ok.
 
 terminating_leader_stops_on_stop(Config) ->

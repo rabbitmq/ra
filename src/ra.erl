@@ -517,14 +517,16 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
                 _ ->
                     StartedIds = sort_by_local([I || #{id := I} <- Started], []),
                     NotStartedIds = [I || #{id := I} <- NotStarted],
-                    %% try triggering elections until one succeeds
-                    %% TODO: handle case where no election was successfully triggered
-                    {value, TriggeredId} = lists:search(fun (N) ->
-                                                                ok == trigger_election(N)
-                                                        end, StartedIds),
-                    %% the triggered id is likely to become the leader so try that first
-                    case members(TriggeredId,
-                                length(ServerConfigs) * Timeout) of
+                    Res = case trigger_any_election(StartedIds) of
+                              {ok, TriggeredId} ->
+                                  %% the triggered id is likely to become the
+                                  %% leader so try that first
+                                  members(TriggeredId,
+                                          length(ServerConfigs) * Timeout);
+                              error ->
+                                  {error, no_election_triggered}
+                          end,
+                    case Res of
                         {ok, _, Leader} ->
                             ?INFO("ra: started cluster ~tw with ~b servers. "
                                 "~b servers failed to start: ~tw. Leader: ~tw",
@@ -564,6 +566,17 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
             Crashed = [C || {C, _Reason} <- Failed],
             delete_owned_servers(System, Started ++ Pending ++ Crashed, Timeout),
             {error, cluster_not_formed}
+    end.
+
+%% A started server can be stopped or deleted before its election is triggered.
+trigger_any_election([]) ->
+    error;
+trigger_any_election([Id | Rem]) ->
+    try trigger_election(Id) of
+        ok -> {ok, Id};
+        _ -> trigger_any_election(Rem)
+    catch
+        exit:_ -> trigger_any_election(Rem)
     end.
 
 %% deletes the servers in parallel, but only if they still have the uid we
