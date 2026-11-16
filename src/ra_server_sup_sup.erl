@@ -195,16 +195,16 @@ delete_owned_server_rpc(System, RaName, UId) ->
     case ra_system:fetch(System) of
         undefined ->
             {error, system_not_started};
-        #{names := Names} ->
+        #{names := #{server_sup := SrvSup} = Names} ->
             case ra_directory:uid_of(Names, RaName) of
                 UId ->
-                    _ = case prepare_server_stop_rpc(System, RaName) of
-                            {ok, Pid, SrvSup} when is_pid(Pid) ->
+                    _ = case ra_directory:where_is_parent(Names, RaName) of
+                            Pid when is_pid(Pid) ->
                                 supervisor:terminate_child(SrvSup, Pid);
                             _ ->
                                 ok
                         end,
-                    delete_server_rpc(System, RaName, UId);
+                    do_delete_server(System, Names, RaName, UId);
                 undefined ->
                     %% nothing registered, nothing to delete
                     ok;
@@ -220,40 +220,43 @@ delete_server_rpc(System, RaName) ->
         #{names := Names} ->
             %% TODO: better handle and report errors
             %% UId could be `undefined' here
-            delete_server_rpc(System, RaName,
-                              ra_directory:uid_of(Names, RaName))
+            do_delete_server(System, Names, RaName,
+                             ra_directory:uid_of(Names, RaName))
     end.
 
-%% A server with the same name and a new UId can start while this runs, so
-%% everything except the state kept by name is deleted by UId.
 delete_server_rpc(System, RaName, UId) ->
     case ra_system:fetch(System) of
         undefined ->
             {error, system_not_started};
-        #{names := #{log_meta := Meta,
-                     server_sup := SrvSup} = Names} ->
-            ?INFO("Deleting server ~w and its data directory.",
-                  [RaName]),
-            Pid = ra_directory:where_is(Names, UId),
-            ra_log_meta:delete(Meta, UId),
-            Dir = ra_env:server_data_dir(System, UId),
-            _ = supervisor:terminate_child(SrvSup, UId),
-            _ = delete_data_directory(Dir),
-            _ = ra_directory:unregister_name(Names, UId),
-            %% forcefully clean up ETS tables
-            ?CATCH(ets:delete(ra_log_metrics, UId)),
-            ?CATCH(ets:delete(ra_log_snapshot_state, UId)),
-            ?CATCH(ets:delete(ra_open_file_metrics, Pid)),
-            case ra_directory:uid_of(Names, RaName) of
-                undefined ->
-                    ?CATCH(ets:delete(ra_state, RaName)),
-                    ?CATCH(ra_counters:delete({RaName, node()})),
-                    ?CATCH(ra_leaderboard:clear(RaName));
-                _ ->
-                    ok
-            end,
-            ok
+        #{names := Names} ->
+            do_delete_server(System, Names, RaName, UId)
     end.
+
+%% A server with the same name and a new UId can start while this runs, so
+%% everything except the state kept by name is deleted by UId.
+do_delete_server(System, #{log_meta := Meta,
+                           server_sup := SrvSup} = Names, RaName, UId) ->
+    ?INFO("Deleting server ~w and its data directory.",
+          [RaName]),
+    Pid = ra_directory:where_is(Names, UId),
+    ra_log_meta:delete(Meta, UId),
+    Dir = ra_env:server_data_dir(System, UId),
+    _ = supervisor:terminate_child(SrvSup, UId),
+    _ = delete_data_directory(Dir),
+    _ = ra_directory:unregister_name(Names, UId),
+    %% forcefully clean up ETS tables
+    ?CATCH(ets:delete(ra_log_metrics, UId)),
+    ?CATCH(ets:delete(ra_log_snapshot_state, UId)),
+    ?CATCH(ets:delete(ra_open_file_metrics, Pid)),
+    case ra_directory:uid_of(Names, RaName) of
+        undefined ->
+            ?CATCH(ets:delete(ra_state, RaName)),
+            ?CATCH(ra_counters:delete({RaName, node()})),
+            ?CATCH(ra_leaderboard:clear(RaName));
+        _ ->
+            ok
+    end,
+    ok.
 
 delete_data_directory(Directory) ->
     DeleteFunction = fun() ->
