@@ -36,6 +36,7 @@ all_tests() ->
      force_deleted_server_mem_tables_are_cleaned_up,
      leave_and_delete_server,
      cluster_is_deleted,
+     cluster_exists_with_same_uids,
      cluster_is_deleted_with_server_down,
      cluster_cannot_be_deleted_in_minority,
      diverged_follower,
@@ -339,6 +340,30 @@ cluster_is_deleted(Config) ->
     ?assertEqual(undefined, ra_leaderboard:lookup_leader(ClusterName)),
 
     ok = start_cluster(ClusterName, Peers),
+    ok.
+
+cluster_exists_with_same_uids(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    Peers = [?config(server_id, Config),
+             ?config(server_id2, Config),
+             ?config(server_id3, Config)],
+    Machine = {module, ?MODULE, #{}},
+    Configs = [begin
+                   UId = ra:new_uid(ra_lib:to_binary(ClusterName)),
+                   #{id => Id,
+                     uid => UId,
+                     cluster_name => ClusterName,
+                     log_init_args => #{uid => UId},
+                     initial_members => Peers,
+                     machine => Machine}
+               end || Id <- Peers],
+    {ok, Started, []} = ra:start_cluster(?SYS, Configs),
+    ?assertEqual(lists:sort(Peers), lists:sort(Started)),
+    %% starting the same configs again finds the running servers by uid
+    {error, {members_exist, Existing}} = ra:start_cluster(?SYS, Configs),
+    ?assertEqual(lists:sort(Peers), lists:sort(Existing)),
+    [?assertMatch({pong, _}, ra_server_proc:ping(N, 500)) || N <- Peers],
+    {ok, _} = ra:delete_cluster(Peers),
     ok.
 
 validate_ets_table_deletes(UIds, Pids, Peers) ->

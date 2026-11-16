@@ -489,9 +489,13 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
             fun (C) ->
                 case start_server(System, C) of
                     ok  -> true;
+                    {error, {already_started, _}} ->
+                        %% a server with the same uid is running
+                        exit(already_started);
                     {error, {shutdown,
                              {failed_to_start_child, _, {already_started, _}}}} ->
-                        %% reported as the worker's exit reason
+                        %% a server with the same name but another uid is
+                        %% running. Reported as the worker's exit reason.
                         exit(already_started);
                     Err ->
                         ?ERR("ra: failed to start a server ~tw, error: ~p",
