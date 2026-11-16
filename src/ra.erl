@@ -573,8 +573,7 @@ trigger_any_election([]) ->
     error;
 trigger_any_election([Id | Rem]) ->
     try trigger_election(Id) of
-        ok -> {ok, Id};
-        _ -> trigger_any_election(Rem)
+        ok -> {ok, Id}
     catch
         exit:_ -> trigger_any_election(Rem)
     end.
