@@ -37,6 +37,7 @@ all_tests() ->
      delete_server_checks_uid,
      delete_server_keeps_replacement,
      start_cluster_when_member_exits,
+     start_cluster_election_timeout,
      terminating_leader_stops_on_stop,
      terminating_leader_steps_down,
      terminating_leader_keeps_stop_reason,
@@ -213,6 +214,37 @@ start_cluster_when_member_exits(Config) ->
         meck:unload(ra_server_proc)
     end,
     terminate_cluster([N1, N2, N3]),
+    ok.
+
+start_cluster_election_timeout(Config) ->
+    Name = ?config(test_name, Config),
+    Ids = [nth_server_name(Config, I) || I <- [1, 2, 3]],
+    meck:new(ra_server_proc, [passthrough]),
+    try
+        %% every member times out the full time it is given
+        meck:expect(ra_server_proc, trigger_election,
+                    fun (_, T) -> timer:sleep(T), exit(timeout) end),
+        Configs = [begin
+                       UId = ra:new_uid(ra_lib:to_binary(Name)),
+                       #{id => Id,
+                         uid => UId,
+                         cluster_name => Name,
+                         log_init_args => #{uid => UId},
+                         initial_members => Ids,
+                         machine => {module, ra_queue, #{}}}
+                   end || Id <- Ids],
+        T0 = erlang:monotonic_time(millisecond),
+        ?assertEqual({error, cluster_not_formed},
+                     ra:start_cluster(default, Configs, 1000)),
+        Taken = erlang:monotonic_time(millisecond) - T0,
+        %% the election attempts share the start timeout rather than each
+        %% waiting for the default timeout
+        ?assert(Taken < 4000),
+        [?assertEqual(undefined, ra_directory:uid_of(default, N))
+         || {N, _} <- Ids]
+    after
+        meck:unload(ra_server_proc)
+    end,
     ok.
 
 terminating_leader_stops_on_stop(Config) ->

@@ -521,7 +521,7 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
                 _ ->
                     StartedIds = sort_by_local([I || #{id := I} <- Started], []),
                     NotStartedIds = [I || #{id := I} <- NotStarted],
-                    Res = case trigger_any_election(StartedIds) of
+                    Res = case trigger_any_election(StartedIds, Timeout) of
                               {ok, TriggeredId} ->
                                   %% the triggered id is likely to become the
                                   %% leader so try that first
@@ -573,13 +573,23 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
     end.
 
 %% A started server can be stopped or deleted before its election is triggered.
-trigger_any_election([]) ->
+%% All attempts together are bounded by Timeout.
+trigger_any_election(Ids, Timeout) ->
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
+    trigger_any_election0(Ids, Deadline).
+
+trigger_any_election0([], _Deadline) ->
     error;
-trigger_any_election([Id | Rem]) ->
-    try trigger_election(Id) of
-        ok -> {ok, Id}
-    catch
-        exit:_ -> trigger_any_election(Rem)
+trigger_any_election0([Id | Rem], Deadline) ->
+    case Deadline - erlang:monotonic_time(millisecond) of
+        Remaining when Remaining > 0 ->
+            try trigger_election(Id, Remaining) of
+                ok -> {ok, Id}
+            catch
+                exit:_ -> trigger_any_election0(Rem, Deadline)
+            end;
+        _ ->
+            error
     end.
 
 %% deletes the servers in parallel, but only if they still have the uid we
