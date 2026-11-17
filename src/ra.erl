@@ -264,6 +264,13 @@ force_delete_server(System, ServerId) ->
 %% The server is forcefully deleted. The timeout bounds the remote calls made
 %% to the server's node, so a member on a slow or unreachable node fails with
 %% `{badrpc, timeout}' instead of blocking indefinitely.
+%%
+%% A timeout does not stop the delete: it may still be running on the server's
+%% node after this function has returned. Before starting a server with the
+%% same name, confirm that the delete has finished, for example by checking
+%% on that node that `ra_directory:uid_of/2' no longer returns the old
+%% UId. Coordinating this with other operations on the same server is the
+%% caller's responsibility.
 %% @param ServerId the ra_server_id() of the server
 %% @param Timeout the timeout in milliseconds or `infinity'
 %% @returns `ok | {error, nodedown} | {badrpc, Reason}'
@@ -277,6 +284,11 @@ force_delete_server(System, ServerId, Timeout) ->
 %% @doc Deletes a ra server only if it is registered with the given UId.
 %% The check and the delete run on the server's node, so a server that has
 %% since been replaced by one with a different UId is not removed.
+%%
+%% As with {@link force_delete_server/3}, a timeout does not stop the delete,
+%% so confirm that it has finished before starting a server with the same name.
+%% The UId check protects against a replacement that has already started, not
+%% against one started while the delete is still running.
 %% @param ServerId the ra_server_id() of the server
 %% @param UId the UId the server is expected to be registered with
 %% @param Timeout the timeout in milliseconds or `infinity'
@@ -476,8 +488,12 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %% call are deleted by uid and servers that failed to start are left alone.
 %% It does not guarantee that nothing is left behind. For example a start
 %% that was already queued on a slow or suspended supervisor may still complete
-%% after this function has returned. Leftover servers can be removed with
-%% {@link force_delete_server/2}.
+%% after this function has returned. The same applies to the cleanup itself:
+%% a delete that times out may still be running on the server's node. Before
+%% retrying with the same server ids, remove any leftover servers with
+%% {@link force_delete_server/2} and confirm on each server's node that
+%% `ra_directory:uid_of/2' returns `undefined' for the server's name.
+%% See {@link force_delete_server/3}.
 %%
 %% Concurrent cluster operations on the same members are not supported. This
 %% includes concurrent calls to `start_cluster' as well as starting, restarting
