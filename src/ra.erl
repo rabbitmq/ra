@@ -611,9 +611,21 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
             %%   starting servers.
             %%   Concurrent cluster operations are documented as unsupported.
             %% Leftover servers can be removed with ra:force_delete_server/2.
-            Crashed = [C || {C, _Reason} <- Failed],
+            %%
+            %% A member that is already running is not ours to delete but is
+            %% reported, as it is without a timeout. A pending member may also
+            %% be running, but that is not known.
+            Existing = [Id || {#{id := Id}, already_started} <- Failed],
+            Crashed = [C || {C, Reason} <- Failed, Reason =/= already_started],
             delete_owned_servers(System, Started ++ Pending ++ Crashed, Timeout),
-            {error, cluster_not_formed}
+            case Existing of
+                [] ->
+                    {error, cluster_not_formed};
+                _ ->
+                    ?WARN("ra: not starting cluster ~tw, members already exist: ~tw",
+                          [ClusterName, Existing]),
+                    {error, {members_exist, Existing}}
+            end
     end.
 
 %% A started server can be stopped or deleted before its election is triggered.

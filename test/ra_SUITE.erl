@@ -40,6 +40,7 @@ all_tests() ->
      delete_server_clears_leaderboard,
      start_cluster_when_member_exits,
      start_cluster_election_timeout,
+     start_cluster_timeout_members_exist,
      terminating_leader_stops_on_stop,
      terminating_leader_steps_down,
      terminating_leader_keeps_stop_reason,
@@ -280,6 +281,42 @@ start_cluster_when_member_exits(Config) ->
         meck:unload(ra_server_proc)
     end,
     terminate_cluster([N1, N2, N3]),
+    ok.
+
+start_cluster_timeout_members_exist(Config) ->
+    Name = ?config(test_name, Config),
+    [N1, N2, {RaName3, _} = N3] = Ids =
+        [nth_server_name(Config, I) || I <- [1, 2, 3]],
+    Self = self(),
+    meck:new(ra_server_sup_sup, [passthrough]),
+    try
+        %% N1 clashes with a running server, N2 is slow and N3 starts
+        meck:expect(ra_server_sup_sup, start_server,
+                    fun (_, #{id := Id}) when Id =:= N1 ->
+                            {error, {already_started, Self}};
+                        (_, #{id := Id}) when Id =:= N2 ->
+                            timer:sleep(infinity);
+                        (Sys, Conf) ->
+                            meck:passthrough([Sys, Conf])
+                    end),
+        Configs = [begin
+                       UId = ra:new_uid(ra_lib:to_binary(Name)),
+                       #{id => Id,
+                         uid => UId,
+                         cluster_name => Name,
+                         log_init_args => #{uid => UId},
+                         initial_members => Ids,
+                         machine => {module, ra_queue, #{}}}
+                   end || Id <- Ids],
+        ?assertEqual({error, {members_exist, [N1]}},
+                     ra:start_cluster(default, Configs, 1000)),
+        %% the started server is deleted, the existing one is left alone
+        ?assertEqual(undefined, ra_directory:uid_of(default, RaName3)),
+        ?assertEqual(0, meck:num_calls(ra_server_sup_sup, delete_server,
+                                       [default, N1, '_', '_']))
+    after
+        meck:unload(ra_server_sup_sup)
+    end,
     ok.
 
 start_cluster_election_timeout(Config) ->
