@@ -36,6 +36,7 @@ all_tests() ->
      single_server_processes_command,
      delete_server_checks_uid,
      delete_server_keeps_replacement,
+     delete_server_clears_leaderboard,
      start_cluster_when_member_exits,
      start_cluster_election_timeout,
      terminating_leader_stops_on_stop,
@@ -190,6 +191,19 @@ delete_server_keeps_replacement(Config) ->
     ?assert(filelib:is_dir(ra_env:server_data_dir(default, NewUId))),
     ?assert(is_pid(whereis(RaName))),
     terminate_cluster([N1]),
+    ok.
+
+delete_server_clears_leaderboard(Config) ->
+    %% the cluster name differs from the server name
+    ClusterName = ?config(test_name, Config),
+    {RaName, _} = N1 = nth_server_name(Config, 1),
+    ?assertNotEqual(ClusterName, RaName),
+    ok = ra:start_server(default, ClusterName, N1, add_machine(), []),
+    ok = ra:stop_server(default, N1),
+    %% an entry left behind, e.g. by a server that was killed
+    ok = ra_leaderboard:record(ClusterName, N1, [N1]),
+    ok = ra:force_delete_server(default, N1),
+    ?assertEqual(undefined, ra_leaderboard:lookup_leader(ClusterName)),
     ok.
 
 start_cluster_when_member_exits(Config) ->

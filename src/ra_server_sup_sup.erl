@@ -239,6 +239,8 @@ do_delete_server(System, #{log_meta := Meta,
     ?INFO("Deleting server ~w and its data directory.",
           [RaName]),
     Pid = ra_directory:where_is(Names, UId),
+    %% the leaderboard is keyed by cluster name, read it while registered
+    ClusterName = ra_directory:cluster_name_of(Names, UId),
     ra_log_meta:delete(Meta, UId),
     Dir = ra_env:server_data_dir(System, UId),
     _ = supervisor:terminate_child(SrvSup, UId),
@@ -252,7 +254,10 @@ do_delete_server(System, #{log_meta := Meta,
         undefined ->
             ?CATCH(ets:delete(ra_state, RaName)),
             ?CATCH(ra_counters:delete({RaName, node()})),
-            ?CATCH(ra_leaderboard:clear(RaName));
+            case ClusterName of
+                undefined -> ok;
+                _ -> ?CATCH(ra_leaderboard:clear(ClusterName))
+            end;
         _ ->
             ok
     end,
