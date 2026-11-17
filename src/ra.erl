@@ -569,6 +569,12 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
                         %% UId it is registered with.
                         exit({already_started,
                               existing_uid(System, C, Timeout)});
+                    %% The same, from a node with an older Ra version, which
+                    %% returns the supervisor's error unchanged.
+                    {error, {shutdown, {failed_to_start_child, _,
+                                        {already_started, _}}}} ->
+                        exit({already_started,
+                              existing_uid(System, C, Timeout)});
                     Err ->
                         ?ERR("ra: failed to start a server ~tw, error: ~p",
                               [C, Err]),

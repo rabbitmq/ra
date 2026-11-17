@@ -41,6 +41,7 @@ all_tests() ->
      start_cluster_when_member_exits,
      start_cluster_election_timeout,
      start_cluster_timeout_members_exist,
+     start_cluster_members_exist_older_node,
      terminating_leader_stops_on_stop,
      terminating_leader_steps_down,
      terminating_leader_keeps_stop_reason,
@@ -315,6 +316,31 @@ start_cluster_timeout_members_exist(Config) ->
         ?assertEqual(undefined, ra_directory:uid_of(default, RaName3)),
         ?assertEqual(0, meck:num_calls(ra_server_sup_sup, delete_server,
                                        [default, N1, '_', '_']))
+    after
+        meck:unload(ra_server_sup_sup)
+    end,
+    ok.
+
+start_cluster_members_exist_older_node(Config) ->
+    Name = ?config(test_name, Config),
+    [N1, {RaName2, _} = N2, {RaName3, _} = N3] = Ids =
+        [nth_server_name(Config, I) || I <- [1, 2, 3]],
+    Self = self(),
+    meck:new(ra_server_sup_sup, [passthrough]),
+    try
+        meck:expect(ra_server_sup_sup, start_server,
+                    fun (_, #{id := Id}) when Id =:= N1 ->
+                            {error, {shutdown,
+                                     {failed_to_start_child, Id,
+                                      {already_started, Self}}}};
+                        (Sys, Conf) ->
+                            meck:passthrough([Sys, Conf])
+                    end),
+        ?assertEqual({error, {members_exist, [{N1, undefined}]}},
+                     ra:start_cluster(default, Name, {module, ra_queue, #{}},
+                                      Ids)),
+        ?assertEqual(undefined, ra_directory:uid_of(default, RaName2)),
+        ?assertEqual(undefined, ra_directory:uid_of(default, RaName3))
     after
         meck:unload(ra_server_sup_sup)
     end,
