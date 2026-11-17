@@ -304,8 +304,13 @@ force_delete_server(System, ServerId, UId, Timeout) ->
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
 %% `{error, {members_exist, ServerIds}}' if any of the members are already
-%% running. In this case the servers that were started are deleted again. A
-%% stale member can be removed with {@link force_delete_server/4}.
+%% running. This is only detected while the servers are started, so the other
+%% servers may already be running and are then deleted again. Until they are
+%% deleted they can contact the running members: a vote request can make a
+%% running member increase its term, and a leader elected among the new
+%% servers can replace entries in its log. Making sure that none of the members
+%% are running is the caller's responsibility, see {@link start_cluster/2}.
+%% A stale member can be removed with {@link force_delete_server/4}.
 %%
 %% If there was no existing cluster and a new cluster could not be formed
 %% any servers that did manage to start are
@@ -332,8 +337,13 @@ start_or_restart_cluster(System, ClusterName, Machine, ServerIds) ->
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
 %% `{error, {members_exist, ServerIds}}' if any of the members are already
-%% running. In this case the servers that were started are deleted again. A
-%% stale member can be removed with {@link force_delete_server/4}.
+%% running. This is only detected while the servers are started, so the other
+%% servers may already be running and are then deleted again. Until they are
+%% deleted they can contact the running members: a vote request can make a
+%% running member increase its term, and a leader elected among the new
+%% servers can replace entries in its log. Making sure that none of the members
+%% are running is the caller's responsibility, see {@link start_cluster/2}.
+%% A stale member can be removed with {@link force_delete_server/4}.
 %%
 %% If there was no existing cluster and a new cluster could not be formed
 %% any servers that did manage to start are
@@ -371,8 +381,13 @@ start_or_restart_cluster(System, ClusterName, Machine,
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
 %% `{error, {members_exist, ServerIds}}' if any of the members are already
-%% running. In this case the servers that were started are deleted again. A
-%% stale member can be removed with {@link force_delete_server/4}.
+%% running. This is only detected while the servers are started, so the other
+%% servers may already be running and are then deleted again. Until they are
+%% deleted they can contact the running members: a vote request can make a
+%% running member increase its term, and a leader elected among the new
+%% servers can replace entries in its log. Making sure that none of the members
+%% are running is the caller's responsibility, see {@link start_cluster/2}.
+%% A stale member can be removed with {@link force_delete_server/4}.
 %%
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
@@ -402,8 +417,13 @@ start_cluster(System, ClusterName, Machine, ServerIds)
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
 %% `{error, {members_exist, ServerIds}}' if any of the members are already
-%% running. In this case the servers that were started are deleted again. A
-%% stale member can be removed with {@link force_delete_server/4}.
+%% running. This is only detected while the servers are started, so the other
+%% servers may already be running and are then deleted again. Until they are
+%% deleted they can contact the running members: a vote request can make a
+%% running member increase its term, and a leader elected among the new
+%% servers can replace entries in its log. Making sure that none of the members
+%% are running is the caller's responsibility, see {@link start_cluster/2}.
+%% A stale member can be removed with {@link force_delete_server/4}.
 %%
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
@@ -440,8 +460,13 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
 %% `{error, {members_exist, ServerIds}}' if any of the members are already
-%% running. In this case the servers that were started are deleted again. A
-%% stale member can be removed with {@link force_delete_server/4}.
+%% running. This is only detected while the servers are started, so the other
+%% servers may already be running and are then deleted again. Until they are
+%% deleted they can contact the running members: a vote request can make a
+%% running member increase its term, and a leader elected among the new
+%% servers can replace entries in its log. Making sure that none of the members
+%% are running is the caller's responsibility, see below.
+%% A stale member can be removed with {@link force_delete_server/4}.
 %%
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
@@ -463,6 +488,13 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %% reuse the uid of such a server in a new cluster configuration as it may be
 %% deleted if startup times out.
 %% Use an external lock service or equivalent to serialise cluster operations.
+%%
+%% Ra does not check that the members are free before it starts any of them.
+%% `{members_exist, ServerIds}' is a last resort, not a guarantee: by the time
+%% it is returned the new servers may already have disturbed the running
+%% members (see above). Callers must make sure, for example under the same
+%% lock, that no server with any of the given ids is running before calling
+%% `start_cluster'.
 %% @end
 -spec start_cluster(atom(), [ra_server:ra_server_config()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
