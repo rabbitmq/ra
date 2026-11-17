@@ -36,6 +36,7 @@ all_tests() ->
      single_server_processes_command,
      delete_server_checks_uid,
      delete_server_keeps_replacement,
+     delete_server_keeps_starting_replacement_state,
      delete_server_clears_leaderboard,
      start_cluster_when_member_exits,
      start_cluster_election_timeout,
@@ -190,6 +191,57 @@ delete_server_keeps_replacement(Config) ->
     ?assertEqual(NewUId, ra_directory:uid_of(default, RaName)),
     ?assert(filelib:is_dir(ra_env:server_data_dir(default, NewUId))),
     ?assert(is_pid(whereis(RaName))),
+    terminate_cluster([N1]),
+    ok.
+
+delete_server_keeps_starting_replacement_state(Config) ->
+    Name = ?config(test_name, Config),
+    {RaName, _} = N1 = nth_server_name(Config, 1),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
+    OldUId = ra_directory:uid_of(default, RaName),
+    ok = ra:stop_server(default, N1),
+    NewUId = ra:new_uid(ra_lib:to_binary(Name)),
+    Self = self(),
+    meck:new(ra_directory, [passthrough]),
+    try
+        %% hold the replacement just before it registers
+        meck:expect(ra_directory, register_name,
+                    fun (Names, U, Pid, Parent, SName, CName) when U =:= NewUId ->
+                            Self ! {registering, self()},
+                            receive go -> ok end,
+                            meck:passthrough([Names, U, Pid, Parent, SName, CName]);
+                        (Names, U, Pid, Parent, SName, CName) ->
+                            meck:passthrough([Names, U, Pid, Parent, SName, CName])
+                    end),
+        Conf = #{id => N1,
+                 uid => NewUId,
+                 cluster_name => Name,
+                 log_init_args => #{uid => NewUId},
+                 initial_members => [N1],
+                 machine => add_machine()},
+        Starter = spawn_link(fun () ->
+                                     Self ! {started, ra:start_server(default, Conf)}
+                             end),
+        ServerPid = receive
+                        {registering, P} -> P
+                    after 10000 ->
+                              ct:fail(replacement_did_not_start)
+                    end,
+        %% the replacement is not registered yet so this deletes the state
+        %% kept by name, which must not include any of the replacement's
+        ok = ra:force_delete_server(default, N1, OldUId, 10000),
+        ServerPid ! go,
+        receive
+            {started, Res} -> ?assertEqual(ok, Res)
+        after 10000 ->
+                  ct:fail({replacement_did_not_finish, Starter})
+        end
+    after
+        meck:unload(ra_directory)
+    end,
+    ?assertEqual(NewUId, ra_directory:uid_of(default, RaName)),
+    ?assertNotEqual(undefined, ra_counters:fetch(N1)),
+    ?assertMatch([_], ets:lookup(ra_state, RaName)),
     terminate_cluster([N1]),
     ok.
 

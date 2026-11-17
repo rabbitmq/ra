@@ -333,12 +333,20 @@ do_init(#{id := Id,
           cluster_name := ClusterName} = Config0)
   when is_pid(ParentPid) ->
     Key = ra_lib:ra_server_id_to_local_name(Id),
-    true = ets:insert(ra_state, {Key, init, unknown}),
     process_flag(trap_exit, true),
+    #{names := Names} = SysConf =
+        maps:get(system_config, Config0, ra_system:default_config()),
+    %% We need to register _before_ log is initialised as log init writes
+    %% index 0 and mem tables may be cleared up if a member is not registered.
+    %% Registering before creating the state kept by name (the ra_state row
+    %% and the counters) also lets a delete of an earlier server with the
+    %% same name see this one and leave that state alone.
+    ok = ra_directory:register_name(Names, UId, self(),
+                                    ParentPid, Key, ClusterName),
+    true = ets:insert(ra_state, {Key, init, unknown}),
     MetricLabels = maps:get(metrics_labels, Config0, #{}),
     Config = maps:merge(config_defaults(Id, MetricLabels), Config0),
-    #{counter := Counter,
-      system_config := #{names := Names} = SysConf} = Config,
+    #{counter := Counter} = Config,
     MsgQData = maps:get(message_queue_data, SysConf, off_heap),
     MinBinVheapSize = maps:get(server_min_bin_vheap_size, SysConf,
                                ?MIN_BIN_VHEAP_SIZE),
@@ -346,12 +354,6 @@ do_init(#{id := Id,
     process_flag(message_queue_data, MsgQData),
     process_flag(min_bin_vheap_size, MinBinVheapSize),
     process_flag(min_heap_size, MinHeapSize),
-    #{names := Names} = SysConf,
-    %% We need to register _before_ log is initialised as log init writes
-    %% index 0 and mem tables may be cleared up if a member is not registered.
-    Parent = maps:get(parent, Config, undefined),
-    ok = ra_directory:register_name(Names, UId, self(),
-                                    Parent, Key, ClusterName),
     #{cluster := Cluster} = ServerState = ra_server:init(Config),
 
     % ensure each relevant erlang node is connected
