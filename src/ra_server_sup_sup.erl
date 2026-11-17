@@ -343,6 +343,11 @@ start_child(Name, Config) ->
                            [Name, Reason]),
                     {error, Reason}
             end;
+        {error, {shutdown, {failed_to_start_child, _,
+                            {already_started, Pid}}}} ->
+            %% a server with the same name is registered, report it like a
+            %% server with the same uid
+            {error, {already_started, Pid}};
         Err ->
             Err
     catch
