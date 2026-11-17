@@ -151,7 +151,10 @@ start_cluster_members_exist(Config) ->
     ?assertEqual(lists:sort(ServerIds), lists:sort(Started)),
     {error, {members_exist, Existing}} =
         ra:start_cluster(?SYS, ClusterName, Machine, ServerIds),
-    ?assertEqual(lists:sort(ServerIds), lists:sort(Existing)),
+    %% each member is reported with the uid it is registered with
+    ?assertEqual(lists:sort([{Id, erpc:call(N, ra_directory, uid_of, [?SYS, Id])}
+                             || {_, N} = Id <- ServerIds]),
+                 lists:sort(Existing)),
     %% a delete guarded by the wrong UId leaves the member in place
     [Id1 | _] = ServerIds,
     ?assertEqual({error, not_owner},
@@ -178,7 +181,7 @@ start_cluster_some_members_exist(Config) ->
     Machine = {module, ?MODULE, #{}},
     ok = ra:start_server(?SYS, ClusterName, Id1, Machine, [Id1]),
     UId1 = erpc:call(Node1, ra_directory, uid_of, [?SYS, Name]),
-    ?assertEqual({error, {members_exist, [Id1]}},
+    ?assertEqual({error, {members_exist, [{Id1, UId1}]}},
                  ra:start_cluster(?SYS, ClusterName, Machine, ServerIds)),
     ?assertEqual(UId1, erpc:call(Node1, ra_directory, uid_of, [?SYS, Name])),
     ?assertMatch({pong, _}, ra_server_proc:ping(Id1, 500)),

@@ -308,7 +308,8 @@ start_cluster_timeout_members_exist(Config) ->
                          initial_members => Ids,
                          machine => {module, ra_queue, #{}}}
                    end || Id <- Ids],
-        ?assertEqual({error, {members_exist, [N1]}},
+        %% the uid is read from the directory, N1 is not registered here
+        ?assertEqual({error, {members_exist, [{N1, undefined}]}},
                      ra:start_cluster(default, Configs, 1000)),
         %% the started server is deleted, the existing one is left alone
         ?assertEqual(undefined, ra_directory:uid_of(default, RaName3)),

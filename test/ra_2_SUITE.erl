@@ -338,7 +338,7 @@ cluster_is_deleted(Config) ->
     %% redeclaring the same cluster should fail
     {error, {members_exist, Existing}} =
         ra:start_cluster(?SYS, ClusterName, {module, ?MODULE, #{}}, Peers),
-    ?assertEqual(lists:sort(Peers), lists:sort(Existing)),
+    ?assertEqual(lists:sort(lists:zip(Peers, UIds)), lists:sort(Existing)),
     {ok, _} = ra:delete_cluster(Peers),
     %% Assert all ETS tables are deleted for each UId
 
@@ -366,8 +366,10 @@ cluster_exists_with_same_uids(Config) ->
     {ok, Started, []} = ra:start_cluster(?SYS, Configs),
     ?assertEqual(lists:sort(Peers), lists:sort(Started)),
     %% starting the same configs again finds the running servers by uid
+    %% and reports the uids, which are the ones in the configs
     {error, {members_exist, Existing}} = ra:start_cluster(?SYS, Configs),
-    ?assertEqual(lists:sort(Peers), lists:sort(Existing)),
+    ?assertEqual(lists:sort([{Id, UId} || #{id := Id, uid := UId} <- Configs]),
+                 lists:sort(Existing)),
     [?assertMatch({pong, _}, ra_server_proc:ping(N, 500)) || N <- Peers],
     {ok, _} = ra:delete_cluster(Peers),
     ok.
