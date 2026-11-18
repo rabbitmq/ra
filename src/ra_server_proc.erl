@@ -1086,17 +1086,23 @@ terminating_follower(EvtType, Msg, State0) ->
     % only process ra_log_events
     LogName = log_id(State0),
     ?DEBUG("~ts: terminating follower received ~W", [LogName, Msg, 10]),
-    {State, Actions} = case follower(EvtType, Msg, State0) of
-                           {next_state, terminating_follower, S, A} ->
-                               {S, A};
-                           {next_state, NextState, S, A} ->
-                               ?DEBUG("~ts: terminating follower requested state '~s'"
-                                      " - remaining in current state",
-                                      [LogName, NextState]),
-                               {S, A};
-                           {keep_state, S, A} ->
-                               {S, A}
-                       end,
+    case follower(EvtType, Msg, State0) of
+        %% For example when the worker exits. The reason is kept, as it is
+        %% for a terminating leader.
+        {stop, _, _} = Stop ->
+            Stop;
+        {next_state, terminating_follower, S, A} ->
+            terminating_follower_continue(Msg, S, A);
+        {next_state, NextState, S, A} ->
+            ?DEBUG("~ts: terminating follower requested state '~s'"
+                   " - remaining in current state",
+                   [LogName, NextState]),
+            terminating_follower_continue(Msg, S, A);
+        {keep_state, S, A} ->
+            terminating_follower_continue(Msg, S, A)
+    end.
+
+terminating_follower_continue(Msg, State, Actions) ->
     case ra_server:is_fully_persisted(State#state.server_state) of
         true ->
             {stop, {shutdown, delete}, State};

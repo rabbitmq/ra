@@ -46,6 +46,7 @@ all_tests() ->
      terminating_leader_steps_down,
      terminating_leader_keeps_stop_reason,
      terminating_leader_stops_on_worker_shutdown,
+     terminating_follower_stops_on_worker_shutdown,
      pipeline_commands,
      stop_server_idemp,
      minority,
@@ -451,6 +452,33 @@ terminating_leader_worker_down(Config, WorkerReason) ->
             ?assertEqual(WorkerReason, Reason)
     after 10000 ->
               ct:fail(leader_did_not_stop)
+    end,
+    ok.
+
+terminating_follower_stops_on_worker_shutdown(Config) ->
+    {Pid, MRef} = terminating_leader_setup(Config),
+    {dictionary, Dict} = process_info(Pid, dictionary),
+    [SupPid | _] = proplists:get_value('$ancestors', Dict),
+    [WorkerPid] = [W || {ra_worker, W, _, _} <- supervisor:which_children(SupPid)],
+    meck:new(ra_server, [passthrough]),
+    meck:expect(ra_server, handle_leader,
+                fun (step_down_please, State) -> {follower, State, []};
+                    (Msg, State) -> meck:passthrough([Msg, State])
+                end),
+    %% keeps the server in `terminating_follower'
+    meck:expect(ra_server, is_fully_persisted, fun (_) -> false end),
+    try
+        ok = gen_statem:cast(Pid, step_down_please),
+        ?assertMatch({terminating_follower, _}, sys:get_state(Pid)),
+        Pid ! {'DOWN', make_ref(), process, WorkerPid, shutdown},
+        receive
+            {'DOWN', MRef, process, Pid, Reason} ->
+                ?assertEqual(shutdown, Reason)
+        after 10000 ->
+                  ct:fail(follower_did_not_stop)
+        end
+    after
+        meck:unload(ra_server)
     end,
     ok.
 
