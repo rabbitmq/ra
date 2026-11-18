@@ -584,13 +584,15 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
                 case start_server(System, C) of
                     ok  -> true;
                     {error, {already_started, _}} ->
-                        %% a server with the same name is already running.
+                        %% a server with the same UId is already running.
                         %% Reported as the worker's exit reason, with the
-                        %% UId of that running server (not the one in C).
+                        %% UId of that running server.
                         exit({already_started,
                               existing_uid(System, C, Timeout)});
-                    %% The same, from a node with an older Ra version, which
-                    %% returns the supervisor's error unchanged.
+                    %% a server with the same name but another UId is
+                    %% already running, as reported by the supervisor.
+                    %% Reported the same way, with the UId of that running
+                    %% server (not the one in C).
                     {error, {shutdown, {failed_to_start_child, _,
                                         {already_started, _}}}} ->
                         exit({already_started,

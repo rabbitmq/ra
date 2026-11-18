@@ -41,7 +41,7 @@ all_tests() ->
      start_cluster_when_member_exits,
      start_cluster_election_timeout,
      start_cluster_timeout_members_exist,
-     start_cluster_members_exist_older_node,
+     start_cluster_members_exist_other_uid,
      terminating_leader_stops_on_stop,
      terminating_leader_steps_down,
      terminating_leader_keeps_stop_reason,
@@ -321,7 +321,7 @@ start_cluster_timeout_members_exist(Config) ->
     end,
     ok.
 
-start_cluster_members_exist_older_node(Config) ->
+start_cluster_members_exist_other_uid(Config) ->
     Name = ?config(test_name, Config),
     [N1, {RaName2, _} = N2, {RaName3, _} = N3] = Ids =
         [nth_server_name(Config, I) || I <- [1, 2, 3]],

@@ -175,10 +175,12 @@ start_stopped_server(Config) ->
     ok = enqueue(ServerId, msg1),
     %%
     {error, {already_started, _}} = ra:start_server(?SYS, Conf),
-    %% the same name with another uid is reported the same way
+    %% the same name with another uid is reported by the supervisor;
+    %% callers such as khepri match this error
     OtherUId = ra:new_uid(ra_lib:to_binary(ClusterName)),
     Pid = whereis(element(1, ServerId)),
-    ?assertEqual({error, {already_started, Pid}},
+    ?assertMatch({error, {shutdown, {failed_to_start_child, _,
+                                     {already_started, Pid}}}},
                  ra:start_server(?SYS, Conf#{uid => OtherUId,
                                              log_init_args => #{uid => OtherUId}})),
     ok = ra:stop_server(?SYS, ServerId),
