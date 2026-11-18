@@ -12,6 +12,7 @@
          deinit/1,
          register_name/6,
          unregister_name/2,
+         unregister_name/3,
          where_is/2,
          where_is_parent/2,
          name_of/2,
@@ -108,6 +109,20 @@ unregister_name(#{directory := Directory,
             _ = dets:select_delete(DirRev, [{{'_', UId}, [], [true]}]),
             UId
     end.
+
+%% Deletes the name mapping by key. `unregister_name/2' falls back to
+%% `dets:select_delete/2', which scans the table, and concurrent unregisters
+%% of the same server using it have left `names.dets' unreadable.
+-spec unregister_name(atom() | ra_system:names(), atom(), ra_uid()) ->
+    ra_uid().
+unregister_name(System, ServerName, UId) when is_atom(System) ->
+    unregister_name(get_names(System), ServerName, UId);
+unregister_name(#{directory := Directory,
+                  directory_rev := DirRev}, ServerName, UId) ->
+    _ = ets:take(Directory, UId),
+    %% The name can have been registered again with another UId.
+    ok = dets:delete_object(DirRev, {ServerName, UId}),
+    UId.
 
 -spec where_is(atom() | ra_system:names(), ra_uid() | atom()) ->
     pid() | undefined.

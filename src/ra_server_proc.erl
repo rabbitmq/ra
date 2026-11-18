@@ -1245,7 +1245,8 @@ terminate(Reason, StateName,
             %% after the server is removed from the ra directory.
             %% This is so that the segment writer can avoid
             %% crashing if it detects a missing key
-            ?CATCH(ra_directory:unregister_name(Names, UId)),
+            ?CATCH(ra_directory:unregister_name(
+                     Names, ra_lib:ra_server_id_to_local_name(Id), UId)),
             ?CATCH(ra_log_wal:forget_writer(maps:get(wal, Names), UId)),
             _ = ra_server:terminate(ServerState, Reason),
             ?CATCH(ra_log_meta:delete_sync(MetaName, UId)),

@@ -245,7 +245,7 @@ do_delete_server(System, #{log_meta := Meta,
     Dir = ra_env:server_data_dir(System, UId),
     _ = supervisor:terminate_child(SrvSup, UId),
     _ = delete_data_directory(Dir),
-    _ = ra_directory:unregister_name(Names, UId),
+    _ = ra_directory:unregister_name(Names, RaName, UId),
     %% forcefully clean up ETS tables
     ?CATCH(ets:delete(ra_log_metrics, UId)),
     ?CATCH(ets:delete(ra_log_snapshot_state, UId)),
