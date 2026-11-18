@@ -315,11 +315,15 @@ force_delete_server(System, ServerId, UId, Timeout) ->
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, Existing}}' if any of the members are already
-%% running, as a list of `{ServerId, UId}' pairs with the UId each one is
-%% registered with (`undefined' if it could not be read). If the UId is one
-%% the caller passed in its server configurations, a server from an earlier
-%% attempt is still running. This is only detected while the servers are started, so the other
+%% `{error, {members_exist, Existing}}' if a server with the same id as any of
+%% the members is already running. `Existing' has a `{ServerId, UId}' pair for
+%% each such member, where `UId' is the UId of the server that is already
+%% running, not the one in the new configuration. It is read on the member's
+%% node just after its start was refused, and is `undefined' if it could not
+%% be read or the server was gone by then. A UId that matches the one in the
+%% new configuration means a server from an earlier attempt to start the same
+%% cluster is still running; any other UId belongs to a different server.
+%% This is only detected while the servers are started, so the other
 %% servers may already be running and are then deleted again. Until they are
 %% deleted they can contact the running members: a vote request can make a
 %% running member increase its term, and a leader elected among the new
@@ -353,11 +357,15 @@ start_or_restart_cluster(System, ClusterName, Machine, ServerIds) ->
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, Existing}}' if any of the members are already
-%% running, as a list of `{ServerId, UId}' pairs with the UId each one is
-%% registered with (`undefined' if it could not be read). If the UId is one
-%% the caller passed in its server configurations, a server from an earlier
-%% attempt is still running. This is only detected while the servers are started, so the other
+%% `{error, {members_exist, Existing}}' if a server with the same id as any of
+%% the members is already running. `Existing' has a `{ServerId, UId}' pair for
+%% each such member, where `UId' is the UId of the server that is already
+%% running, not the one in the new configuration. It is read on the member's
+%% node just after its start was refused, and is `undefined' if it could not
+%% be read or the server was gone by then. A UId that matches the one in the
+%% new configuration means a server from an earlier attempt to start the same
+%% cluster is still running; any other UId belongs to a different server.
+%% This is only detected while the servers are started, so the other
 %% servers may already be running and are then deleted again. Until they are
 %% deleted they can contact the running members: a vote request can make a
 %% running member increase its term, and a leader elected among the new
@@ -402,11 +410,15 @@ start_or_restart_cluster(System, ClusterName, Machine,
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, Existing}}' if any of the members are already
-%% running, as a list of `{ServerId, UId}' pairs with the UId each one is
-%% registered with (`undefined' if it could not be read). If the UId is one
-%% the caller passed in its server configurations, a server from an earlier
-%% attempt is still running. This is only detected while the servers are started, so the other
+%% `{error, {members_exist, Existing}}' if a server with the same id as any of
+%% the members is already running. `Existing' has a `{ServerId, UId}' pair for
+%% each such member, where `UId' is the UId of the server that is already
+%% running, not the one in the new configuration. It is read on the member's
+%% node just after its start was refused, and is `undefined' if it could not
+%% be read or the server was gone by then. A UId that matches the one in the
+%% new configuration means a server from an earlier attempt to start the same
+%% cluster is still running; any other UId belongs to a different server.
+%% This is only detected while the servers are started, so the other
 %% servers may already be running and are then deleted again. Until they are
 %% deleted they can contact the running members: a vote request can make a
 %% running member increase its term, and a leader elected among the new
@@ -443,11 +455,15 @@ start_cluster(System, ClusterName, Machine, ServerIds)
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, Existing}}' if any of the members are already
-%% running, as a list of `{ServerId, UId}' pairs with the UId each one is
-%% registered with (`undefined' if it could not be read). If the UId is one
-%% the caller passed in its server configurations, a server from an earlier
-%% attempt is still running. This is only detected while the servers are started, so the other
+%% `{error, {members_exist, Existing}}' if a server with the same id as any of
+%% the members is already running. `Existing' has a `{ServerId, UId}' pair for
+%% each such member, where `UId' is the UId of the server that is already
+%% running, not the one in the new configuration. It is read on the member's
+%% node just after its start was refused, and is `undefined' if it could not
+%% be read or the server was gone by then. A UId that matches the one in the
+%% new configuration means a server from an earlier attempt to start the same
+%% cluster is still running; any other UId belongs to a different server.
+%% This is only detected while the servers are started, so the other
 %% servers may already be running and are then deleted again. Until they are
 %% deleted they can contact the running members: a vote request can make a
 %% running member increase its term, and a leader elected among the new
@@ -491,11 +507,15 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, Existing}}' if any of the members are already
-%% running, as a list of `{ServerId, UId}' pairs with the UId each one is
-%% registered with (`undefined' if it could not be read). If the UId is one
-%% the caller passed in its server configurations, a server from an earlier
-%% attempt is still running. This is only detected while the servers are started, so the other
+%% `{error, {members_exist, Existing}}' if a server with the same id as any of
+%% the members is already running. `Existing' has a `{ServerId, UId}' pair for
+%% each such member, where `UId' is the UId of the server that is already
+%% running, not the one in the new configuration. It is read on the member's
+%% node just after its start was refused, and is `undefined' if it could not
+%% be read or the server was gone by then. A UId that matches the one in the
+%% new configuration means a server from an earlier attempt to start the same
+%% cluster is still running; any other UId belongs to a different server.
+%% This is only detected while the servers are started, so the other
 %% servers may already be running and are then deleted again. Until they are
 %% deleted they can contact the running members: a vote request can make a
 %% running member increase its term, and a leader elected among the new
@@ -564,9 +584,9 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
                 case start_server(System, C) of
                     ok  -> true;
                     {error, {already_started, _}} ->
-                        %% a server with the same name is running.
+                        %% a server with the same name is already running.
                         %% Reported as the worker's exit reason, with the
-                        %% UId it is registered with.
+                        %% UId of that running server (not the one in C).
                         exit({already_started,
                               existing_uid(System, C, Timeout)});
                     %% The same, from a node with an older Ra version, which
@@ -665,8 +685,11 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
             end
     end.
 
-%% The UId a running member is registered with, read on its node. This is
-%% only done for members that clash so it does not slow down a normal start.
+%% The UId of the server that holds the member's name, read on its node after
+%% the start was refused. This is not atomic with the refused start: if that
+%% server has been deleted since, this is `undefined', or the UId of whatever
+%% registered the name in between. It is only done for members that clash so
+%% it does not slow down a normal start.
 existing_uid(System, #{id := Id}, Timeout) ->
     try erpc:call(ra_lib:ra_server_id_node(Id), ra_directory, uid_of,
                   [System, Id], Timeout)
