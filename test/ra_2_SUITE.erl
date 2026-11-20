@@ -36,6 +36,7 @@ all_tests() ->
      force_deleted_server_mem_tables_are_cleaned_up,
      leave_and_delete_server,
      cluster_is_deleted,
+     cluster_exists_with_same_uids,
      cluster_is_deleted_with_server_down,
      cluster_cannot_be_deleted_in_minority,
      diverged_follower,
@@ -118,6 +119,11 @@ end_per_group(Group, Config) ->
 
 init_per_testcase(TestCase, Config) ->
     ra_server_sup_sup:remove_all(?SYS),
+    case lists:member(TestCase, [cluster_is_deleted,
+                                 cluster_exists_with_same_uids]) of
+        true -> ok = application:set_env(ra, report_members_exist, true);
+        false -> ok
+    end,
     ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     ServerName4 = list_to_atom(atom_to_list(TestCase) ++ "4"),
@@ -136,6 +142,10 @@ init_per_testcase(TestCase, Config) ->
      {uid5, atom_to_binary(ServerName5, utf8)},
      {server_id5, {ServerName5, node()}}
      | Config].
+
+end_per_testcase(_TestCase, Config) ->
+    ok = application:unset_env(ra, report_members_exist),
+    Config.
 
 enqueue(Server, Msg) ->
     {ok, _, _} = ra:process_command(Server, {enq, Msg}),
@@ -174,6 +184,14 @@ start_stopped_server(Config) ->
     ok = enqueue(ServerId, msg1),
     %%
     {error, {already_started, _}} = ra:start_server(?SYS, Conf),
+    %% the same name with another uid is reported by the supervisor;
+    %% callers such as khepri match this error
+    OtherUId = ra:new_uid(ra_lib:to_binary(ClusterName)),
+    Pid = whereis(element(1, ServerId)),
+    ?assertMatch({error, {shutdown, {failed_to_start_child, _,
+                                     {already_started, Pid}}}},
+                 ra:start_server(?SYS, Conf#{uid => OtherUId,
+                                             log_init_args => #{uid => OtherUId}})),
     ok = ra:stop_server(?SYS, ServerId),
     {error, not_new} = ra:start_server(?SYS, Conf),
     ok = ra:restart_server(?SYS, ServerId),
@@ -331,7 +349,7 @@ cluster_is_deleted(Config) ->
     %% redeclaring the same cluster should fail
     {error, {members_exist, Existing}} =
         ra:start_cluster(?SYS, ClusterName, {module, ?MODULE, #{}}, Peers),
-    ?assertEqual(lists:sort(Peers), lists:sort(Existing)),
+    ?assertEqual(lists:sort(lists:zip(Peers, UIds)), lists:sort(Existing)),
     {ok, _} = ra:delete_cluster(Peers),
     %% Assert all ETS tables are deleted for each UId
 
@@ -339,6 +357,32 @@ cluster_is_deleted(Config) ->
     ?assertEqual(undefined, ra_leaderboard:lookup_leader(ClusterName)),
 
     ok = start_cluster(ClusterName, Peers),
+    ok.
+
+cluster_exists_with_same_uids(Config) ->
+    ClusterName = ?config(cluster_name, Config),
+    Peers = [?config(server_id, Config),
+             ?config(server_id2, Config),
+             ?config(server_id3, Config)],
+    Machine = {module, ?MODULE, #{}},
+    Configs = [begin
+                   UId = ra:new_uid(ra_lib:to_binary(ClusterName)),
+                   #{id => Id,
+                     uid => UId,
+                     cluster_name => ClusterName,
+                     log_init_args => #{uid => UId},
+                     initial_members => Peers,
+                     machine => Machine}
+               end || Id <- Peers],
+    {ok, Started, []} = ra:start_cluster(?SYS, Configs),
+    ?assertEqual(lists:sort(Peers), lists:sort(Started)),
+    %% starting the same configs again finds the running servers by uid
+    %% and reports the uids, which are the ones in the configs
+    {error, {members_exist, Existing}} = ra:start_cluster(?SYS, Configs),
+    ?assertEqual(lists:sort([{Id, UId} || #{id := Id, uid := UId} <- Configs]),
+                 lists:sort(Existing)),
+    [?assertMatch({pong, _}, ra_server_proc:ping(N, 500)) || N <- Peers],
+    {ok, _} = ra:delete_cluster(Peers),
     ok.
 
 validate_ets_table_deletes(UIds, Pids, Peers) ->

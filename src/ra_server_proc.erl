@@ -333,12 +333,20 @@ do_init(#{id := Id,
           cluster_name := ClusterName} = Config0)
   when is_pid(ParentPid) ->
     Key = ra_lib:ra_server_id_to_local_name(Id),
-    true = ets:insert(ra_state, {Key, init, unknown}),
     process_flag(trap_exit, true),
+    #{names := Names} = SysConf =
+        maps:get(system_config, Config0, ra_system:default_config()),
+    %% We need to register _before_ log is initialised as log init writes
+    %% index 0 and mem tables may be cleared up if a member is not registered.
+    %% Registering before creating the state kept by name (the ra_state row
+    %% and the counters) also lets a delete of an earlier server with the
+    %% same name see this one and leave that state alone.
+    ok = ra_directory:register_name(Names, UId, self(),
+                                    ParentPid, Key, ClusterName),
+    true = ets:insert(ra_state, {Key, init, unknown}),
     MetricLabels = maps:get(metrics_labels, Config0, #{}),
     Config = maps:merge(config_defaults(Id, MetricLabels), Config0),
-    #{counter := Counter,
-      system_config := #{names := Names} = SysConf} = Config,
+    #{counter := Counter} = Config,
     MsgQData = maps:get(message_queue_data, SysConf, off_heap),
     MinBinVheapSize = maps:get(server_min_bin_vheap_size, SysConf,
                                ?MIN_BIN_VHEAP_SIZE),
@@ -346,12 +354,6 @@ do_init(#{id := Id,
     process_flag(message_queue_data, MsgQData),
     process_flag(min_bin_vheap_size, MinBinVheapSize),
     process_flag(min_heap_size, MinHeapSize),
-    #{names := Names} = SysConf,
-    %% We need to register _before_ log is initialised as log init writes
-    %% index 0 and mem tables may be cleared up if a member is not registered.
-    Parent = maps:get(parent, Config, undefined),
-    ok = ra_directory:register_name(Names, UId, self(),
-                                    Parent, Key, ClusterName),
     #{cluster := Cluster} = ServerState = ra_server:init(Config),
 
     % ensure each relevant erlang node is connected
@@ -1039,16 +1041,34 @@ terminating_leader(_EvtType, {command, _, _}, State0) ->
 terminating_leader(EvtType, Msg, State0) ->
     LogName = log_id(State0),
     ?DEBUG("~ts: terminating leader received ~W", [LogName, Msg, 10]),
-    {State, Actions} = case leader(EvtType, Msg, State0) of
-                           {next_state, terminating_leader, S, A} ->
-                               {S, A};
-                           {keep_state, S, A} ->
-                               {S, A};
-                           {stop, shutdown, S} ->
-                               {S, []};
-                           {stop, {shutdown, delete}, S} ->
-                               {S, []}
-                       end,
+    case leader(EvtType, Msg, State0) of
+        {stop, {shutdown, delete}, State} ->
+            terminating_leader_continue(LogName, Msg, State, []);
+        %% A membership change removed this server: the cluster is being
+        %% deleted anyway so delete rather than just stop.
+        {stop, normal, State} ->
+            {stop, {shutdown, delete}, State};
+        %% Any other stop (e.g. the worker crashed or shut down) keeps its
+        %% reason so that the data is not deleted and the cause is not
+        %% hidden. The server cannot carry on without its worker.
+        {stop, _, _} = Stop ->
+            Stop;
+        %% Stepping down (e.g. a higher term was seen): this server must
+        %% stop acting as leader. The delete command has already been
+        %% applied here so it will not be applied again: wait as a
+        %% terminating follower until the log is persisted, then delete.
+        {next_state, follower, State, Actions} ->
+            ?DEBUG("~ts: terminating leader stepping down", [LogName]),
+            next_state(terminating_follower, State, Actions);
+        %% Still the leader in the same term, e.g. `await_condition' when
+        %% the WAL is down or a leadership transfer was requested.
+        {next_state, _, State, Actions} ->
+            terminating_leader_continue(LogName, Msg, State, Actions);
+        {keep_state, State, Actions} ->
+            terminating_leader_continue(LogName, Msg, State, Actions)
+    end.
+
+terminating_leader_continue(LogName, Msg, State, Actions) ->
     NS = State#state.server_state,
     case ra_server:is_fully_replicated(NS) of
         true ->
@@ -1066,17 +1086,23 @@ terminating_follower(EvtType, Msg, State0) ->
     % only process ra_log_events
     LogName = log_id(State0),
     ?DEBUG("~ts: terminating follower received ~W", [LogName, Msg, 10]),
-    {State, Actions} = case follower(EvtType, Msg, State0) of
-                           {next_state, terminating_follower, S, A} ->
-                               {S, A};
-                           {next_state, NextState, S, A} ->
-                               ?DEBUG("~ts: terminating follower requested state '~s'"
-                                      " - remaining in current state",
-                                      [LogName, NextState]),
-                               {S, A};
-                           {keep_state, S, A} ->
-                               {S, A}
-                       end,
+    case follower(EvtType, Msg, State0) of
+        %% For example when the worker exits. The reason is kept, as it is
+        %% for a terminating leader.
+        {stop, _, _} = Stop ->
+            Stop;
+        {next_state, terminating_follower, S, A} ->
+            terminating_follower_continue(Msg, S, A);
+        {next_state, NextState, S, A} ->
+            ?DEBUG("~ts: terminating follower requested state '~s'"
+                   " - remaining in current state",
+                   [LogName, NextState]),
+            terminating_follower_continue(Msg, S, A);
+        {keep_state, S, A} ->
+            terminating_follower_continue(Msg, S, A)
+    end.
+
+terminating_follower_continue(Msg, State, Actions) ->
     case ra_server:is_fully_persisted(State#state.server_state) of
         true ->
             {stop, {shutdown, delete}, State};
@@ -1225,7 +1251,8 @@ terminate(Reason, StateName,
             %% after the server is removed from the ra directory.
             %% This is so that the segment writer can avoid
             %% crashing if it detects a missing key
-            ?CATCH(ra_directory:unregister_name(Names, UId)),
+            ?CATCH(ra_directory:unregister_name(
+                     Names, ra_lib:ra_server_id_to_local_name(Id), UId)),
             ?CATCH(ra_log_wal:forget_writer(maps:get(wal, Names), UId)),
             _ = ra_server:terminate(ServerState, Reason),
             ?CATCH(ra_log_meta:delete_sync(MetaName, UId)),

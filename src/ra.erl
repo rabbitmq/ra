@@ -51,6 +51,7 @@
          stop_server/2,
          force_delete_server/2,
          force_delete_server/3,
+         force_delete_server/4,
          trigger_election/1,
          trigger_election/2,
          %% membership changes
@@ -263,6 +264,13 @@ force_delete_server(System, ServerId) ->
 %% The server is forcefully deleted. The timeout bounds the remote calls made
 %% to the server's node, so a member on a slow or unreachable node fails with
 %% `{badrpc, timeout}' instead of blocking indefinitely.
+%%
+%% A timeout does not stop the delete: it may still be running on the server's
+%% node after this function has returned. Before starting a server with the
+%% same name, confirm that the delete has finished, for example by checking
+%% on that node that `ra_directory:uid_of/2' no longer returns the old
+%% UId. Coordinating this with other operations on the same server is the
+%% caller's responsibility.
 %% @param ServerId the ra_server_id() of the server
 %% @param Timeout the timeout in milliseconds or `infinity'
 %% @returns `ok | {error, nodedown} | {badrpc, Reason}'
@@ -272,6 +280,26 @@ force_delete_server(System, ServerId) ->
     ok | {error, term()} | {badrpc, term()}.
 force_delete_server(System, ServerId, Timeout) ->
     ra_server_sup_sup:delete_server(System, ServerId, Timeout).
+
+%% @doc Deletes a ra server only if it is registered with the given UId.
+%% The check and the delete run on the server's node, so a server that has
+%% since been replaced by one with a different UId is not removed.
+%%
+%% As with {@link force_delete_server/3}, a timeout does not stop the delete,
+%% so confirm that it has finished before starting a server with the same name.
+%% The UId check protects against a replacement that has already started, not
+%% against one started while the delete is still running.
+%% @param ServerId the ra_server_id() of the server
+%% @param UId the UId the server is expected to be registered with
+%% @param Timeout the timeout in milliseconds or `infinity'
+%% @returns `ok' if the server was deleted or is no longer registered,
+%% `{error, not_owner}' if it is registered with a different UId.
+%% @end
+-spec force_delete_server(atom(), ServerId :: ra_server_id(), ra_uid(),
+                          Timeout :: timeout()) ->
+    ok | {error, term()} | {badrpc, term()}.
+force_delete_server(System, ServerId, UId, Timeout) ->
+    ra_server_sup_sup:delete_server(System, ServerId, UId, Timeout).
 
 %% @doc Starts or restarts a ra cluster.
 %%
@@ -287,8 +315,26 @@ force_delete_server(System, ServerId, Timeout) ->
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, ServerIds}}' if any of the members are already
-%% running. In this case nothing is started or deleted.
+%% `{error, {members_exist, Existing}}' if the `report_members_exist'
+%% application environment variable of `ra' is `true' and a server with the
+%% same id as any of the members is already running. It is `false' by
+%% default, and then such a member counts as a server that could not be
+%% started, as in earlier versions of Ra.
+%% `Existing' has a `{ServerId, UId}' pair for
+%% each such member, where `UId' is the UId of the server that is already
+%% running, not the one in the new configuration. It is read on the member's
+%% node once the servers have been started, and is `undefined' if it could
+%% not be read in time or the server was gone by then. A UId that matches the one in the
+%% new configuration means a server from an earlier attempt to start the same
+%% cluster is still running; any other UId belongs to a different server.
+%% This is only detected while the servers are started, so the other
+%% servers may already be running and are then deleted again. Until they are
+%% deleted they can contact the running members: a vote request can make a
+%% running member increase its term, and a leader elected among the new
+%% servers can replace entries in its log. Making sure that none of the members
+%% are running is the caller's responsibility, see {@link start_cluster/2}.
+%% A stale member can be removed with {@link force_delete_server/4} and its
+%% UId, which refuses to delete a server that has since been replaced.
 %%
 %% If there was no existing cluster and a new cluster could not be formed
 %% any servers that did manage to start are
@@ -297,7 +343,8 @@ force_delete_server(System, ServerId, Timeout) ->
 -spec start_or_restart_cluster(atom(), ra_cluster_name(), ra_server:machine_conf(),
                                [ra_server_id()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
+    {error, cluster_not_formed |
+     {members_exist, [{ra_server_id(), ra_uid() | undefined}]}}.
 start_or_restart_cluster(System, ClusterName, Machine, ServerIds) ->
     start_or_restart_cluster(System, ClusterName, Machine, ServerIds, ?START_TIMEOUT).
 
@@ -314,8 +361,26 @@ start_or_restart_cluster(System, ClusterName, Machine, ServerIds) ->
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, ServerIds}}' if any of the members are already
-%% running. In this case nothing is started or deleted.
+%% `{error, {members_exist, Existing}}' if the `report_members_exist'
+%% application environment variable of `ra' is `true' and a server with the
+%% same id as any of the members is already running. It is `false' by
+%% default, and then such a member counts as a server that could not be
+%% started, as in earlier versions of Ra.
+%% `Existing' has a `{ServerId, UId}' pair for
+%% each such member, where `UId' is the UId of the server that is already
+%% running, not the one in the new configuration. It is read on the member's
+%% node once the servers have been started, and is `undefined' if it could
+%% not be read in time or the server was gone by then. A UId that matches the one in the
+%% new configuration means a server from an earlier attempt to start the same
+%% cluster is still running; any other UId belongs to a different server.
+%% This is only detected while the servers are started, so the other
+%% servers may already be running and are then deleted again. Until they are
+%% deleted they can contact the running members: a vote request can make a
+%% running member increase its term, and a leader elected among the new
+%% servers can replace entries in its log. Making sure that none of the members
+%% are running is the caller's responsibility, see {@link start_cluster/2}.
+%% A stale member can be removed with {@link force_delete_server/4} and its
+%% UId, which refuses to delete a server that has since been replaced.
 %%
 %% If there was no existing cluster and a new cluster could not be formed
 %% any servers that did manage to start are
@@ -325,7 +390,8 @@ start_or_restart_cluster(System, ClusterName, Machine, ServerIds) ->
 -spec start_or_restart_cluster(atom(), ra_cluster_name(), ra_server:machine_conf(),
                                [ra_server_id()], non_neg_integer()) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
+    {error, cluster_not_formed |
+     {members_exist, [{ra_server_id(), ra_uid() | undefined}]}}.
 start_or_restart_cluster(System, ClusterName, Machine,
                          [FirstServer | RemServers] = ServerIds, Timeout) ->
     case ra_server_sup_sup:restart_server(System, FirstServer, #{}) of
@@ -352,8 +418,26 @@ start_or_restart_cluster(System, ClusterName, Machine,
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, ServerIds}}' if any of the members are already
-%% running. In this case nothing is started or deleted.
+%% `{error, {members_exist, Existing}}' if the `report_members_exist'
+%% application environment variable of `ra' is `true' and a server with the
+%% same id as any of the members is already running. It is `false' by
+%% default, and then such a member counts as a server that could not be
+%% started, as in earlier versions of Ra.
+%% `Existing' has a `{ServerId, UId}' pair for
+%% each such member, where `UId' is the UId of the server that is already
+%% running, not the one in the new configuration. It is read on the member's
+%% node once the servers have been started, and is `undefined' if it could
+%% not be read in time or the server was gone by then. A UId that matches the one in the
+%% new configuration means a server from an earlier attempt to start the same
+%% cluster is still running; any other UId belongs to a different server.
+%% This is only detected while the servers are started, so the other
+%% servers may already be running and are then deleted again. Until they are
+%% deleted they can contact the running members: a vote request can make a
+%% running member increase its term, and a leader elected among the new
+%% servers can replace entries in its log. Making sure that none of the members
+%% are running is the caller's responsibility, see {@link start_cluster/2}.
+%% A stale member can be removed with {@link force_delete_server/4} and its
+%% UId, which refuses to delete a server that has since been replaced.
 %%
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
@@ -363,7 +447,8 @@ start_or_restart_cluster(System, ClusterName, Machine,
                     ra_server:machine_conf(),
                     [ra_server_id()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
+    {error, cluster_not_formed |
+     {members_exist, [{ra_server_id(), ra_uid() | undefined}]}}.
 start_cluster(System, ClusterName, Machine, ServerIds)
   when is_atom(System) ->
     start_cluster(System, ClusterName, Machine, ServerIds, ?START_TIMEOUT).
@@ -382,8 +467,26 @@ start_cluster(System, ClusterName, Machine, ServerIds)
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, ServerIds}}' if any of the members are already
-%% running. In this case nothing is started or deleted.
+%% `{error, {members_exist, Existing}}' if the `report_members_exist'
+%% application environment variable of `ra' is `true' and a server with the
+%% same id as any of the members is already running. It is `false' by
+%% default, and then such a member counts as a server that could not be
+%% started, as in earlier versions of Ra.
+%% `Existing' has a `{ServerId, UId}' pair for
+%% each such member, where `UId' is the UId of the server that is already
+%% running, not the one in the new configuration. It is read on the member's
+%% node once the servers have been started, and is `undefined' if it could
+%% not be read in time or the server was gone by then. A UId that matches the one in the
+%% new configuration means a server from an earlier attempt to start the same
+%% cluster is still running; any other UId belongs to a different server.
+%% This is only detected while the servers are started, so the other
+%% servers may already be running and are then deleted again. Until they are
+%% deleted they can contact the running members: a vote request can make a
+%% running member increase its term, and a leader elected among the new
+%% servers can replace entries in its log. Making sure that none of the members
+%% are running is the caller's responsibility, see {@link start_cluster/2}.
+%% A stale member can be removed with {@link force_delete_server/4} and its
+%% UId, which refuses to delete a server that has since been replaced.
 %%
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
@@ -394,7 +497,8 @@ start_cluster(System, ClusterName, Machine, ServerIds)
                     [ra_server_id()],
                     non_neg_integer()) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
+    {error, cluster_not_formed |
+     {members_exist, [{ra_server_id(), ra_uid() | undefined}]}}.
 start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
   when is_atom(System) ->
     Configs = [begin
@@ -419,8 +523,26 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, ServerIds}}' if any of the members are already
-%% running. In this case nothing is started or deleted.
+%% `{error, {members_exist, Existing}}' if the `report_members_exist'
+%% application environment variable of `ra' is `true' and a server with the
+%% same id as any of the members is already running. It is `false' by
+%% default, and then such a member counts as a server that could not be
+%% started, as in earlier versions of Ra.
+%% `Existing' has a `{ServerId, UId}' pair for
+%% each such member, where `UId' is the UId of the server that is already
+%% running, not the one in the new configuration. It is read on the member's
+%% node once the servers have been started, and is `undefined' if it could
+%% not be read in time or the server was gone by then. A UId that matches the one in the
+%% new configuration means a server from an earlier attempt to start the same
+%% cluster is still running; any other UId belongs to a different server.
+%% This is only detected while the servers are started, so the other
+%% servers may already be running and are then deleted again. Until they are
+%% deleted they can contact the running members: a vote request can make a
+%% running member increase its term, and a leader elected among the new
+%% servers can replace entries in its log. Making sure that none of the members
+%% are running is the caller's responsibility, see below.
+%% A stale member can be removed with {@link force_delete_server/4} and its
+%% UId, which refuses to delete a server that has since been replaced.
 %%
 %% If a cluster could not be formed any servers that did manage to start are
 %% forcefully deleted.
@@ -430,22 +552,35 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %% call are deleted by uid and servers that failed to start are left alone.
 %% It does not guarantee that nothing is left behind. For example a start
 %% that was already queued on a slow or suspended supervisor may still complete
-%% after this function has returned. Leftover servers can be removed with
-%% {@link force_delete_server/2}.
+%% after this function has returned. The same applies to the cleanup itself:
+%% a delete that times out may still be running on the server's node. Before
+%% retrying with the same server ids, remove any leftover servers with
+%% {@link force_delete_server/2} and confirm on each server's node that
+%% `ra_directory:uid_of/2' returns `undefined' for the server's name.
+%% See {@link force_delete_server/3}.
 %%
 %% Concurrent cluster operations on the same members are not supported. This
 %% includes concurrent calls to `start_cluster' as well as starting, restarting
 %% or deleting the same servers while a cluster is being started. The checks
-%% made before and during startup are not atomic, so racing operations can
-%% result in servers being missed or incorrectly cleaned up. Servers that are
-%% registered but not running (for example stopped servers) are not detected
-%% by the pre-check, so do not reuse the uid of such a server in a new cluster
-%% configuration as it may be deleted if startup times out.
+%% made during startup are not atomic, so racing operations can result in
+%% servers being missed or incorrectly cleaned up. Servers that are registered
+%% but not running (for example stopped servers) are not detected, so do not
+%% reuse the uid of such a server in a new cluster configuration as it may be
+%% deleted if startup times out.
 %% Use an external lock service or equivalent to serialise cluster operations.
+%%
+%% Ra does not check that the members are free before it starts any of them.
+%% `{members_exist, Existing}', when enabled, is a last resort, not a
+%% guarantee: by the time
+%% it is returned the new servers may already have disturbed the running
+%% members (see above). Callers must make sure, for example under the same
+%% lock, that no server with any of the given ids is running before calling
+%% `start_cluster'.
 %% @end
 -spec start_cluster(atom(), [ra_server:ra_server_config()]) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
+    {error, cluster_not_formed |
+     {members_exist, [{ra_server_id(), ra_uid() | undefined}]}}.
 start_cluster(System, ServerConfigs)
   when is_atom(System) ->
     start_cluster(System, ServerConfigs, ?START_TIMEOUT).
@@ -458,45 +593,35 @@ start_cluster(System, ServerConfigs)
 -spec start_cluster(atom(),
                     [ra_server:ra_server_config()], non_neg_integer()) ->
     {ok, [ra_server_id()], [ra_server_id()]} |
-    {error, cluster_not_formed | {members_exist, [ra_server_id()]}}.
+    {error, cluster_not_formed |
+     {members_exist, [{ra_server_id(), ra_uid() | undefined}]}}.
 start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
               Timeout) when is_atom(System) ->
-    case existing_members(ServerConfigs, Timeout) of
-        [] ->
-            do_start_cluster(System, ClusterName, ServerConfigs, Timeout);
-        Existing ->
-            ?WARN("ra: not starting cluster ~tw, members already exist: ~tw",
-                  [ClusterName, Existing]),
-            {error, {members_exist, Existing}}
-    end.
-
-%% returns the ids of any members whose server is already running on its node.
-%% The cluster name is informational only so is not considered. Unreachable
-%% nodes are ignored here as starting a server on them will fail anyway.
-%% Servers that are stopped but still registered are not detected, and another
-%% caller can start a member between this check and our own start attempt.
-existing_members(ServerConfigs, Timeout) ->
-    Check = fun (#{id := {Name, Node}}) ->
-                    try erpc:call(Node, erlang, whereis, [Name], Timeout) of
-                        undefined -> false;
-                        _Pid -> true
-                    catch _:_ ->
-                              false
-                    end
-            end,
-    %% checked in parallel so the whole check is bounded by Timeout. Nodes
-    %% that do not answer in time are treated like unreachable ones.
-    Existing = case ra_lib:partition_parallel(Check, ServerConfigs, Timeout) of
-                   {ok, E, _} -> E;
-                   {error, {partition_parallel_timeout, E, _, _}} -> E
-               end,
-    [Id || #{id := Id} <- Existing].
+    do_start_cluster(System, ClusterName, ServerConfigs, Timeout).
 
 do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
+    %% off by default as the members_exist error is not returned by earlier
+    %% versions; a running member then counts as one that failed to start
+    %% TODO: remove report_members_exist in the next major Ra release and
+    %% always report existing members
+    ReportExisting = application:get_env(ra, report_members_exist, false),
     case ra_lib:partition_parallel(
             fun (C) ->
                 case start_server(System, C) of
                     ok  -> true;
+                    %% a server with the same UId is already running.
+                    %% Reported as the worker's exit reason. Its UId is read
+                    %% after all workers are done, so that a slow read
+                    %% cannot make this worker miss the deadline and be
+                    %% deleted as a pending one.
+                    {error, {already_started, _}} when ReportExisting ->
+                        exit(already_started);
+                    %% a server with the same name but another UId is
+                    %% already running, as reported by the supervisor.
+                    {error, {shutdown, {failed_to_start_child, _,
+                                        {already_started, _}}}}
+                      when ReportExisting ->
+                        exit(already_started);
                     Err ->
                         ?ERR("ra: failed to start a server ~tw, error: ~p",
                               [C, Err]),
@@ -504,7 +629,17 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
                 end
             end, ServerConfigs, Timeout) of
         {ok, Started, NotStarted} ->
+            Existing = existing_uids(
+                         System, [C || {C, already_started} <- NotStarted],
+                         Timeout),
             case Started of
+                _ when Existing =/= [] ->
+                    %% A running member with the same server id would take part
+                    %% in the new cluster with the log of an earlier one.
+                    ?WARN("ra: not starting cluster ~tw, members already exist: ~tw",
+                          [ClusterName, Existing]),
+                    delete_owned_servers(System, Started, Timeout),
+                    {error, {members_exist, Existing}};
                 [] ->
                     ?ERR("ra: failed to form a new cluster ~tw. "
                         "No servers were successfully started.",
@@ -513,14 +648,16 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
                 _ ->
                     StartedIds = sort_by_local([I || #{id := I} <- Started], []),
                     NotStartedIds = [I || #{id := I} <- NotStarted],
-                    %% try triggering elections until one succeeds
-                    %% TODO: handle case where no election was successfully triggered
-                    {value, TriggeredId} = lists:search(fun (N) ->
-                                                                ok == trigger_election(N)
-                                                        end, StartedIds),
-                    %% the triggered id is likely to become the leader so try that first
-                    case members(TriggeredId,
-                                length(ServerConfigs) * Timeout) of
+                    Res = case trigger_any_election(StartedIds, Timeout) of
+                              {ok, TriggeredId} ->
+                                  %% the triggered id is likely to become the
+                                  %% leader so try that first
+                                  members(TriggeredId,
+                                          length(ServerConfigs) * Timeout);
+                              error ->
+                                  {error, no_election_triggered}
+                          end,
+                    case Res of
                         {ok, _, Leader} ->
                             ?INFO("ra: started cluster ~tw with ~b servers. "
                                 "~b servers failed to start: ~tw. Leader: ~tw",
@@ -553,13 +690,75 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
             %%   crashed (which may have registered a server) are cleaned up.
             %% - a delete that times out (e.g. unresponsive node or supervisor)
             %%   is not retried and its result is ignored.
-            %% - the pre-check in existing_members/2 and the uid check in
-            %%   delete_server/4 are not atomic with starting servers.
+            %% - the uid check in delete_server/4 is not atomic with
+            %%   starting servers.
             %%   Concurrent cluster operations are documented as unsupported.
             %% Leftover servers can be removed with ra:force_delete_server/2.
-            Crashed = [C || {C, _Reason} <- Failed],
+            %%
+            %% A member that is already running is not ours to delete but is
+            %% reported, as it is without a timeout. A pending member may also
+            %% be running, but that is not known.
+            Existing = existing_uids(
+                         System, [C || {C, already_started} <- Failed],
+                         Timeout),
+            Crashed = [C || {C, Reason} <- Failed, Reason =/= already_started],
             delete_owned_servers(System, Started ++ Pending ++ Crashed, Timeout),
-            {error, cluster_not_formed}
+            case Existing of
+                [] ->
+                    {error, cluster_not_formed};
+                _ ->
+                    ?WARN("ra: not starting cluster ~tw, members already exist: ~tw",
+                          [ClusterName, Existing]),
+                    {error, {members_exist, Existing}}
+            end
+    end.
+
+%% The UIds of the servers that hold the names of the members that clashed,
+%% read in parallel on their nodes, within Timeout. Each read is not atomic
+%% with the refused start: if that server has been deleted since, its UId is
+%% `undefined', or the UId of whatever registered the name in between. It is
+%% `undefined' too if it could not be read in time. It is only done for
+%% members that clash so it does not slow down a normal start.
+existing_uids(_System, [], _Timeout) ->
+    [];
+existing_uids(System, Configs, Timeout) ->
+    Deadline = case Timeout of
+                   infinity -> infinity;
+                   _ -> erlang:monotonic_time(millisecond) + Timeout
+               end,
+    Reqs = [{Id, erpc:send_request(ra_lib:ra_server_id_node(Id), ra_directory,
+                                   uid_of, [System, Id])}
+            || #{id := Id} <- Configs],
+    [{Id, receive_uid(ReqId, Deadline)} || {Id, ReqId} <- Reqs].
+
+receive_uid(ReqId, Deadline) ->
+    Remaining = case Deadline of
+                    infinity -> infinity;
+                    _ -> max(0, Deadline - erlang:monotonic_time(millisecond))
+                end,
+    try erpc:receive_response(ReqId, Remaining)
+    catch
+        _:_ -> undefined
+    end.
+
+%% A started server can be stopped or deleted before its election is triggered.
+%% All attempts together are bounded by Timeout.
+trigger_any_election(Ids, Timeout) ->
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
+    trigger_any_election0(Ids, Deadline).
+
+trigger_any_election0([], _Deadline) ->
+    error;
+trigger_any_election0([Id | Rem], Deadline) ->
+    case Deadline - erlang:monotonic_time(millisecond) of
+        Remaining when Remaining > 0 ->
+            try trigger_election(Id, Remaining) of
+                ok -> {ok, Id}
+            catch
+                exit:_ -> trigger_any_election0(Rem, Deadline)
+            end;
+        _ ->
+            error
     end.
 
 %% deletes the servers in parallel, but only if they still have the uid we

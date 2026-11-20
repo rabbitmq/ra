@@ -35,6 +35,20 @@ all_tests() ->
     [
      single_server_processes_command,
      delete_server_checks_uid,
+     delete_server_keeps_replacement,
+     delete_server_keeps_starting_replacement_state,
+     delete_server_clears_leaderboard,
+     start_cluster_when_member_exits,
+     start_cluster_election_timeout,
+     start_cluster_timeout_members_exist,
+     start_cluster_members_exist_other_uid,
+     start_cluster_members_exist_not_reported,
+     start_cluster_slow_uid_read_keeps_member,
+     terminating_leader_stops_on_stop,
+     terminating_leader_steps_down,
+     terminating_leader_keeps_stop_reason,
+     terminating_leader_stops_on_worker_shutdown,
+     terminating_follower_stops_on_worker_shutdown,
      pipeline_commands,
      stop_server_idemp,
      minority,
@@ -129,9 +143,16 @@ end_per_group(_, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
+    case lists:member(TestCase, [start_cluster_timeout_members_exist,
+                                 start_cluster_members_exist_other_uid,
+                                 start_cluster_slow_uid_read_keeps_member]) of
+        true -> ok = application:set_env(ra, report_members_exist, true);
+        false -> ok
+    end,
     [{test_name, ra_lib:to_list(TestCase)} | Config].
 
 end_per_testcase(_TestCase, Config) ->
+    ok = application:unset_env(ra, report_members_exist),
     flush(),
     ra_server_sup_sup:remove_all(default),
     Config.
@@ -167,6 +188,401 @@ delete_server_checks_uid(Config) ->
     %% nothing registered is a no-op
     ?assertEqual(ok, ra_server_sup_sup:delete_server(default, N1, UId, 5000)),
     ok.
+
+delete_server_keeps_replacement(Config) ->
+    Name = ?config(test_name, Config),
+    {RaName, _} = N1 = nth_server_name(Config, 1),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
+    OldUId = ra_directory:uid_of(default, RaName),
+    ok = ra:stop_server(default, N1),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
+    NewUId = ra_directory:uid_of(default, RaName),
+    ?assertNotEqual(OldUId, NewUId),
+    meck:new(ra_directory, [passthrough]),
+    try
+        %% as if the replacement registered just after the delete checked
+        %% that the name is still held by the old uid
+        meck:expect(ra_directory, uid_of,
+                    fun (Names, N) when is_map(Names), N =:= RaName ->
+                            OldUId;
+                        (S, N) ->
+                            meck:passthrough([S, N])
+                    end),
+        ?assertEqual(ok, ra:force_delete_server(default, N1, OldUId, 5000))
+    after
+        meck:unload(ra_directory)
+    end,
+    ?assertEqual(NewUId, ra_directory:uid_of(default, RaName)),
+    ?assert(filelib:is_dir(ra_env:server_data_dir(default, NewUId))),
+    ?assert(is_pid(whereis(RaName))),
+    terminate_cluster([N1]),
+    ok.
+
+delete_server_keeps_starting_replacement_state(Config) ->
+    Name = ?config(test_name, Config),
+    {RaName, _} = N1 = nth_server_name(Config, 1),
+    ok = ra:start_server(default, Name, N1, add_machine(), []),
+    OldUId = ra_directory:uid_of(default, RaName),
+    ok = ra:stop_server(default, N1),
+    NewUId = ra:new_uid(ra_lib:to_binary(Name)),
+    Self = self(),
+    meck:new(ra_directory, [passthrough]),
+    try
+        %% hold the replacement just before it registers
+        meck:expect(ra_directory, register_name,
+                    fun (Names, U, Pid, Parent, SName, CName) when U =:= NewUId ->
+                            Self ! {registering, self()},
+                            receive go -> ok end,
+                            meck:passthrough([Names, U, Pid, Parent, SName, CName]);
+                        (Names, U, Pid, Parent, SName, CName) ->
+                            meck:passthrough([Names, U, Pid, Parent, SName, CName])
+                    end),
+        Conf = #{id => N1,
+                 uid => NewUId,
+                 cluster_name => Name,
+                 log_init_args => #{uid => NewUId},
+                 initial_members => [N1],
+                 machine => add_machine()},
+        Starter = spawn_link(fun () ->
+                                     Self ! {started, ra:start_server(default, Conf)}
+                             end),
+        ServerPid = receive
+                        {registering, P} -> P
+                    after 10000 ->
+                              ct:fail(replacement_did_not_start)
+                    end,
+        %% the replacement is not registered yet so this deletes the state
+        %% kept by name, which must not include any of the replacement's
+        ok = ra:force_delete_server(default, N1, OldUId, 10000),
+        ServerPid ! go,
+        receive
+            {started, Res} -> ?assertEqual(ok, Res)
+        after 10000 ->
+                  ct:fail({replacement_did_not_finish, Starter})
+        end
+    after
+        meck:unload(ra_directory)
+    end,
+    ?assertEqual(NewUId, ra_directory:uid_of(default, RaName)),
+    ?assertNotEqual(undefined, ra_counters:fetch(N1)),
+    ?assertMatch([_], ets:lookup(ra_state, RaName)),
+    terminate_cluster([N1]),
+    ok.
+
+delete_server_clears_leaderboard(Config) ->
+    %% the cluster name differs from the server name
+    ClusterName = ?config(test_name, Config),
+    {RaName, _} = N1 = nth_server_name(Config, 1),
+    ?assertNotEqual(ClusterName, RaName),
+    ok = ra:start_server(default, ClusterName, N1, add_machine(), []),
+    ok = ra:stop_server(default, N1),
+    %% an entry left behind, e.g. by a server that was killed
+    ok = ra_leaderboard:record(ClusterName, N1, [N1]),
+    ok = ra:force_delete_server(default, N1),
+    ?assertEqual(undefined, ra_leaderboard:lookup_leader(ClusterName)),
+    ok.
+
+start_cluster_when_member_exits(Config) ->
+    Name = ?config(test_name, Config),
+    [{RaName1, _} = N1, N2, N3] = Ids =
+        [nth_server_name(Config, I) || I <- [1, 2, 3]],
+    meck:new(ra_server_proc, [passthrough]),
+    try
+        meck:expect(ra_server_proc, trigger_election,
+                    fun (_, _) -> exit(noproc) end),
+        ?assertEqual({error, cluster_not_formed},
+                     ra:start_cluster(default, Name, {module, ra_queue, #{}}, Ids)),
+        [?assertEqual(undefined, ra_directory:uid_of(default, N))
+         || {N, _} <- Ids],
+        meck:expect(ra_server_proc, trigger_election,
+                    fun ({N, _}, _) when N =:= RaName1 -> exit(noproc);
+                        (Id, T) -> meck:passthrough([Id, T])
+                    end),
+        ?assertMatch({ok, _, []},
+                     ra:start_cluster(default, Name, {module, ra_queue, #{}}, Ids))
+    after
+        meck:unload(ra_server_proc)
+    end,
+    terminate_cluster([N1, N2, N3]),
+    ok.
+
+start_cluster_timeout_members_exist(Config) ->
+    Name = ?config(test_name, Config),
+    [N1, N2, {RaName3, _} = N3] = Ids =
+        [nth_server_name(Config, I) || I <- [1, 2, 3]],
+    Self = self(),
+    meck:new(ra_server_sup_sup, [passthrough]),
+    try
+        %% N1 clashes with a running server, N2 is slow and N3 starts
+        meck:expect(ra_server_sup_sup, start_server,
+                    fun (_, #{id := Id}) when Id =:= N1 ->
+                            {error, {already_started, Self}};
+                        (_, #{id := Id}) when Id =:= N2 ->
+                            timer:sleep(infinity);
+                        (Sys, Conf) ->
+                            meck:passthrough([Sys, Conf])
+                    end),
+        Configs = [begin
+                       UId = ra:new_uid(ra_lib:to_binary(Name)),
+                       #{id => Id,
+                         uid => UId,
+                         cluster_name => Name,
+                         log_init_args => #{uid => UId},
+                         initial_members => Ids,
+                         machine => {module, ra_queue, #{}}}
+                   end || Id <- Ids],
+        %% the uid is read from the directory, N1 is not registered here
+        ?assertEqual({error, {members_exist, [{N1, undefined}]}},
+                     ra:start_cluster(default, Configs, 1000)),
+        %% the started server is deleted, the existing one is left alone
+        ?assertEqual(undefined, ra_directory:uid_of(default, RaName3)),
+        ?assertEqual(0, meck:num_calls(ra_server_sup_sup, delete_server,
+                                       [default, N1, '_', '_']))
+    after
+        meck:unload(ra_server_sup_sup)
+    end,
+    ok.
+
+start_cluster_members_exist_other_uid(Config) ->
+    Name = ?config(test_name, Config),
+    [N1, {RaName2, _} = N2, {RaName3, _} = N3] = Ids =
+        [nth_server_name(Config, I) || I <- [1, 2, 3]],
+    Self = self(),
+    meck:new(ra_server_sup_sup, [passthrough]),
+    try
+        meck:expect(ra_server_sup_sup, start_server,
+                    fun (_, #{id := Id}) when Id =:= N1 ->
+                            {error, {shutdown,
+                                     {failed_to_start_child, Id,
+                                      {already_started, Self}}}};
+                        (Sys, Conf) ->
+                            meck:passthrough([Sys, Conf])
+                    end),
+        ?assertEqual({error, {members_exist, [{N1, undefined}]}},
+                     ra:start_cluster(default, Name, {module, ra_queue, #{}},
+                                      Ids)),
+        ?assertEqual(undefined, ra_directory:uid_of(default, RaName2)),
+        ?assertEqual(undefined, ra_directory:uid_of(default, RaName3))
+    after
+        meck:unload(ra_server_sup_sup)
+    end,
+    ok.
+
+start_cluster_members_exist_not_reported(Config) ->
+    %% report_members_exist is not set: a running member counts as one that
+    %% failed to start, as in earlier versions
+    Name = ?config(test_name, Config),
+    [N1, N2, N3] = Ids = [nth_server_name(Config, I) || I <- [1, 2, 3]],
+    Self = self(),
+    meck:new(ra_server_sup_sup, [passthrough]),
+    try
+        meck:expect(ra_server_sup_sup, start_server,
+                    fun (_, #{id := Id}) when Id =:= N1 ->
+                            {error, {already_started, Self}};
+                        (Sys, Conf) ->
+                            meck:passthrough([Sys, Conf])
+                    end),
+        {ok, Started, NotStarted} =
+            ra:start_cluster(default, Name, {module, ra_queue, #{}}, Ids),
+        ?assertEqual(lists:sort([N2, N3]), lists:sort(Started)),
+        ?assertEqual([N1], NotStarted)
+    after
+        meck:unload(ra_server_sup_sup)
+    end,
+    terminate_cluster([N2, N3]),
+    ok.
+
+start_cluster_slow_uid_read_keeps_member(Config) ->
+    Name = ?config(test_name, Config),
+    [{RaName1, _} = N1, {RaName2, _}, {RaName3, _}] = Ids =
+        [nth_server_name(Config, I) || I <- [1, 2, 3]],
+    Configs = [begin
+                   UId = ra:new_uid(ra_lib:to_binary(Name)),
+                   #{id => Id,
+                     uid => UId,
+                     cluster_name => Name,
+                     log_init_args => #{uid => UId},
+                     initial_members => Ids,
+                     machine => {module, ra_queue, #{}}}
+               end || Id <- Ids],
+    %% a server from an earlier attempt, with the same config, is running
+    [#{uid := UId1} = Conf1 | _] = Configs,
+    ok = ra:start_server(default, Conf1),
+    meck:new(ra_directory, [passthrough]),
+    try
+        %% reading the running member's uid takes longer than the timeout
+        meck:expect(ra_directory, uid_of,
+                    fun (S, Id) when Id =:= N1 ->
+                            timer:sleep(3000),
+                            meck:passthrough([S, Id]);
+                        (S, N) ->
+                            meck:passthrough([S, N])
+                    end),
+        ?assertEqual({error, {members_exist, [{N1, undefined}]}},
+                     ra:start_cluster(default, Configs, 1000))
+    after
+        meck:unload(ra_directory)
+    end,
+    %% the running member is reported, not deleted as a pending one
+    ?assertEqual(UId1, ra_directory:uid_of(default, RaName1)),
+    ?assert(is_pid(whereis(RaName1))),
+    ?assertEqual(undefined, ra_directory:uid_of(default, RaName2)),
+    ?assertEqual(undefined, ra_directory:uid_of(default, RaName3)),
+    ok.
+
+start_cluster_election_timeout(Config) ->
+    Name = ?config(test_name, Config),
+    Ids = [nth_server_name(Config, I) || I <- [1, 2, 3]],
+    meck:new(ra_server_proc, [passthrough]),
+    try
+        %% every member times out the full time it is given
+        meck:expect(ra_server_proc, trigger_election,
+                    fun (_, T) -> timer:sleep(T), exit(timeout) end),
+        Configs = [begin
+                       UId = ra:new_uid(ra_lib:to_binary(Name)),
+                       #{id => Id,
+                         uid => UId,
+                         cluster_name => Name,
+                         log_init_args => #{uid => UId},
+                         initial_members => Ids,
+                         machine => {module, ra_queue, #{}}}
+                   end || Id <- Ids],
+        T0 = erlang:monotonic_time(millisecond),
+        ?assertEqual({error, cluster_not_formed},
+                     ra:start_cluster(default, Configs, 1000)),
+        Taken = erlang:monotonic_time(millisecond) - T0,
+        %% the election attempts share the start timeout rather than each
+        %% waiting for the default timeout
+        ?assert(Taken < 4000),
+        [?assertEqual(undefined, ra_directory:uid_of(default, N))
+         || {N, _} <- Ids]
+    after
+        meck:unload(ra_server_proc)
+    end,
+    ok.
+
+terminating_leader_stops_on_stop(Config) ->
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
+    Name = ?config(test_name, Config),
+    {ok, [Leader0, _, _], []} = ra:start_cluster(default, Name,
+                                                 {module, ra_queue, #{}},
+                                                 [N1, N2, N3]),
+    {ok, _, Leader} = ra:members(Leader0),
+    [Down | _] = [N1, N2, N3] -- [Leader],
+    ok = ra:stop_server(?SYS, Down),
+    %% the stopped follower keeps the leader in `terminating_leader'
+    {ok, _} = ra:delete_cluster([Leader]),
+    {RaName, _} = Leader,
+    Pid = whereis(RaName),
+    ?assert(is_pid(Pid)),
+    MRef = erlang:monitor(process, Pid),
+    meck:new(ra_server, [passthrough]),
+    meck:expect(ra_server, handle_leader,
+                fun (_, State) -> {stop, State, []} end),
+    try
+        ok = gen_statem:cast(Pid, stop_please),
+        receive
+            {'DOWN', MRef, process, Pid, Reason} ->
+                ?assertEqual({shutdown, delete}, Reason)
+        after 10000 ->
+                  ct:fail(leader_did_not_stop)
+        end
+    after
+        meck:unload(ra_server)
+    end,
+    ok.
+
+terminating_leader_steps_down(Config) ->
+    {Pid, MRef} = terminating_leader_setup(Config),
+    meck:new(ra_server, [passthrough]),
+    meck:expect(ra_server, handle_leader,
+                fun (step_down_please, State) -> {follower, State, []};
+                    (Msg, State) -> meck:passthrough([Msg, State])
+                end),
+    try
+        ok = gen_statem:cast(Pid, step_down_please),
+        ?assertMatch({terminating_follower, _}, sys:get_state(Pid))
+    after
+        meck:unload(ra_server)
+    end,
+    %% the delete command was applied as leader so the server still deletes
+    receive
+        {'DOWN', MRef, process, Pid, Reason} ->
+            ?assertEqual({shutdown, delete}, Reason)
+    after 10000 ->
+              ct:fail(follower_did_not_stop)
+    end,
+    ok.
+
+terminating_leader_keeps_stop_reason(Config) ->
+    %% a worker crash is not a delete
+    terminating_leader_worker_down(Config, boom).
+
+terminating_leader_stops_on_worker_shutdown(Config) ->
+    %% the server cannot carry on without its worker
+    terminating_leader_worker_down(Config, shutdown).
+
+terminating_leader_worker_down(Config, WorkerReason) ->
+    {Pid, MRef} = terminating_leader_setup(Config),
+    {dictionary, Dict} = process_info(Pid, dictionary),
+    [SupPid | _] = proplists:get_value('$ancestors', Dict),
+    [WorkerPid] = [W || {ra_worker, W, _, _} <- supervisor:which_children(SupPid)],
+    Pid ! {'DOWN', make_ref(), process, WorkerPid, WorkerReason},
+    receive
+        {'DOWN', MRef, process, Pid, Reason} ->
+            ?assertEqual(WorkerReason, Reason)
+    after 10000 ->
+              ct:fail(leader_did_not_stop)
+    end,
+    ok.
+
+terminating_follower_stops_on_worker_shutdown(Config) ->
+    {Pid, MRef} = terminating_leader_setup(Config),
+    {dictionary, Dict} = process_info(Pid, dictionary),
+    [SupPid | _] = proplists:get_value('$ancestors', Dict),
+    [WorkerPid] = [W || {ra_worker, W, _, _} <- supervisor:which_children(SupPid)],
+    meck:new(ra_server, [passthrough]),
+    meck:expect(ra_server, handle_leader,
+                fun (step_down_please, State) -> {follower, State, []};
+                    (Msg, State) -> meck:passthrough([Msg, State])
+                end),
+    %% keeps the server in `terminating_follower'
+    meck:expect(ra_server, is_fully_persisted, fun (_) -> false end),
+    try
+        ok = gen_statem:cast(Pid, step_down_please),
+        ?assertMatch({terminating_follower, _}, sys:get_state(Pid)),
+        Pid ! {'DOWN', make_ref(), process, WorkerPid, shutdown},
+        receive
+            {'DOWN', MRef, process, Pid, Reason} ->
+                ?assertEqual(shutdown, Reason)
+        after 10000 ->
+                  ct:fail(follower_did_not_stop)
+        end
+    after
+        meck:unload(ra_server)
+    end,
+    ok.
+
+%% returns a leader held in `terminating_leader' by a stopped follower
+terminating_leader_setup(Config) ->
+    N1 = nth_server_name(Config, 1),
+    N2 = nth_server_name(Config, 2),
+    N3 = nth_server_name(Config, 3),
+    Name = ?config(test_name, Config),
+    {ok, [Leader0, _, _], []} = ra:start_cluster(default, Name,
+                                                 {module, ra_queue, #{}},
+                                                 [N1, N2, N3]),
+    {ok, _, Leader} = ra:members(Leader0),
+    [Down | _] = [N1, N2, N3] -- [Leader],
+    ok = ra:stop_server(?SYS, Down),
+    {ok, _} = ra:delete_cluster([Leader]),
+    {RaName, _} = Leader,
+    Pid = whereis(RaName),
+    ?assert(is_pid(Pid)),
+    ?assertMatch({terminating_leader, _}, sys:get_state(Pid)),
+    {Pid, erlang:monitor(process, Pid)}.
 
 pipeline_commands(Config) ->
     Name = ?config(test_name, Config),

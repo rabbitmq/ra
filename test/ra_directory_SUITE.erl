@@ -30,7 +30,9 @@ all() ->
 all_tests() ->
     [
      basics,
-     persistence
+     persistence,
+     unregister_replaced_name,
+     unregister_name_by_key
     ].
 
 groups() ->
@@ -110,4 +112,34 @@ persistence(_Config) ->
     Regd = ra_directory:list_registered(?SYS),
     ?assert(lists:member({test2, UId2}, Regd)),
     ?assertNot(lists:member({test1, UId}, Regd)),
+    ok.
+
+unregister_replaced_name(_Config) ->
+    ok = ra_directory:init(?SYS),
+    UId = atom_to_binary(?FUNCTION_NAME),
+    UId2 = <<UId/binary, "2">>,
+    ok = ra_directory:register_name(?SYS, UId, self(), undefined, test3,
+                                    <<"name">>),
+    ok = ra_directory:register_name(?SYS, UId2, self(), undefined, test3,
+                                    <<"name">>),
+    UId = ra_directory:unregister_name(?SYS, UId),
+    ?assertEqual(UId2, ra_directory:uid_of(?SYS, test3)),
+    ?assertEqual(test3, ra_directory:name_of(?SYS, UId2)),
+    ok.
+
+unregister_name_by_key(_Config) ->
+    ok = ra_directory:init(?SYS),
+    UId = atom_to_binary(?FUNCTION_NAME),
+    UId2 = <<UId/binary, "2">>,
+    ok = ra_directory:register_name(?SYS, UId, self(), undefined, test4,
+                                    <<"name">>),
+    ok = ra_directory:register_name(?SYS, UId2, self(), undefined, test4,
+                                    <<"name">>),
+    UId = ra_directory:unregister_name(?SYS, test4, UId),
+    UId = ra_directory:unregister_name(?SYS, test4, UId),
+    ?assertEqual(UId2, ra_directory:uid_of(?SYS, test4)),
+    ?assertEqual(test4, ra_directory:name_of(?SYS, UId2)),
+    UId2 = ra_directory:unregister_name(?SYS, test4, UId2),
+    ?assertEqual(undefined, ra_directory:uid_of(?SYS, test4)),
+    ?assertEqual(undefined, ra_directory:name_of(?SYS, UId2)),
     ok.
