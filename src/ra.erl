@@ -602,6 +602,8 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
 do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
     %% off by default as the members_exist error is not returned by earlier
     %% versions; a running member then counts as one that failed to start
+    %% TODO: remove report_members_exist in the next major Ra release and
+    %% always report existing members
     ReportExisting = application:get_env(ra, report_members_exist, false),
     case ra_lib:partition_parallel(
             fun (C) ->
