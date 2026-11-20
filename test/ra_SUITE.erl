@@ -42,6 +42,7 @@ all_tests() ->
      start_cluster_election_timeout,
      start_cluster_timeout_members_exist,
      start_cluster_members_exist_other_uid,
+     start_cluster_slow_uid_read_keeps_member,
      terminating_leader_stops_on_stop,
      terminating_leader_steps_down,
      terminating_leader_keeps_stop_reason,
@@ -357,6 +358,44 @@ start_cluster_members_exist_other_uid(Config) ->
     after
         meck:unload(ra_server_sup_sup)
     end,
+    ok.
+
+start_cluster_slow_uid_read_keeps_member(Config) ->
+    Name = ?config(test_name, Config),
+    [{RaName1, _} = N1, {RaName2, _}, {RaName3, _}] = Ids =
+        [nth_server_name(Config, I) || I <- [1, 2, 3]],
+    Configs = [begin
+                   UId = ra:new_uid(ra_lib:to_binary(Name)),
+                   #{id => Id,
+                     uid => UId,
+                     cluster_name => Name,
+                     log_init_args => #{uid => UId},
+                     initial_members => Ids,
+                     machine => {module, ra_queue, #{}}}
+               end || Id <- Ids],
+    %% a server from an earlier attempt, with the same config, is running
+    [#{uid := UId1} = Conf1 | _] = Configs,
+    ok = ra:start_server(default, Conf1),
+    meck:new(ra_directory, [passthrough]),
+    try
+        %% reading the running member's uid takes longer than the timeout
+        meck:expect(ra_directory, uid_of,
+                    fun (S, Id) when Id =:= N1 ->
+                            timer:sleep(3000),
+                            meck:passthrough([S, Id]);
+                        (S, N) ->
+                            meck:passthrough([S, N])
+                    end),
+        ?assertEqual({error, {members_exist, [{N1, undefined}]}},
+                     ra:start_cluster(default, Configs, 1000))
+    after
+        meck:unload(ra_directory)
+    end,
+    %% the running member is reported, not deleted as a pending one
+    ?assertEqual(UId1, ra_directory:uid_of(default, RaName1)),
+    ?assert(is_pid(whereis(RaName1))),
+    ?assertEqual(undefined, ra_directory:uid_of(default, RaName2)),
+    ?assertEqual(undefined, ra_directory:uid_of(default, RaName3)),
     ok.
 
 start_cluster_election_timeout(Config) ->

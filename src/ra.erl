@@ -585,18 +585,16 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
                     ok  -> true;
                     {error, {already_started, _}} ->
                         %% a server with the same UId is already running.
-                        %% Reported as the worker's exit reason, with the
-                        %% UId of that running server.
-                        exit({already_started,
-                              existing_uid(System, C, Timeout)});
+                        %% Reported as the worker's exit reason. Its UId
+                        %% is read after all workers are done, so that a
+                        %% slow read cannot make this worker miss the
+                        %% deadline and be deleted as a pending one.
+                        exit(already_started);
                     %% a server with the same name but another UId is
                     %% already running, as reported by the supervisor.
-                    %% Reported the same way, with the UId of that running
-                    %% server (not the one in C).
                     {error, {shutdown, {failed_to_start_child, _,
                                         {already_started, _}}}} ->
-                        exit({already_started,
-                              existing_uid(System, C, Timeout)});
+                        exit(already_started);
                     Err ->
                         ?ERR("ra: failed to start a server ~tw, error: ~p",
                               [C, Err]),
@@ -604,8 +602,9 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
                 end
             end, ServerConfigs, Timeout) of
         {ok, Started, NotStarted} ->
-            Existing = [{Id, UId} || {#{id := Id}, {already_started, UId}}
-                                         <- NotStarted],
+            Existing = existing_uids(
+                         System, [C || {C, already_started} <- NotStarted],
+                         Timeout),
             case Started of
                 _ when Existing =/= [] ->
                     %% A running member with the same server id would take part
@@ -672,10 +671,10 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
             %% A member that is already running is not ours to delete but is
             %% reported, as it is without a timeout. A pending member may also
             %% be running, but that is not known.
-            Existing = [{Id, UId} || {#{id := Id}, {already_started, UId}}
-                                         <- Failed],
-            Crashed = [C || {C, Reason} <- Failed,
-                            not is_already_started(Reason)],
+            Existing = existing_uids(
+                         System, [C || {C, already_started} <- Failed],
+                         Timeout),
+            Crashed = [C || {C, Reason} <- Failed, Reason =/= already_started],
             delete_owned_servers(System, Started ++ Pending ++ Crashed, Timeout),
             case Existing of
                 [] ->
@@ -687,20 +686,33 @@ do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
             end
     end.
 
-%% The UId of the server that holds the member's name, read on its node after
-%% the start was refused. This is not atomic with the refused start: if that
-%% server has been deleted since, this is `undefined', or the UId of whatever
-%% registered the name in between. It is only done for members that clash so
-%% it does not slow down a normal start.
-existing_uid(System, #{id := Id}, Timeout) ->
-    try erpc:call(ra_lib:ra_server_id_node(Id), ra_directory, uid_of,
-                  [System, Id], Timeout)
+%% The UIds of the servers that hold the names of the members that clashed,
+%% read in parallel on their nodes, within Timeout. Each read is not atomic
+%% with the refused start: if that server has been deleted since, its UId is
+%% `undefined', or the UId of whatever registered the name in between. It is
+%% `undefined' too if it could not be read in time. It is only done for
+%% members that clash so it does not slow down a normal start.
+existing_uids(_System, [], _Timeout) ->
+    [];
+existing_uids(System, Configs, Timeout) ->
+    Deadline = case Timeout of
+                   infinity -> infinity;
+                   _ -> erlang:monotonic_time(millisecond) + Timeout
+               end,
+    Reqs = [{Id, erpc:send_request(ra_lib:ra_server_id_node(Id), ra_directory,
+                                   uid_of, [System, Id])}
+            || #{id := Id} <- Configs],
+    [{Id, receive_uid(ReqId, Deadline)} || {Id, ReqId} <- Reqs].
+
+receive_uid(ReqId, Deadline) ->
+    Remaining = case Deadline of
+                    infinity -> infinity;
+                    _ -> max(0, Deadline - erlang:monotonic_time(millisecond))
+                end,
+    try erpc:receive_response(ReqId, Remaining)
     catch
         _:_ -> undefined
     end.
-
-is_already_started({already_started, _}) -> true;
-is_already_started(_) -> false.
 
 %% A started server can be stopped or deleted before its election is triggered.
 %% All attempts together are bounded by Timeout.
