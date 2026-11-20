@@ -36,7 +36,6 @@
          start_server_rpc/3,
          restart_server_rpc/3,
          delete_server_rpc/2,
-         delete_server_rpc/3,
          delete_owned_server_rpc/3,
          prepare_server_stop_rpc/2]).
 
@@ -198,7 +197,9 @@ delete_owned_server_rpc(System, RaName, UId) ->
         #{names := #{server_sup := SrvSup} = Names} ->
             case ra_directory:uid_of(Names, RaName) of
                 UId ->
-                    _ = case ra_directory:where_is_parent(Names, RaName) of
+                    %% by UId: a server that registers the name since
+                    %% the check is not ours to stop
+                    _ = case ra_directory:where_is_parent(Names, UId) of
                             Pid when is_pid(Pid) ->
                                 supervisor:terminate_child(SrvSup, Pid);
                             _ ->
@@ -222,14 +223,6 @@ delete_server_rpc(System, RaName) ->
             %% UId could be `undefined' here
             do_delete_server(System, Names, RaName,
                              ra_directory:uid_of(Names, RaName))
-    end.
-
-delete_server_rpc(System, RaName, UId) ->
-    case ra_system:fetch(System) of
-        undefined ->
-            {error, system_not_started};
-        #{names := Names} ->
-            do_delete_server(System, Names, RaName, UId)
     end.
 
 %% A server with the same name and a new UId can start while this runs, so

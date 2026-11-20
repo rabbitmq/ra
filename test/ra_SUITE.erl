@@ -189,8 +189,20 @@ delete_server_keeps_replacement(Config) ->
     ok = ra:start_server(default, Name, N1, add_machine(), []),
     NewUId = ra_directory:uid_of(default, RaName),
     ?assertNotEqual(OldUId, NewUId),
-    ?assertEqual(ok, ra_server_sup_sup:delete_server_rpc(default, RaName,
-                                                         OldUId)),
+    meck:new(ra_directory, [passthrough]),
+    try
+        %% as if the replacement registered just after the delete checked
+        %% that the name is still held by the old uid
+        meck:expect(ra_directory, uid_of,
+                    fun (Names, N) when is_map(Names), N =:= RaName ->
+                            OldUId;
+                        (S, N) ->
+                            meck:passthrough([S, N])
+                    end),
+        ?assertEqual(ok, ra:force_delete_server(default, N1, OldUId, 5000))
+    after
+        meck:unload(ra_directory)
+    end,
     ?assertEqual(NewUId, ra_directory:uid_of(default, RaName)),
     ?assert(filelib:is_dir(ra_env:server_data_dir(default, NewUId))),
     ?assert(is_pid(whereis(RaName))),
