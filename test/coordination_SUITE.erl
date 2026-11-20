@@ -49,6 +49,7 @@ all_tests() ->
      send_local_msg,
      local_log_effect,
      leaderboard,
+     leaderboard_after_snapshot_installation,
      bench,
      disconnected_node_catches_up,
      key_metrics,
@@ -857,6 +858,83 @@ leaderboard(Config) ->
 
     stop_peers(Peers),
     ok.
+
+leaderboard_after_snapshot_installation(Config) ->
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    try
+        ServerIds = server_ids(ClusterName, Peers),
+        Machine = {module, ?MODULE, #{}},
+        Configs = [#{cluster_name => ClusterName,
+                     id => Id,
+                     uid => atom_to_binary(Name),
+                     initial_members => ServerIds,
+                     machine => Machine,
+                     broadcast_time => 1000,
+                     log_init_args => #{min_snapshot_interval => 5}}
+                   || {Name, _} = Id <- ServerIds],
+        {ok, Started, []} = ra:start_cluster(?SYS, Configs),
+        {ok, _, Leader0} = ra:members(Started),
+        [Leader, {_, DownNode} = Down] = ServerIds -- [Leader0],
+        %% Keep the surviving leader's term above the fresh singleton's term.
+        ok = ra:transfer_leadership(Leader0, Leader),
+        await_condition(fun () ->
+                                {ok, _, L} = ra:members(Leader),
+                                L =:= Leader
+                        end, 100),
+        ok = ra:stop_server(?SYS, Down),
+        [{ok, _, Leader} = ra:process_command(Leader, N)
+         || N <- lists:seq(1, 10)],
+        await_condition(fun () ->
+                                #{snapshot_index := I} = ra:key_metrics(Leader),
+                                is_integer(I) andalso I >= 5
+                        end, 100),
+
+        %% Model a member losing its data and bootstrapping as a singleton.
+        %% Pause replication until bootstrap finishes; never modify the cache.
+        Survivors = ServerIds -- [Down],
+        [ok = sys:suspend(Id) || Id <- Survivors],
+        try
+            ok = ra:force_delete_server(?SYS, Down),
+            UId = ra:new_uid(atom_to_binary(ClusterName)),
+            ok = ra:start_server(?SYS, #{cluster_name => ClusterName,
+                                        id => Down,
+                                        uid => UId,
+                                        initial_members => [Down],
+                                        log_init_args => #{uid => UId},
+                                        machine => Machine}),
+            ok = ra:trigger_election(Down),
+            {ok, [Down], Down} = ra:members(Down),
+            ?assertEqual([Down], rpc:call(DownNode, ra_leaderboard,
+                                         lookup_members, [ClusterName]))
+        after
+            [ok = sys:resume(Id) || Id <- Survivors]
+        end,
+
+        Expected = lists:sort(ServerIds),
+        await_condition(fun () ->
+                                {ok, Members, _} = ra:members({local, Down}),
+                                lists:sort(Members) =:= Expected
+                        end, 100),
+        #{snapshot_installed := Installed} = rpc:call(
+            DownNode, ra_counters, counters, [Down, [snapshot_installed]]),
+        ?assert(Installed > 0),
+        %% An ordinary subsequent command must preserve the recovered cache.
+        {ok, _, Leader} = ra:process_command(Leader, banana),
+        await_condition(fun () ->
+                                Metrics = [maps:with(
+                                    [last_applied, commit_index, term],
+                                    ra:key_metrics(Id)) || Id <- ServerIds],
+                                length(lists:usort(Metrics)) =:= 1
+                        end, 100),
+        ?assertEqual(Expected, lists:sort(rpc:call(
+            DownNode, ra_leaderboard, lookup_members, [ClusterName]))),
+        ?assertEqual(Leader, rpc:call(DownNode, ra_leaderboard,
+                                     lookup_leader, [ClusterName]))
+    after
+        stop_peers(Peers)
+    end.
 
 bench(Config) ->
     %% exercises the large message handling code
