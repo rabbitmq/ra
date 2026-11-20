@@ -42,6 +42,7 @@ all_tests() ->
      start_cluster_election_timeout,
      start_cluster_timeout_members_exist,
      start_cluster_members_exist_other_uid,
+     start_cluster_members_exist_not_reported,
      start_cluster_slow_uid_read_keeps_member,
      terminating_leader_stops_on_stop,
      terminating_leader_steps_down,
@@ -142,9 +143,16 @@ end_per_group(_, Config) ->
     Config.
 
 init_per_testcase(TestCase, Config) ->
+    case lists:member(TestCase, [start_cluster_timeout_members_exist,
+                                 start_cluster_members_exist_other_uid,
+                                 start_cluster_slow_uid_read_keeps_member]) of
+        true -> ok = application:set_env(ra, report_members_exist, true);
+        false -> ok
+    end,
     [{test_name, ra_lib:to_list(TestCase)} | Config].
 
 end_per_testcase(_TestCase, Config) ->
+    ok = application:unset_env(ra, report_members_exist),
     flush(),
     ra_server_sup_sup:remove_all(default),
     Config.
@@ -358,6 +366,30 @@ start_cluster_members_exist_other_uid(Config) ->
     after
         meck:unload(ra_server_sup_sup)
     end,
+    ok.
+
+start_cluster_members_exist_not_reported(Config) ->
+    %% report_members_exist is not set: a running member counts as one that
+    %% failed to start, as in earlier versions
+    Name = ?config(test_name, Config),
+    [N1, N2, N3] = Ids = [nth_server_name(Config, I) || I <- [1, 2, 3]],
+    Self = self(),
+    meck:new(ra_server_sup_sup, [passthrough]),
+    try
+        meck:expect(ra_server_sup_sup, start_server,
+                    fun (_, #{id := Id}) when Id =:= N1 ->
+                            {error, {already_started, Self}};
+                        (Sys, Conf) ->
+                            meck:passthrough([Sys, Conf])
+                    end),
+        {ok, Started, NotStarted} =
+            ra:start_cluster(default, Name, {module, ra_queue, #{}}, Ids),
+        ?assertEqual(lists:sort([N2, N3]), lists:sort(Started)),
+        ?assertEqual([N1], NotStarted)
+    after
+        meck:unload(ra_server_sup_sup)
+    end,
+    terminate_cluster([N2, N3]),
     ok.
 
 start_cluster_slow_uid_read_keeps_member(Config) ->

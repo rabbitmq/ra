@@ -315,12 +315,16 @@ force_delete_server(System, ServerId, UId, Timeout) ->
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, Existing}}' if a server with the same id as any of
-%% the members is already running. `Existing' has a `{ServerId, UId}' pair for
+%% `{error, {members_exist, Existing}}' if the `report_members_exist'
+%% application environment variable of `ra' is `true' and a server with the
+%% same id as any of the members is already running. It is `false' by
+%% default, and then such a member counts as a server that could not be
+%% started, as in earlier versions of Ra.
+%% `Existing' has a `{ServerId, UId}' pair for
 %% each such member, where `UId' is the UId of the server that is already
 %% running, not the one in the new configuration. It is read on the member's
-%% node just after its start was refused, and is `undefined' if it could not
-%% be read or the server was gone by then. A UId that matches the one in the
+%% node once the servers have been started, and is `undefined' if it could
+%% not be read in time or the server was gone by then. A UId that matches the one in the
 %% new configuration means a server from an earlier attempt to start the same
 %% cluster is still running; any other UId belongs to a different server.
 %% This is only detected while the servers are started, so the other
@@ -357,12 +361,16 @@ start_or_restart_cluster(System, ClusterName, Machine, ServerIds) ->
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, Existing}}' if a server with the same id as any of
-%% the members is already running. `Existing' has a `{ServerId, UId}' pair for
+%% `{error, {members_exist, Existing}}' if the `report_members_exist'
+%% application environment variable of `ra' is `true' and a server with the
+%% same id as any of the members is already running. It is `false' by
+%% default, and then such a member counts as a server that could not be
+%% started, as in earlier versions of Ra.
+%% `Existing' has a `{ServerId, UId}' pair for
 %% each such member, where `UId' is the UId of the server that is already
 %% running, not the one in the new configuration. It is read on the member's
-%% node just after its start was refused, and is `undefined' if it could not
-%% be read or the server was gone by then. A UId that matches the one in the
+%% node once the servers have been started, and is `undefined' if it could
+%% not be read in time or the server was gone by then. A UId that matches the one in the
 %% new configuration means a server from an earlier attempt to start the same
 %% cluster is still running; any other UId belongs to a different server.
 %% This is only detected while the servers are started, so the other
@@ -410,12 +418,16 @@ start_or_restart_cluster(System, ClusterName, Machine,
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, Existing}}' if a server with the same id as any of
-%% the members is already running. `Existing' has a `{ServerId, UId}' pair for
+%% `{error, {members_exist, Existing}}' if the `report_members_exist'
+%% application environment variable of `ra' is `true' and a server with the
+%% same id as any of the members is already running. It is `false' by
+%% default, and then such a member counts as a server that could not be
+%% started, as in earlier versions of Ra.
+%% `Existing' has a `{ServerId, UId}' pair for
 %% each such member, where `UId' is the UId of the server that is already
 %% running, not the one in the new configuration. It is read on the member's
-%% node just after its start was refused, and is `undefined' if it could not
-%% be read or the server was gone by then. A UId that matches the one in the
+%% node once the servers have been started, and is `undefined' if it could
+%% not be read in time or the server was gone by then. A UId that matches the one in the
 %% new configuration means a server from an earlier attempt to start the same
 %% cluster is still running; any other UId belongs to a different server.
 %% This is only detected while the servers are started, so the other
@@ -455,12 +467,16 @@ start_cluster(System, ClusterName, Machine, ServerIds)
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, Existing}}' if a server with the same id as any of
-%% the members is already running. `Existing' has a `{ServerId, UId}' pair for
+%% `{error, {members_exist, Existing}}' if the `report_members_exist'
+%% application environment variable of `ra' is `true' and a server with the
+%% same id as any of the members is already running. It is `false' by
+%% default, and then such a member counts as a server that could not be
+%% started, as in earlier versions of Ra.
+%% `Existing' has a `{ServerId, UId}' pair for
 %% each such member, where `UId' is the UId of the server that is already
 %% running, not the one in the new configuration. It is read on the member's
-%% node just after its start was refused, and is `undefined' if it could not
-%% be read or the server was gone by then. A UId that matches the one in the
+%% node once the servers have been started, and is `undefined' if it could
+%% not be read in time or the server was gone by then. A UId that matches the one in the
 %% new configuration means a server from an earlier attempt to start the same
 %% cluster is still running; any other UId belongs to a different server.
 %% This is only detected while the servers are started, so the other
@@ -507,12 +523,16 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %%
 %% `{error, cluster_not_formed}' if a cluster could not be started.
 %%
-%% `{error, {members_exist, Existing}}' if a server with the same id as any of
-%% the members is already running. `Existing' has a `{ServerId, UId}' pair for
+%% `{error, {members_exist, Existing}}' if the `report_members_exist'
+%% application environment variable of `ra' is `true' and a server with the
+%% same id as any of the members is already running. It is `false' by
+%% default, and then such a member counts as a server that could not be
+%% started, as in earlier versions of Ra.
+%% `Existing' has a `{ServerId, UId}' pair for
 %% each such member, where `UId' is the UId of the server that is already
 %% running, not the one in the new configuration. It is read on the member's
-%% node just after its start was refused, and is `undefined' if it could not
-%% be read or the server was gone by then. A UId that matches the one in the
+%% node once the servers have been started, and is `undefined' if it could
+%% not be read in time or the server was gone by then. A UId that matches the one in the
 %% new configuration means a server from an earlier attempt to start the same
 %% cluster is still running; any other UId belongs to a different server.
 %% This is only detected while the servers are started, so the other
@@ -550,7 +570,8 @@ start_cluster(System, ClusterName, Machine, ServerIds, Timeout)
 %% Use an external lock service or equivalent to serialise cluster operations.
 %%
 %% Ra does not check that the members are free before it starts any of them.
-%% `{members_exist, Existing}' is a last resort, not a guarantee: by the time
+%% `{members_exist, Existing}', when enabled, is a last resort, not a
+%% guarantee: by the time
 %% it is returned the new servers may already have disturbed the running
 %% members (see above). Callers must make sure, for example under the same
 %% lock, that no server with any of the given ids is running before calling
@@ -579,21 +600,25 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
     do_start_cluster(System, ClusterName, ServerConfigs, Timeout).
 
 do_start_cluster(System, ClusterName, ServerConfigs, Timeout) ->
+    %% off by default as the members_exist error is not returned by earlier
+    %% versions; a running member then counts as one that failed to start
+    ReportExisting = application:get_env(ra, report_members_exist, false),
     case ra_lib:partition_parallel(
             fun (C) ->
                 case start_server(System, C) of
                     ok  -> true;
-                    {error, {already_started, _}} ->
-                        %% a server with the same UId is already running.
-                        %% Reported as the worker's exit reason. Its UId
-                        %% is read after all workers are done, so that a
-                        %% slow read cannot make this worker miss the
-                        %% deadline and be deleted as a pending one.
+                    %% a server with the same UId is already running.
+                    %% Reported as the worker's exit reason. Its UId is read
+                    %% after all workers are done, so that a slow read
+                    %% cannot make this worker miss the deadline and be
+                    %% deleted as a pending one.
+                    {error, {already_started, _}} when ReportExisting ->
                         exit(already_started);
                     %% a server with the same name but another UId is
                     %% already running, as reported by the supervisor.
                     {error, {shutdown, {failed_to_start_child, _,
-                                        {already_started, _}}}} ->
+                                        {already_started, _}}}}
+                      when ReportExisting ->
                         exit(already_started);
                     Err ->
                         ?ERR("ra: failed to start a server ~tw, error: ~p",

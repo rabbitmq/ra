@@ -119,6 +119,11 @@ end_per_group(Group, Config) ->
 
 init_per_testcase(TestCase, Config) ->
     ra_server_sup_sup:remove_all(?SYS),
+    case lists:member(TestCase, [cluster_is_deleted,
+                                 cluster_exists_with_same_uids]) of
+        true -> ok = application:set_env(ra, report_members_exist, true);
+        false -> ok
+    end,
     ServerName2 = list_to_atom(atom_to_list(TestCase) ++ "2"),
     ServerName3 = list_to_atom(atom_to_list(TestCase) ++ "3"),
     ServerName4 = list_to_atom(atom_to_list(TestCase) ++ "4"),
@@ -137,6 +142,10 @@ init_per_testcase(TestCase, Config) ->
      {uid5, atom_to_binary(ServerName5, utf8)},
      {server_id5, {ServerName5, node()}}
      | Config].
+
+end_per_testcase(_TestCase, Config) ->
+    ok = application:unset_env(ra, report_members_exist),
+    Config.
 
 enqueue(Server, Msg) ->
     {ok, _, _} = ra:process_command(Server, {enq, Msg}),

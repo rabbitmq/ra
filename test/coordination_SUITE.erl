@@ -82,10 +82,16 @@ end_per_group(_Group, _Config) ->
     ok.
 
 init_per_testcase(TestCase, Config) ->
+    case lists:member(TestCase, [start_cluster_members_exist,
+                                 start_cluster_some_members_exist]) of
+        true -> ok = application:set_env(ra, report_members_exist, true);
+        false -> ok
+    end,
     DataDir = filename:join(?config(priv_dir, Config), TestCase),
     [{data_dir, DataDir}, {cluster_name, TestCase} | Config].
 
 end_per_testcase(_TestCase, _Config) ->
+    ok = application:unset_env(ra, report_members_exist),
     ok.
 
 %%%===================================================================
