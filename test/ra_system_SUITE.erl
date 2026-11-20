@@ -33,7 +33,8 @@ all_tests() ->
      restart_system,
      ra_overview,
      ra_overview_not_started,
-     stop_system
+     stop_system,
+     wal_hibernate_after_from_app_env
     ].
 
 groups() ->
@@ -189,6 +190,38 @@ stop_system(Config) ->
     ?assertEqual(undefined, ra_system:fetch(Sys)),
 
     ok.
+
+wal_hibernate_after_from_app_env(Config) ->
+    Sys = ?FUNCTION_NAME,
+    DataDir = ?config(data_dir, Config),
+    ok = application:set_env(ra, wal_hibernate_after, 100),
+    try
+        SysCfg = (ra_system:default_config())#{name => Sys,
+                                                data_dir => DataDir,
+                                                wal_data_dir => DataDir,
+                                                names => ra_system:derive_names(Sys)},
+        {ok, _} = application:ensure_all_started(ra),
+        ?assertMatch({ok, _}, ra_system:start(SysCfg)),
+        #{names := #{wal := WalName}} = ra_system:fetch(Sys),
+        WalPid = whereis(WalName),
+        ?assert(is_pid(WalPid)),
+        ?assertEqual({current_function, {erlang, hibernate, 3}},
+                     await_current_function(WalPid, {erlang, hibernate, 3}, 50))
+    after
+        _ = ra_system:stop(Sys),
+        ok = application:unset_env(ra, wal_hibernate_after)
+    end.
+
+await_current_function(Pid, _Expected, 0) ->
+    erlang:process_info(Pid, current_function);
+await_current_function(Pid, Expected, Attempts) ->
+    case erlang:process_info(Pid, current_function) of
+        {current_function, Expected} = Result ->
+            Result;
+        _ ->
+            timer:sleep(100),
+            await_current_function(Pid, Expected, Attempts - 1)
+    end.
 
 %% Utility
 
