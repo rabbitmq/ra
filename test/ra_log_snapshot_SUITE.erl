@@ -14,6 +14,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("kernel/include/file.hrl").
 
 %%%===================================================================
 %%% Common Test callbacks
@@ -35,7 +36,11 @@ all_tests() ->
      read_invalid_version,
      recover_invalid_checksum,
      read_meta_data,
-     recover_same_as_read
+     recover_same_as_read,
+     padded_aligned,
+     padded_boundary,
+     recover_unpadded_file,
+     padding_checksum_error
     ].
 
 groups() ->
@@ -190,6 +195,70 @@ recover_same_as_read(Config) ->
     SnapshotData = my_state,
     {ok, _} = ra_log_snapshot:write(Dir, SnapshotMeta, SnapshotData, true),
     {ok, SnapshotMeta, SnapshotData} = ra_log_snapshot:recover(Dir),
+    ok.
+
+padded_aligned(Config) ->
+    Dir = ?config(dir, Config),
+    File = filename:join(Dir, "snapshot.dat"),
+    SnapshotMeta = meta(33, 94, [{banana, node@jungle}]),
+    [begin
+         State = crypto:strong_rand_bytes(Size),
+         {ok, Bytes} = ra_log_snapshot:write(Dir, SnapshotMeta, State, true),
+         {ok, #file_info{size = FileSize}} = file:read_file_info(File),
+         ?assertEqual(FileSize, Bytes),
+         ?assertEqual({ok, FileSize}, ra_log_snapshot:get_size(Dir)),
+         ?assertEqual(0, FileSize rem 4096),
+         ?assertEqual({ok, SnapshotMeta, State},
+                      ra_log_snapshot:recover(Dir)),
+         ?assertEqual(ok, ra_log_snapshot:validate(Dir)),
+         ?assertEqual({SnapshotMeta, State}, read(Dir))
+     end || Size <- [0, 1, 100, 4000, 4096, 5000, 20000]],
+    ok.
+
+padded_boundary(Config) ->
+    %% find a state size that produces an exactly aligned file with no
+    %% padding and check neighbours either side
+    Dir = ?config(dir, Config),
+    SnapshotMeta = meta(33, 94, [{banana, node@jungle}]),
+    Sz = fun(N) ->
+                 {ok, B} = ra_log_snapshot:write(Dir, SnapshotMeta,
+                                                 binary:copy(<<0>>, N), false),
+                 B
+         end,
+    %% unpadded size = 9 + 4 + meta + term overhead + N
+    Base = byte_size(term_to_binary(SnapshotMeta)) + 13 +
+        (byte_size(term_to_binary(<<>>))),
+    Exact = 4096 - Base,
+    ?assertEqual(4096, Sz(Exact)),
+    ?assertEqual(8192, Sz(Exact + 1)),
+    ?assertEqual(4096, Sz(Exact - 1)),
+    ok.
+
+recover_unpadded_file(Config) ->
+    %% files written before padding was introduced must still be readable
+    Dir = ?config(dir, Config),
+    File = filename:join(Dir, "snapshot.dat"),
+    SnapshotMeta = meta(33, 94, [{banana, node@jungle}]),
+    MetaBin = term_to_binary(SnapshotMeta),
+    Data = [<<(byte_size(MetaBin)):32/unsigned>>, MetaBin,
+            term_to_binary(my_state)],
+    Crc = erlang:crc32(Data),
+    ok = file:write_file(File, [<<"RASN", 1:8/unsigned, Crc:32/integer>>,
+                                Data]),
+    ?assertEqual({ok, SnapshotMeta, my_state}, ra_log_snapshot:recover(Dir)),
+    ?assertEqual(ok, ra_log_snapshot:validate(Dir)),
+    ?assertEqual({ok, SnapshotMeta}, ra_log_snapshot:read_meta(Dir)),
+    ok.
+
+padding_checksum_error(Config) ->
+    Dir = ?config(dir, Config),
+    File = filename:join(Dir, "snapshot.dat"),
+    SnapshotMeta = meta(33, 94, [{banana, node@jungle}]),
+    {ok, 4096} = ra_log_snapshot:write(Dir, SnapshotMeta, my_state, true),
+    {ok, Fd} = file:open(File, [read, write, raw, binary]),
+    ok = file:pwrite(Fd, 4095, <<1>>),
+    ok = file:close(Fd),
+    ?assertEqual({error, checksum_error}, ra_log_snapshot:recover(Dir)),
     ok.
 
 %% Utility

@@ -29,6 +29,7 @@
 
 -define(MAGIC, "RASN").
 -define(VERSION, 1).
+-define(ALIGN, 4096).
 
 -type file_err() :: ra_snapshot:file_err().
 -type meta() :: ra_snapshot:meta().
@@ -44,6 +45,7 @@ prepare(_Index, State) -> State.
 %% MetaData Len (unsigned 32)
 %% MetaData (binary)
 %% Snapshot Data (binary)
+%% Zero padding up to a multiple of 4096 bytes (covered by the checksum)
 %% @end
 
 -spec write(file:filename(), meta(), term(), Sync :: boolean()) ->
@@ -53,10 +55,18 @@ write(Dir, Meta, MacState, Sync) ->
     %% as possible
     MetaBin = term_to_binary(Meta),
     IOVec = term_to_iovec(MacState),
-    Data = [<<(byte_size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
+    Data0 = [<<(byte_size(MetaBin)):32/unsigned>>, MetaBin | IOVec],
+    %% pad the file with trailing zeros up to a multiple of ?ALIGN so that
+    %% many parallel writers do not leave partial tail pages that the
+    %% file system / device has to merge. binary_to_term/1 ignores the
+    %% trailing bytes and the checksum covers them so no format change is
+    %% needed.
+    Bytes0 = 9 + iolist_size(Data0),
+    PadBytes = (?ALIGN - (Bytes0 rem ?ALIGN)) rem ?ALIGN,
+    Data = [Data0, <<0:(PadBytes * 8)>>],
     Checksum = erlang:crc32(Data),
     File = filename(Dir),
-    Bytes = 9 + iolist_size(Data),
+    Bytes = Bytes0 + PadBytes,
     case ra_lib:write_file(File, [<<?MAGIC,
                                     ?VERSION:8/unsigned,
                                     Checksum:32/integer>>,
