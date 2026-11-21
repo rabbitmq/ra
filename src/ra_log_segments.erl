@@ -423,7 +423,7 @@ read_plan(#?STATE{cfg = Cfg,
 -spec exec_read_plan(file:filename_all(),
                      read_plan(),
                      undefined | ra_flru:state(),
-                     TransformFun :: fun((ra_index(), ra_term(), binary()) -> term()),
+                     TransformFun :: fun((ra_index(), ra_term(), term()) -> term()),
                      read_plan_options(),
                      #{ra_index() => Command :: term()}) ->
     {#{ra_index() => Command :: term()}, ra_flru:state()}.

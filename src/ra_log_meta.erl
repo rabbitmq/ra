@@ -39,7 +39,7 @@
 -export_type([state/0]).
 
 -spec start_link(ra_system:config()) ->
-    {ok, pid()} | {error, {already_started, pid()}}.
+    {ok, pid()} | ignore | {error, term()}.
 start_link(#{names := #{log_meta := Name}} = Cfg) ->
     gen_batch_server:start_link({local, Name}, ?MODULE, Cfg, []).
 

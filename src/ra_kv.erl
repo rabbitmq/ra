@@ -227,7 +227,7 @@ read_entry({_, Node} = ServerId, Idxs, Members, Timeout) ->
     end.
 
 -spec delete(ra:server_id(), key(), non_neg_integer()) ->
-    {ok, map()} | {error, not_found} | {error, term()} | {timeout, ra:server_id()}.
+    {ok, map()} | {error, {not_found, ra:server_id()}} | {error, term()} | {timeout, ra:server_id()}.
 delete(ServerId, Key, Timeout) ->
     Delete = #delete{key = Key},
     case ra:process_command(ServerId, Delete, Timeout) of

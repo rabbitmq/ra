@@ -266,8 +266,8 @@ fill_ratio(WalName) ->
 
 -spec start_link(Config :: wal_conf()) ->
     {ok, pid()} |
-    {error, {already_started, pid()}} |
-    {error, wal_checksum_validation_failure}.
+    ignore |
+    {error, {already_started, pid()} | wal_checksum_validation_failure | term()}.
 start_link(#{dir := _,
              system := _,
              names := #{wal := Name}} = Config)
