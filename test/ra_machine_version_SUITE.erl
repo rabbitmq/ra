@@ -38,7 +38,8 @@ all_tests() ->
      server_applies_with_new_module,
      initial_machine_version,
      initial_machine_version_quorum,
-     recovery_checkpoint_updates_machine_version
+     recovery_checkpoint_updates_machine_version,
+     recovery_checkpoint_records_effective_machine_version
      % snapshot_persists_machine_version
     ].
 
@@ -659,6 +660,103 @@ recovery_checkpoint_updates_machine_version(Config) ->
 
     %% Verify state is correct
     {ok, {_, state_v2}, _} = ra:leader_query(ServerId, ?IDMFA),
+    ok.
+
+%% Test that a recovery checkpoint written by a server whose code knows a
+%% higher machine version than the effective one records the effective
+%% version, so the upgrade is still applied when the log is replayed.
+recovery_checkpoint_records_effective_machine_version(Config) ->
+    Mod = ?config(modname, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun (_) -> init_state end),
+    meck:expect(Mod, version, fun () -> 1 end),
+    meck:expect(Mod, which_module, fun (_) -> Mod end),
+    meck:expect(Mod, apply, fun (_, dummy, S) ->
+                                    {S, ok};
+                                (_, {machine_version, 0, 1}, init_state) ->
+                                    {state_v1, ok};
+                                (_, {machine_version, 1, 2}, state_v1) ->
+                                    {state_v2, ok}
+                            end),
+    Cluster = ?config(cluster, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Leader = start_cluster(ClusterName, {module, Mod, #{}}, Cluster),
+    [Follower1, Follower2] = lists:delete(Leader, Cluster),
+    {ok, ok, _} = ra:process_command(Leader, dummy),
+
+    %% Only Follower1 is upgraded to v2. The other members are still on v1 so
+    %% the effective machine version stays at 1.
+    ok = ra:stop_server(?SYS, Follower1),
+    meck:expect(Mod, version, fun () ->
+                                      case whereis(element(1, Follower1)) of
+                                          Pid when Pid == self() -> 2;
+                                          _ -> 1
+                                      end
+                              end),
+    RCConf = #{min_recovery_checkpoint_interval => 10},
+    ok = ra:restart_server(?SYS, Follower1, RCConf),
+    lists:foreach(fun(_) ->
+                          {ok, ok, _} = ra:process_command(Leader, dummy)
+                  end, lists:seq(1, 50)),
+    {ok, _, _} = ra:members(Leader),
+    {ok, #{commit_index := CommitIdx}, _} = ra:member_overview(Leader),
+    await(fun () ->
+                  case ra:member_overview(Follower1) of
+                      {ok, #{last_applied := LA,
+                             effective_machine_version := 1,
+                             machine_version := 2}, _} ->
+                          LA >= CommitIdx;
+                      _ ->
+                          false
+                  end
+          end, 100),
+
+    %% Stopping Follower1 writes a recovery checkpoint. It must record the
+    %% effective machine version (1) rather than the code's version (2).
+    {ok, #{uid := UId}, _} = ra:member_overview(Follower1),
+    DataDir = maps:get(data_dir, ra_system:fetch(?SYS)),
+    RecoveryCheckpointDir = filename:join([DataDir, UId, <<"recovery_checkpoint">>]),
+    ok = ra:stop_server(?SYS, Follower1),
+    ?assertMatch({ok, [_ | _]}, file:list_dir(RecoveryCheckpointDir)),
+    ok = ra:restart_server(?SYS, Follower1, RCConf),
+    await(fun () ->
+                  case ra:member_overview(Follower1) of
+                      {ok, #{last_applied := LA}, _} ->
+                          LA >= CommitIdx;
+                      _ ->
+                          false
+                  end
+          end, 100),
+    ?assertMatch({ok, #{effective_machine_version := 1,
+                        machine_version := 2}, _},
+                 ra:member_overview(Follower1)),
+    {ok, {_, state_v1}, _} = ra:local_query(Follower1, ?IDMFA),
+
+    %% Upgrade the rest of the cluster. Follower1 must apply the upgrade
+    %% from the log after its recovery checkpoint.
+    ok = ra:stop_server(?SYS, Leader),
+    ok = ra:stop_server(?SYS, Follower2),
+    meck:expect(Mod, version, fun () -> 2 end),
+    ok = ra:restart_server(?SYS, Leader),
+    ok = ra:restart_server(?SYS, Follower2),
+    {ok, _, _} = ra:members(Follower1, 2000),
+    lists:foreach(
+      fun(Member) ->
+              await(fun () ->
+                            case ra:member_overview(Member) of
+                                {ok, #{effective_machine_version := 2}, _} ->
+                                    true;
+                                _ ->
+                                    false
+                            end
+                    end, 100)
+      end, Cluster),
+    await(fun () ->
+                  case ra:local_query(Follower1, ?IDMFA) of
+                      {ok, {_, state_v2}, _} -> true;
+                      _ -> false
+                  end
+          end, 100),
     ok.
 
 %% Utility

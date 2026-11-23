@@ -2748,10 +2748,11 @@ maybe_write_recovery_checkpoint(#{cfg := #cfg{log_id = LogId,
                                 maps:map(fun (_, V) ->
                                                  maps:with([voter_status], V)
                                          end, Cluster),
+                            MacVer = index_machine_version(LastApplied, State),
                             Meta = #{index => LastApplied,
                                      term => Term,
                                      cluster => ClusterServerIds,
-                                     machine_version => ra_machine:version(Machine)},
+                                     machine_version => MacVer},
                             case ra_snapshot:write_recovery_checkpoint(
                                    Meta, MacState, SnapModule, SnapState) of
                                 {ok, SnapState1} ->
