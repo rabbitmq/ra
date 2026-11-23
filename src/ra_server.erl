@@ -3305,11 +3305,16 @@ append_machine_effects(AppEffs, Effs) ->
     [AppEffs | Effs].
 
 cluster_scan_fun({Idx, Term, {'$ra_cluster_change', _Meta, NewCluster, _}},
-                 {_, State0}) ->
+                 {_, #{cluster := PrevCluster,
+                       cluster_index_term := {PrevIdx, PrevTerm}} = State0}) ->
     ?DEBUG("~ts: ~ts: applying ra cluster change to ~tw",
            [log_id(State0), ?FUNCTION_NAME, maps:keys(NewCluster)]),
     %% we are recovering and should apply the cluster change
+    %% The cluster change can be uncommitted. Record the previous cluster so
+    %% that pre_append_log_follower/2 can revert to it if a new leader
+    %% overwrites the change.
     {Idx, State0#{cluster => NewCluster,
+                  previous_cluster => {PrevIdx, PrevTerm, PrevCluster},
                   membership => get_membership(NewCluster, State0),
                   cluster_change_permitted => true,
                   cluster_index_term => {Idx, Term}}};

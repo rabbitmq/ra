@@ -24,6 +24,7 @@ all() ->
     [
      init_test,
      recover_restores_cluster_changes,
+     recovered_cluster_change_overwritten,
      election_timeout,
      follower_aer_diverged,
      follower_aer_term_mismatch,
@@ -341,6 +342,55 @@ recover_restores_cluster_changes(_Config) ->
                 end),
 
     #{cluster := #{?N1 := _, N2 := _}} = ra_server_init(InitConf),
+    ok.
+
+%% A server recovers an uncommitted cluster change from its log. A new leader
+%% then overwrites that entry with an entry that is not a cluster change. The
+%% server must revert to the cluster from before the change.
+recovered_cluster_change_overwritten(_Config) ->
+    N1 = ?N1, N2 = ?N2,
+    InitConf = #{cluster_name => ?FUNCTION_NAME,
+                 id => N1,
+                 uid => <<"n1">>,
+                 log_init_args => #{uid => <<>>},
+                 machine => {simple, fun erlang:'+'/2, 0},
+                 initial_members => []},
+    {leader, State00, _} =
+        ra_server:handle_candidate(#request_vote_result{term = 1,
+                                                        vote_granted = true},
+                                   (ra_server_init(InitConf))#{votes => 0,
+                                                               current_term => 1,
+                                                               voted_for => N1}),
+    {leader, State0, _} =
+        ra_server:handle_leader({command, {noop, meta(), 0}}, State00),
+    {leader, State, _} = ra_server:handle_leader(written_evt(1, {1, 1}), State0),
+
+    %% N1 appends a cluster change that adds N2 at index 2. The change does
+    %% not commit.
+    {leader, #{log := Log0}, _} =
+        ra_server:handle_leader({command, {'$ra_join', meta(),
+                                           N2, await_consensus}}, State),
+    {2, 1} = ra_log:last_index_term(Log0),
+
+    %% N1 restarts. The commit index is 1, so recovery applies the cluster
+    %% change at index 2 with cluster_scan_fun/2.
+    meck:expect(ra_log, init, fun (_) -> Log0 end),
+    meck:expect(ra_log_meta, fetch,
+                fun (_, _, last_applied, 0) -> 1;
+                    (_, _, _, Def) -> Def
+                end),
+    Recovered = ra_server_init(InitConf),
+    ?assertMatch(#{cluster := #{N1 := _, N2 := _},
+                   cluster_index_term := {2, 1}}, Recovered),
+
+    %% N2 is leader in term 2 and overwrites index 2 with a normal command.
+    AER = #append_entries_rpc{term = 2, leader_id = N2,
+                              prev_log_index = 1,
+                              prev_log_term = 1,
+                              leader_commit = 1,
+                              entries = [{2, 2, usr(<<"overwrite">>)}]},
+    {_, Reverted, _} = ra_server:handle_follower(AER, Recovered),
+    ?assertEqual([N1], maps:keys(maps:get(cluster, Reverted))),
     ok.
 
 election_timeout(_Config) ->
