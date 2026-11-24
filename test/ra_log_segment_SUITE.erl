@@ -51,6 +51,7 @@ all_tests() ->
      binary_mode_non_contiguous_ascending,
      binary_mode_random_access,
      binary_mode_overwrite_fallback,
+     binary_mode_repeated_index_fallback,
      binary_mode_v1_format
     ].
 
@@ -776,7 +777,33 @@ binary_mode_overwrite_fallback(Config) ->
     2 = ra_log_segment:term_query(SegR, 3),
     2 = ra_log_segment:term_query(SegR, 4),
     2 = ra_log_segment:term_query(SegR, 5),
-    
+
+    ok = ra_log_segment:close(SegR),
+    ok.
+
+binary_mode_repeated_index_fallback(Config) ->
+    %% A segment where the overwrite starts at the last written index,
+    %% i.e. the index sequence repeats rather than goes backwards
+    %% (1,2,3,3,4). Binary mode must fall back to map mode and return the
+    %% later record. See https://github.com/rabbitmq/ra/issues/679
+    Dir = ?config(data_dir, Config),
+    Fn = filename:join(Dir, "binary_repeated_index.seg"),
+    {ok, Seg0} = ra_log_segment:open(Fn),
+    Seg1 = lists:foldl(fun(Idx, S0) ->
+                               {ok, S} = ra_log_segment:append(S0, Idx, 1,
+                                                               <<"t1">>),
+                               S
+                       end, Seg0, lists:seq(1, 3)),
+    {ok, Seg2} = ra_log_segment:append(Seg1, 3, 2, <<"t2">>),
+    {ok, Seg3} = ra_log_segment:append(Seg2, 4, 2, <<"t2">>),
+    {ok, Seg} = ra_log_segment:sync(Seg3),
+    ok = ra_log_segment:close(Seg),
+
+    {ok, SegR} = ra_log_segment:open(Fn, #{mode => read,
+                                           index_mode => binary}),
+    {1, 4} = ra_log_segment:range(SegR),
+    [{3, 2, <<"t2">>}] = read_sparse(SegR, [3]),
+    2 = ra_log_segment:term_query(SegR, 3),
     ok = ra_log_segment:close(SegR),
     ok.
 

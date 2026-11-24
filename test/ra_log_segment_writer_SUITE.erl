@@ -221,6 +221,18 @@ accept_mem_tables_overwrite_same_wal(Config) ->
              {4, 43, _},
              {5, 43, _},
              {6, 43, _}] = read_sparse(Seg, [2, 3, 4, 5, 6]),
+            %% the overwritten entries must not be written at all,
+            %% including the first overwritten index (4)
+            ?assertMatch([{2, 42, _}, {3, 42, _}, {4, 43, _},
+                          {5, 43, _}, {6, 43, _}],
+                         [E || {I, _, _} = E
+                                   <- ra_log_segment:dump_index(SegmentFile),
+                               I > 0]),
+            {ok, BinSeg} = ra_log_segment:open(SegmentFile,
+                                               #{mode => read,
+                                                 index_mode => binary}),
+            [{4, 43, _}] = read_sparse(BinSeg, [4]),
+            _ = ra_log_segment:close(BinSeg),
             ok
     after 3000 ->
               flush(),
@@ -740,14 +752,19 @@ live_indexes_2(Config) ->
     {ok, TblWriterPid} = ra_log_segment_writer:start_link(#{system => default,
                                                             name => ?SEGWR,
                                                             data_dir => Dir}),
+    %% mem tables are passed new -> old. The newest one (10) and the oldest
+    %% one (5) are below the snapshot and not live so are filtered out
+    %% entirely, the live 7..9 in between must still be flushed.
     Mt1 = make_mem_table(UId, [{5, 1, a}]),
     Mt2 = make_mem_table(UId, [
                                {7, 1, b},
                                {8, 1, b},
                                {9, 1, b}
                               ]),
-    Ranges = #{UId => [{ra_mt:tid(Mt1), [ra_mt:range(Mt1)]},
-                       {ra_mt:tid(Mt2), [ra_mt:range(Mt2)]}]},
+    Mt3 = make_mem_table(UId, [{10, 1, c}]),
+    Ranges = #{UId => [{ra_mt:tid(Mt3), [ra_mt:range(Mt3)]},
+                       {ra_mt:tid(Mt2), [ra_mt:range(Mt2)]},
+                       {ra_mt:tid(Mt1), [ra_mt:range(Mt1)]}]},
     ra_log_snapshot_state:insert(ra_log_snapshot_state, UId, 40, 1, [{7, 9}, 1]),
     ok = ra_log_segment_writer:accept_mem_tables(?SEGWR, Ranges,
                                                  make_wal(Config, "w1.wal")),

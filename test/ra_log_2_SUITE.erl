@@ -79,6 +79,7 @@ all_tests() ->
      read_plan_modified,
      read_plan,
      read_plan_missing_index,
+     read_plan_binary_after_overwrite_and_roll,
      sparse_read_out_of_range,
      sparse_read_out_of_range_2,
      written_event_after_snapshot,
@@ -546,10 +547,16 @@ sparse_read_out_of_range(Config) ->
 sparse_read_out_of_range_2(Config) ->
     Log0 = ra_log_init(Config),
     {0, 0} = ra_log:last_index_term(Log0),
-    %% write 10 entries
-    %% but only process events for 9
-    Log1 = deliver_all_log_events(write_n(10, 20, 2,
-                                          write_and_roll(1, 10, 2, Log0)), 50),
+    %% write 1..9 and roll them into a segment, then write 10..19
+    %% the snapshot is only taken if it can free a segment so wait for both
+    %% the written event and the segments event rather than relying on an
+    %% idle timeout which can be too short on slow CI runners
+    Log1 = assert_log_events(
+             write_n(10, 20, 2, write_and_roll_no_deliver(1, 10, 2, Log0)),
+             fun (L) ->
+                     #{num_segments := NumSegs} = ra_log:overview(L),
+                     ra_log:last_written(L) == {19, 2} andalso NumSegs > 0
+             end, 5000),
     SnapIdx = 10,
     %% do snapshot in
     {Log2, Effs} = ra_log:update_release_cursor(SnapIdx, #{}, macctx(),
@@ -635,6 +642,38 @@ sparse_read(Config) ->
     {[{1000, _, _},
       {5, _, _},
       {99, _, _}], _LogO3} = ra_log:sparse_read([1000,5,99], LogO2),
+    ok.
+
+read_plan_binary_after_overwrite_and_roll(Config) ->
+    %% a follower writes 1..13 in term 1, a new leader overwrites from 13 in
+    %% term 2, then a WAL roll flushes both mem tables into one segment
+    Log0 = ra_log_init(Config),
+    Log1 = lists:foldl(fun (I, L) -> ra_log:append({I, 1, {I, 1}}, L) end,
+                       Log0, lists:seq(1, 13)),
+    Log2 = assert_log_events(Log1, fun (L) ->
+                                           ra_log:last_written(L) == {13, 1}
+                                   end),
+    {ok, Log3} = ra_log:write([{I, 2, {I, 2}} || I <- lists:seq(13, 20)], Log2),
+    Log4 = assert_log_events(Log3, fun (L) ->
+                                           ra_log:last_written(L) == {20, 2}
+                                   end),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    Log5 = wait_for_segments(Log4, 5000),
+    Transform = fun (I, T, Cmd) -> {I, T, Cmd} end,
+    {{13, 2, {13, 2}}, Log6} = ra_log:fetch(13, Log5),
+    Plan = ra_log:partial_read(lists:seq(1, 16), Log6, Transform),
+    %% all entries must be read from the segment, not the mem tables,
+    %% else neither segment index mode would be exercised
+    ?assertMatch(#{num_read := 0,
+                   num_in_segments := 16,
+                   num_segments := 1}, ra_log:read_plan_info(Plan)),
+    {MapRead, _} = ra_log:execute_read_plan(Plan, undefined, Transform,
+                                            #{index_mode => map}),
+    {BinRead, _} = ra_log:execute_read_plan(Plan, undefined, Transform,
+                                            #{index_mode => binary}),
+    ?assertEqual({13, 2, {13, 2}}, maps:get(13, MapRead)),
+    ?assertEqual({13, 2, {13, 2}}, maps:get(13, BinRead)),
+    ra_log:close(Log6),
     ok.
 
 read_plan_modified(Config) ->
