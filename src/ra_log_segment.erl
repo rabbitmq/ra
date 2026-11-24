@@ -1037,8 +1037,9 @@ scan_index_binary_loop(Fmt, Bin, ByteOffset, Num, LastIdx, DataOffset, Range) ->
         eof ->
             {ok, Num, DataOffset, Range};
         {ok, {Idx, _Term, EntryOffset, Length, _Crc}} ->
-            %% Detect overwrite: if Idx goes backwards, fall back to map mode
-            case Idx < LastIdx of
+            %% Detect overwrite: if Idx goes backwards or repeats, fall back
+            %% to map mode as binary search could return the stale record
+            case Idx =< LastIdx andalso Num > 0 of
                 true ->
                     {overwrites_detected, Num + 1, EntryOffset + Length,
                      update_range(Range, Idx)};

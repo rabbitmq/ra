@@ -227,33 +227,35 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
     %% Truncate and limit all seqs to create a non-overlapping list of
     %% tid ranges to flush to disk. With sparse log compaction (v3),
     %% these ranges may include non-contiguous live indexes.
-    TidSeqs = lists:foldl(
-                fun ({T, Seq0}, []) ->
-                        case ra_seq:floor(SmallestIdx, Seq0) of
-                            [] ->
-                                [];
-                            Seq when LiveIndexes == []->
-                                [{T, Seq}];
-                            Seq ->
-                                L = ra_seq:in_range(ra_seq:range(Seq),
-                                                    LiveIndexes),
-                                [{T, ra_seq:add(ra_seq:floor(SnapIdx + 1, Seq), L)}]
-                        end;
-                    ({T, Seq0}, [{_T, PrevSeq} | _] = Acc) ->
-                        Start = ra_seq:first(PrevSeq),
-                        Seq1 = ra_seq:floor(SmallestIdx, Seq0),
-                        case ra_seq:limit(Start, Seq1) of
-                            [] ->
-                                Acc;
-                            Seq when LiveIndexes == [] ->
-                                [{T, Seq} | Acc];
-                            Seq ->
-                                L = ra_seq:in_range(ra_seq:range(Seq),
-                                                    LiveIndexes),
-                                [{T, ra_seq:add(ra_seq:floor(SnapIdx + 1, Seq), L)}
-                                | Acc]
-                        end
-                end, [], TidSeqs0),
+    %% A newer mem table overwrites every index from its first index
+    %% onwards, so each older seq is limited to Ceil, the index just below
+    %% the lowest first index of all newer mem tables. The limit is
+    %% exclusive of that first index, else both the overwritten and the
+    %% overwriting record would be written to the segment.
+    {TidSeqs, _} =
+        lists:foldl(
+          fun ({T, Seq0}, {Acc, Ceil}) ->
+                  Seq1 = ra_seq:floor(SmallestIdx, Seq0),
+                  Seq2 = case Ceil of
+                             undefined -> Seq1;
+                             _ -> ra_seq:limit(Ceil, Seq1)
+                         end,
+                  Acc1 = case Seq2 of
+                             [] ->
+                                 Acc;
+                             _ when LiveIndexes == [] ->
+                                 [{T, Seq2} | Acc];
+                             _ ->
+                                 L = ra_seq:in_range(ra_seq:range(Seq2),
+                                                     LiveIndexes),
+                                 case ra_seq:add(ra_seq:floor(SnapIdx + 1, Seq2),
+                                                 L) of
+                                     [] -> Acc;
+                                     Seq -> [{T, Seq} | Acc]
+                                 end
+                         end,
+                  {Acc1, next_ceil(Seq0, Ceil)}
+          end, {[], undefined}, TidSeqs0),
 
     SegRefs0 = lists:append(
                  lists:reverse(
@@ -277,6 +279,16 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
 
     ok = send_segments(System, ServerUId, TidSeqs0, SegRefs),
     ok.
+
+next_ceil(Seq, Ceil) ->
+    case ra_seq:first(Seq) of
+        undefined ->
+            Ceil;
+        First when Ceil == undefined ->
+            First - 1;
+        First ->
+            min(First - 1, Ceil)
+    end.
 
 flush_mem_table_range(ServerUId, {Tid, Seq},
                       #state{data_dir = DataDir,

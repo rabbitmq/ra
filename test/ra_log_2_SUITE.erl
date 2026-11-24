@@ -79,6 +79,7 @@ all_tests() ->
      read_plan_modified,
      read_plan,
      read_plan_missing_index,
+     read_plan_binary_after_overwrite_and_roll,
      sparse_read_out_of_range,
      sparse_read_out_of_range_2,
      written_event_after_snapshot,
@@ -635,6 +636,33 @@ sparse_read(Config) ->
     {[{1000, _, _},
       {5, _, _},
       {99, _, _}], _LogO3} = ra_log:sparse_read([1000,5,99], LogO2),
+    ok.
+
+read_plan_binary_after_overwrite_and_roll(Config) ->
+    %% a follower writes 1..13 in term 1, a new leader overwrites from 13 in
+    %% term 2, then a WAL roll flushes both mem tables into one segment
+    Log0 = ra_log_init(Config),
+    Log1 = lists:foldl(fun (I, L) -> ra_log:append({I, 1, {I, 1}}, L) end,
+                       Log0, lists:seq(1, 13)),
+    Log2 = assert_log_events(Log1, fun (L) ->
+                                           ra_log:last_written(L) == {13, 1}
+                                   end),
+    {ok, Log3} = ra_log:write([{I, 2, {I, 2}} || I <- lists:seq(13, 20)], Log2),
+    Log4 = assert_log_events(Log3, fun (L) ->
+                                           ra_log:last_written(L) == {20, 2}
+                                   end),
+    ok = ra_log_wal:force_roll_over(ra_log_wal),
+    Log5 = wait_for_segments(Log4, 5000),
+    Transform = fun (I, T, Cmd) -> {I, T, Cmd} end,
+    {{13, 2, {13, 2}}, Log6} = ra_log:fetch(13, Log5),
+    Plan = ra_log:partial_read(lists:seq(1, 16), Log6, Transform),
+    {MapRead, _} = ra_log:execute_read_plan(Plan, undefined, Transform,
+                                            #{index_mode => map}),
+    {BinRead, _} = ra_log:execute_read_plan(Plan, undefined, Transform,
+                                            #{index_mode => binary}),
+    ?assertEqual({13, 2, {13, 2}}, maps:get(13, MapRead)),
+    ?assertEqual({13, 2, {13, 2}}, maps:get(13, BinRead)),
+    ra_log:close(Log6),
     ok.
 
 read_plan_modified(Config) ->
