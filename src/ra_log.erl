@@ -187,7 +187,9 @@
 pre_init(Machine, #{uid := UId,
                     system_config := #{data_dir := DataDir}} = Conf) ->
     Dir = server_data_dir(DataDir, UId),
-    SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
+    %% the snapshot module is provided by the machine, not the log init args
+    %% this must match the module ra_server:init/1 passes to ra_log:init/1
+    SnapModule = ra_machine:snapshot_module(Machine),
     MaxCheckpoints = maps:get(max_checkpoints, Conf, ?DEFAULT_MAX_CHECKPOINTS),
     SnapshotsDir = filename:join(Dir, ?SNAPSHOTS_DIR),
     CheckpointsDir = filename:join(Dir, ?CHECKPOINTS_DIR),
