@@ -656,6 +656,11 @@ read_plan_binary_after_overwrite_and_roll(Config) ->
     Transform = fun (I, T, Cmd) -> {I, T, Cmd} end,
     {{13, 2, {13, 2}}, Log6} = ra_log:fetch(13, Log5),
     Plan = ra_log:partial_read(lists:seq(1, 16), Log6, Transform),
+    %% all entries must be read from the segment, not the mem tables,
+    %% else neither segment index mode would be exercised
+    ?assertMatch(#{num_read := 0,
+                   num_in_segments := 16,
+                   num_segments := 1}, ra_log:read_plan_info(Plan)),
     {MapRead, _} = ra_log:execute_read_plan(Plan, undefined, Transform,
                                             #{index_mode => map}),
     {BinRead, _} = ra_log:execute_read_plan(Plan, undefined, Transform,
