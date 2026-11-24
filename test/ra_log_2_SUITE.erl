@@ -97,7 +97,9 @@ all_tests() ->
      snapshot_installation_with_live_indexes,
      init_with_dangling_symlink,
      init_after_missing_segments_event,
-     snapshot_install_with_empty_indexes_file
+     snapshot_install_with_empty_indexes_file,
+     init_after_accepted_snapshot_above_mem_table,
+     init_after_accepted_snapshot_above_mem_table_with_live_indexes
     ].
 
 groups() ->
@@ -2069,6 +2071,72 @@ append_after_snapshot_installation_with_live_indexes(Config) ->
     ?assertMatch({[_, _], _}, ra_log:sparse_read([1, 5], Log)),
     % {[], _} = ra_log_take(1, 9, Log),
     {[_, _], _} = ra_log_take(16, 17, Log),
+    ok.
+
+init_after_accepted_snapshot_above_mem_table(Config) ->
+    %% https://github.com/rabbitmq/ra/issues/692
+    %% A snapshot is accepted (written to disk) but the server exits
+    %% before ra_log:install_snapshot/4 runs. The mem table, which is owned
+    %% by the ra system, still holds the entries below the snapshot.
+    %% After re-init the next write at SnapIdx + 1 must succeed.
+    Log0 = ra_log_init(Config),
+    Log1 = assert_log_events(write_n(1, 6, 1, Log0),
+                             fun (L) -> {5, 1} == ra_log:last_written(L) end),
+    #{mem_table_range := {0, 5}} = ra_log:overview(Log1),
+    Meta = meta(10, 2, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, #{}),
+    SnapState0 = ra_log:snapshot_state(Log1),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {_SnapState, _, [], AEffs} =
+        ra_snapshot:complete_accept(Chunk, 1, Machine, SnapState1),
+    run_effs(AEffs),
+    %% "crash" before install_snapshot
+    ra_log:close(Log1),
+
+    Log2 = ra_log_init(Config),
+    ?assertEqual({10, 2}, ra_log:last_index_term(Log2)),
+    ?assertEqual({10, 2}, ra_log:last_written(Log2)),
+    ?assertEqual(11, ra_log:next_index(Log2)),
+    #{mem_table_range := undefined} = ra_log:overview(Log2),
+    Log3 = write_n(11, 15, 2, Log2),
+    Log = assert_log_events(Log3,
+                            fun (L) -> {14, 2} == ra_log:last_written(L) end),
+    {[_, _, _, _], _} = ra_log_take(11, 14, Log),
+    ok.
+
+init_after_accepted_snapshot_above_mem_table_with_live_indexes(Config) ->
+    %% as above but the snapshot has live indexes that were sparse
+    %% written into the mem table during the pre phase and not yet
+    %% flushed to segments
+    Log0 = ra_log_init(Config),
+    Log1 = assert_log_events(write_n(1, 6, 1, Log0),
+                             fun (L) -> {5, 1} == ra_log:last_written(L) end),
+    LiveIndexes = [8, 7],
+    {ok, Log2} = ra_log:write_sparse({7, 2, <<"7">>}, 5, Log1),
+    {ok, Log3} = ra_log:write_sparse({8, 2, <<"8">>}, 7, Log2),
+    Log4 = assert_log_events(Log3,
+                             fun (L) -> {8, 2} == ra_log:last_written(L) end),
+    Meta = meta(10, 2, [?N1]),
+    Chunk = create_snapshot_chunk(Config, Meta, LiveIndexes, LiveIndexes, #{}),
+    SnapState0 = ra_log:snapshot_state(Log4),
+    {ok, SnapState1} = ra_snapshot:begin_accept(Meta, SnapState0),
+    Machine = {machine, ?MODULE, #{}},
+    {_SnapState, _, LiveIndexes, AEffs} =
+        ra_snapshot:complete_accept(Chunk, 1, Machine, SnapState1),
+    run_effs(AEffs),
+    %% "crash" before install_snapshot
+    ra_log:close(Log4),
+
+    Log5 = ra_log_init(Config),
+    ?assertEqual({10, 2}, ra_log:last_index_term(Log5)),
+    ?assertEqual(11, ra_log:next_index(Log5)),
+    Log6 = write_n(11, 15, 2, Log5),
+    Log = assert_log_events(Log6,
+                            fun (L) -> {14, 2} == ra_log:last_written(L) end),
+    {[_, _, _, _], _} = ra_log_take(11, 14, Log),
+    ?assertMatch({[{7, 2, _}, {8, 2, _}], _},
+                 ra_log:sparse_read([7, 8], Log)),
     ok.
 
 append_after_snapshot_installation(Config) ->
