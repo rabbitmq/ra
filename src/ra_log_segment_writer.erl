@@ -242,7 +242,14 @@ flush_mem_table_ranges({ServerUId, TidSeqs0},
                     ({T, Seq0}, [{_T, PrevSeq} | _] = Acc) ->
                         Start = ra_seq:first(PrevSeq),
                         Seq1 = ra_seq:floor(SmallestIdx, Seq0),
-                        case ra_seq:limit(Start, Seq1) of
+                        %% the newer range owns Start, so only keep indexes
+                        %% strictly below it; an empty newer range (undefined
+                        %% start) does not constrain the older one
+                        Limited = case Start of
+                                      undefined -> Seq1;
+                                      _ -> ra_seq:limit(Start - 1, Seq1)
+                                  end,
+                        case Limited of
                             [] ->
                                 Acc;
                             Seq when LiveIndexes == [] ->
