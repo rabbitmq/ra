@@ -55,7 +55,8 @@ all_tests() ->
      force_start_follower_as_single_member_nonvoter,
      force_start_nonvoter_as_single_member,
      initial_members_query,
-     recovery_checkpoint_written_on_shutdown
+     recovery_checkpoint_written_on_shutdown,
+     machine_snapshot_module_recovery_after_app_restart
     ].
 
 groups() ->
@@ -1043,6 +1044,48 @@ recovery_checkpoint_written_on_shutdown(Config) ->
     ?assertEqual(1, Dequeued),
 
     %% Clean up
+    ok = ra:stop_server(?SYS, ServerId),
+    ok.
+
+machine_snapshot_module_recovery_after_app_restart(Config) ->
+    %% https://github.com/rabbitmq/ra/issues/691
+    %% A machine that provides its snapshot module via the
+    %% ra_machine:snapshot_module/0 callback (rather than in log_init_args)
+    %% must have its snapshot discovered by ra_log_pre_init, else WAL recovery
+    %% replays entries below the snapshot and reports a gap.
+    ClusterName = ?config(cluster_name, Config),
+    PrivDir = ?config(priv_dir, Config),
+    ServerId = ?config(server_id, Config),
+    UId = ?config(uid, Config),
+    Conf0 = conf(ClusterName, UId, ServerId, PrivDir, [ServerId]),
+    Conf = Conf0#{log_init_args => #{uid => UId,
+                                     min_snapshot_interval => 0},
+                  machine => {module, ra_subdir_snapshot_machine,
+                              #{release_cursor_interval => 10}}},
+    ok = ra:start_server(?SYS, Conf),
+    ok = ra:trigger_election(ServerId),
+    {ok, _, _} = ra:members(ServerId),
+    %% the release cursor is emitted at index 10
+    [{ok, _, _} = ra:process_command(ServerId, incr)
+     || _ <- lists:seq(1, 9)],
+    %% wait for the snapshot to be written before any further writes so
+    %% that the next write to the WAL carries the truncate flag
+    ok = ra_lib:retry(
+           fun () ->
+                   {ok, #{log := #{snapshot_index := SI}}, _} =
+                       ra:member_overview(ServerId),
+                   SI == 10
+           end, 50, 100),
+    [{ok, _, _} = ra:process_command(ServerId, incr)
+     || _ <- lists:seq(1, 5)],
+    {ok, {_, {14, _}}, _} = ra:local_query(ServerId, fun (S) -> S end),
+    %% restart the app so that the WAL is recovered after pre_init
+    application:stop(ra),
+    ra:start(),
+    {ok, _} = ra_system:start(?config(sys_cfg, Config)),
+    ok = ra:restart_server(?SYS, ServerId),
+    {ok, _, _} = ra:members(ServerId),
+    {ok, 15, _} = ra:process_command(ServerId, incr),
     ok = ra:stop_server(?SYS, ServerId),
     ok.
 
