@@ -547,10 +547,16 @@ sparse_read_out_of_range(Config) ->
 sparse_read_out_of_range_2(Config) ->
     Log0 = ra_log_init(Config),
     {0, 0} = ra_log:last_index_term(Log0),
-    %% write 10 entries
-    %% but only process events for 9
-    Log1 = deliver_all_log_events(write_n(10, 20, 2,
-                                          write_and_roll(1, 10, 2, Log0)), 50),
+    %% write 1..9 and roll them into a segment, then write 10..19
+    %% the snapshot is only taken if it can free a segment so wait for both
+    %% the written event and the segments event rather than relying on an
+    %% idle timeout which can be too short on slow CI runners
+    Log1 = assert_log_events(
+             write_n(10, 20, 2, write_and_roll_no_deliver(1, 10, 2, Log0)),
+             fun (L) ->
+                     #{num_segments := NumSegs} = ra_log:overview(L),
+                     ra_log:last_written(L) == {19, 2} andalso NumSegs > 0
+             end, 5000),
     SnapIdx = 10,
     %% do snapshot in
     {Log2, Effs} = ra_log:update_release_cursor(SnapIdx, #{}, macctx(),
