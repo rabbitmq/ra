@@ -295,23 +295,39 @@ init(#{uid := UId,
 
     %% assert there is no gap between the snapshot
     %% and the first index in the log
-    Mt = case Range of
-             undefined ->
-                 Mt0;
-             {FstIdx, LstIdx} ->
-                 case FstIdx == SnapIdx + 1 orelse
-                      ra_range:in(SnapIdx, Range) orelse
-                      SnapIdx > LstIdx of
-                     true ->
-                         {DeleteSpecs, Mt1} = ra_mt:set_first(FstIdx, Mt0),
-                         ok = exec_mem_table_delete(Names, UId, DeleteSpecs),
-                         Mt1;
-                     false ->
-                         exit({corrupt_log,
-                               gap_between_snapshot_and_log_range,
-                               {SnapIdx, Range}})
-                 end
-         end,
+    {Mt, SnapAboveLog} =
+        case Range of
+            undefined ->
+                {Mt0, false};
+            {_FstIdx, LstIdx} when SnapIdx > LstIdx ->
+                %% The snapshot is past the whole log. This happens when a
+                %% snapshot was accepted but the server exited before
+                %% install_snapshot/4 could run. The mem table is owned by
+                %% the ra system so may still hold entries below the
+                %% snapshot. Clear them out the same way install_snapshot/4
+                %% would, retaining anything from the smallest live index.
+                SmallestLiveIdx = case ra_seq:first(LiveIndexes) of
+                                      undefined ->
+                                          SnapIdx + 1;
+                                      I ->
+                                          I
+                                  end,
+                {DeleteSpecs, Mt1} = ra_mt:set_first(SmallestLiveIdx, Mt0),
+                ok = exec_mem_table_delete(Names, UId, DeleteSpecs),
+                {Mt1, true};
+            {FstIdx, _LstIdx} ->
+                case FstIdx == SnapIdx + 1 orelse
+                     ra_range:in(SnapIdx, Range) of
+                    true ->
+                        {DeleteSpecs, Mt1} = ra_mt:set_first(FstIdx, Mt0),
+                        ok = exec_mem_table_delete(Names, UId, DeleteSpecs),
+                        {Mt1, false};
+                    false ->
+                        exit({corrupt_log,
+                              gap_between_snapshot_and_log_range,
+                              {SnapIdx, Range}})
+                end
+        end,
     LastWalIdx = case ra_log_wal:last_writer_seq(Wal, UId) of
                      {ok, undefined} ->
                          -1;
@@ -339,6 +355,21 @@ init(#{uid := UId,
     ?DEBUG_IF(Pending =/= [],
               "~ts: recovered pending indexes ~w",
               [LogId, Pending]),
+    %% if live indexes below the snapshot remain in the active mem table the
+    %% next write (SnapIdx + 1) would not be contiguous so, as
+    %% install_snapshot/4 does, start a new successor mem table.
+    %% Only the active table matters here, an empty active table already
+    %% accepts any index and checking the full chain (ra_mt:range/1) would
+    %% allocate a new empty successor on every restart.
+    MtFinal = case SnapAboveLog andalso ra_mt:indexes(Mt) =/= [] of
+                  true ->
+                      {ok, MtSucc} = ra_log_ets:new_mem_table_please(Names,
+                                                                     UId, Mt),
+                      MtSucc;
+                  false ->
+                      Mt
+              end,
+    LogRange = ra_range:truncate(SnapIdx, Range),
     Cfg = #cfg{directory = Dir,
                uid = UId,
                log_id = LogId,
@@ -351,9 +382,9 @@ init(#{uid := UId,
                counter = Counter,
                names = Names},
     State0 = #?MODULE{cfg = Cfg,
-                      range = ra_range:truncate(SnapIdx, Range),
+                      range = LogRange,
                       reader = Reader,
-                      mem_table = Mt,
+                      mem_table = MtFinal,
                       snapshot_state = SnapshotState,
                       current_snapshot = ra_snapshot:current(SnapshotState),
                       last_wal_write = {ra_lib:whereis(Wal), now_ms(), LastWalIdx},
@@ -361,7 +392,7 @@ init(#{uid := UId,
                       pending = Pending
                      },
     put_counter(Cfg, ?C_RA_SVR_METRIC_SNAPSHOT_INDEX, SnapIdx),
-    LastIdx = case Range of
+    LastIdx = case LogRange of
                   undefined ->
                       SnapIdx;
                   {_, Lst} ->
@@ -379,7 +410,7 @@ init(#{uid := UId,
     end,
 
     % recover the last term
-    {LastTerm0, State2} = case Range of
+    {LastTerm0, State2} = case LogRange of
                               undefined ->
                                   {SnapTerm, State0};
                               {_, LI} ->
