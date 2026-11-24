@@ -2128,9 +2128,23 @@ init_after_accepted_snapshot_above_mem_table_with_live_indexes(Config) ->
     %% "crash" before install_snapshot
     ra_log:close(Log4),
 
+    Log5a = ra_log_init(Config),
+    ?assertEqual({10, 2}, ra_log:last_index_term(Log5a)),
+    ?assertEqual(11, ra_log:next_index(Log5a)),
+    #{mem_table_info := #{has_previous := true,
+                          local_range := undefined,
+                          previous := #{has_previous := false}}} =
+        ra_log:overview(Log5a),
+    %% "crash" again before any further writes, a re-init must not
+    %% allocate yet another empty successor mem table
+    ra_log:close(Log5a),
     Log5 = ra_log_init(Config),
     ?assertEqual({10, 2}, ra_log:last_index_term(Log5)),
     ?assertEqual(11, ra_log:next_index(Log5)),
+    #{mem_table_info := #{has_previous := true,
+                          local_range := undefined,
+                          previous := #{has_previous := false}}} =
+        ra_log:overview(Log5),
     Log6 = write_n(11, 15, 2, Log5),
     Log = assert_log_events(Log6,
                             fun (L) -> {14, 2} == ra_log:last_written(L) end),

@@ -355,10 +355,13 @@ init(#{uid := UId,
     ?DEBUG_IF(Pending =/= [],
               "~ts: recovered pending indexes ~w",
               [LogId, Pending]),
-    %% if live indexes below the snapshot remain in the mem table the next
-    %% write (SnapIdx + 1) would not be contiguous so, as install_snapshot/4
-    %% does, start a new successor mem table
-    MtFinal = case SnapAboveLog andalso ra_mt:range(Mt) =/= undefined of
+    %% if live indexes below the snapshot remain in the active mem table the
+    %% next write (SnapIdx + 1) would not be contiguous so, as
+    %% install_snapshot/4 does, start a new successor mem table.
+    %% Only the active table matters here, an empty active table already
+    %% accepts any index and checking the full chain (ra_mt:range/1) would
+    %% allocate a new empty successor on every restart.
+    MtFinal = case SnapAboveLog andalso ra_mt:indexes(Mt) =/= [] of
                   true ->
                       {ok, MtSucc} = ra_log_ets:new_mem_table_please(Names,
                                                                      UId, Mt),
