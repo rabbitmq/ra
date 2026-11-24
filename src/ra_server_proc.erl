@@ -1406,8 +1406,11 @@ handle_follower(Msg, State0) ->
     maybe_record_cluster_change(State0, State),
     Ret.
 
-handle_receive_snapshot(Msg, State) ->
-    handle_raft_state(?FUNCTION_NAME, Msg, State).
+handle_receive_snapshot(Msg, State0) ->
+    Ret = handle_raft_state(?FUNCTION_NAME, Msg, State0),
+    {_NextState, State, _Effects} = Ret,
+    maybe_record_cluster_change(State0, State),
+    Ret.
 
 handle_await_condition(Msg, State) ->
     handle_raft_state(?FUNCTION_NAME, Msg, State).
