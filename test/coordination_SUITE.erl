@@ -49,6 +49,7 @@ all_tests() ->
      send_local_msg,
      local_log_effect,
      leaderboard,
+     leaderboard_members_refreshed_by_snapshot,
      bench,
      disconnected_node_catches_up,
      key_metrics,
@@ -855,6 +856,75 @@ leaderboard(Config) ->
                          end || {_, N} <- ServerIds])
       end, 100),
 
+    stop_peers(Peers),
+    ok.
+
+leaderboard_members_refreshed_by_snapshot(Config) ->
+    %% A member that lost its data and restarted as a singleton must have
+    %% its ra_leaderboard membership entry refreshed once it installs a
+    %% snapshot from the real cluster.
+    PrivDir = ?config(data_dir, Config),
+    ClusterName = ?config(cluster_name, Config),
+    Peers = start_peers([s1,s2,s3], PrivDir),
+    ServerIds = server_ids(ClusterName, Peers),
+    Machine = {module, ?MODULE, #{}},
+    Cfgs = [#{cluster_name => ClusterName,
+              id => Id,
+              uid => atom_to_binary(N),
+              initial_members => ServerIds,
+              machine => Machine,
+              log_init_args => #{min_snapshot_interval => 5}}
+            || {N, _} = Id <- ServerIds],
+    {ok, Started, []} = ra:start_cluster(?SYS, Cfgs),
+    {ok, _, L0} = ra:members(Started),
+    [NewLeader, {_, Node} = Victim] = ServerIds -- [L0],
+    ok = ra:transfer_leadership(L0, NewLeader),
+    await_condition(fun () ->
+                            {ok, _, Cur} = ra:members(NewLeader),
+                            Cur =:= NewLeader
+                    end, 100),
+    ok = ra:stop_server(?SYS, Victim),
+    [{ok, _, NewLeader} = ra:process_command(NewLeader, I)
+     || I <- lists:seq(1, 10)],
+    await_condition(fun () ->
+                            #{snapshot_index := SI} = ra:key_metrics(NewLeader),
+                            is_integer(SI) andalso SI >= 5
+                    end, 100),
+    %% hold the others still while the victim re-bootstraps alone
+    Others = ServerIds -- [Victim],
+    [ok = sys:suspend(S) || S <- Others],
+    ok = ra:force_delete_server(?SYS, Victim),
+    Uid = ra:new_uid(atom_to_binary(ClusterName)),
+    ok = ra:start_server(?SYS, #{cluster_name => ClusterName,
+                                id => Victim,
+                                uid => Uid,
+                                initial_members => [Victim],
+                                log_init_args => #{uid => Uid},
+                                machine => Machine}),
+    ok = ra:trigger_election(Victim),
+    {ok, [Victim], Victim} = ra:members(Victim),
+    ?assertEqual([Victim],
+                 rpc:call(Node, ra_leaderboard, lookup_members, [ClusterName])),
+    [ok = sys:resume(S) || S <- Others],
+
+    Sorted = lists:sort(ServerIds),
+    await_condition(fun () ->
+                            {ok, Ms, _} = ra:members({local, Victim}),
+                            lists:sort(Ms) =:= Sorted
+                    end, 100),
+    ?assertMatch(#{snapshot_installed := N} when N > 0,
+                 rpc:call(Node, ra_counters, counters,
+                          [Victim, [snapshot_installed]])),
+    %% a later command must not undo the refreshed entry
+    {ok, _, NewLeader} = ra:process_command(NewLeader, banana),
+    await_condition(fun () ->
+                            Sorted =:= lists:sort(
+                                         rpc:call(Node, ra_leaderboard,
+                                                  lookup_members,
+                                                  [ClusterName]))
+                    end, 100),
+    ?assertEqual(NewLeader,
+                 rpc:call(Node, ra_leaderboard, lookup_leader, [ClusterName])),
     stop_peers(Peers),
     ok.
 
