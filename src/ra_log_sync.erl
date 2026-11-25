@@ -39,7 +39,7 @@ worker_name(BaseName, Idx) ->
     list_to_atom(atom_to_list(BaseName) ++ "_" ++ integer_to_list(Idx)).
 
 -spec start_link(#{name := atom()}) ->
-    {ok, pid()} | {error, term()}.
+    {ok, pid()} | ignore | {error, term()}.
 start_link(#{name := Name} = _Config) ->
     gen_batch_server:start_link({local, Name}, ?MODULE, {},
                                 [{reversed_batch, true}]).
