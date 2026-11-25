@@ -15,6 +15,7 @@
 -export([init/1,
          handle_call/3,
          handle_cast/2,
+         handle_continue/2,
          handle_info/2,
          terminate/2,
          code_change/3]).
@@ -74,9 +75,13 @@ handle_cast({work, FunOrMfa, ErrFun}, State) ->
             end,
             ok
     end,
+    %% `gen_server' holds the message, and with it the fun and the state the
+    %% fun captured, until this callback returns.
+    {noreply, State, {continue, garbage_collect}}.
+
+handle_continue(garbage_collect, State) ->
     % elp:ignore W0047 (no_garbage_collect)
     erlang:garbage_collect(),
-    %% TODO: this wont clear up the bg_work funs, fix this some day
     {noreply, State}.
 
 handle_info(_Info, State) ->
