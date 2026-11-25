@@ -2232,11 +2232,13 @@ follower_catchup_cond(_,
                       #install_snapshot_rpc{term = Term,
                                             meta = #{index := PLIdx}},
                       #{current_term := CurTerm,
-                        log := Log} = State)
+                        last_applied := LastApplied} = State)
   when Term >= CurTerm ->
-    % term is ok - check if the snapshot index is greater than the last
-    % index seen
-    {PLIdx >= ra_log:next_index(Log), State};
+    %% term is ok - use the same rule as the follower uses to decide whether
+    %% to accept a snapshot. The log's next index cannot be used here as
+    %% after a term_mismatch the log may still contain stale entries beyond
+    %% the index the leader was asked to resend from
+    {PLIdx > LastApplied, State};
 follower_catchup_cond(_, _Msg, State) ->
     {false, State}.
 
