@@ -809,21 +809,35 @@ segref_info(Filename)
         prim_file:read_link_info(Filename, [raw, {time, posix}]),
     {ok, Fd} = file:open(Filename, [read, raw, binary]),
     try
-        {ok, Version, MaxCount} = read_header(Fd),
-        IndexSize = MaxCount * index_record_size(Version),
-        Ref = case file:pread(Fd, ?HEADER_SIZE, IndexSize) of
-                  {ok, Data} ->
-                      case scan_range(Version, Data) of
-                          undefined ->
-                              undefined;
-                          Range ->
-                              {ra_lib:to_binary(filename:basename(Filename)),
-                               Range}
-                      end;
-                  eof ->
-                      undefined
-              end,
-        #{ref => Ref, file_type => Type}
+        case read_header(Fd) of
+            {ok, Version, MaxCount} ->
+                IndexSize = MaxCount * index_record_size(Version),
+                Ref = case file:pread(Fd, ?HEADER_SIZE, IndexSize) of
+                          {ok, Data} ->
+                              case scan_range(Version, Data) of
+                                  undefined ->
+                                      undefined;
+                                  Range ->
+                                      {ra_lib:to_binary(
+                                         filename:basename(Filename)),
+                                       Range}
+                              end;
+                          eof ->
+                              undefined
+                      end,
+                #{ref => Ref, file_type => Type};
+            {error, missing_segment_header} ->
+                %% The header was never made durable so the file cannot
+                %% contain entries. Ignore it; the segment writer deletes it
+                %% the next time it tries to open it.
+                ?WARN("ra_log_segment: segment file ~ts has no complete "
+                      "header, ignoring", [Filename]),
+                #{ref => undefined, file_type => Type};
+            {error, Reason} ->
+                ?ERR("ra_log_segment: unable to read header of segment "
+                     "file ~ts: ~p", [Filename, Reason]),
+                exit({invalid_segment_file, Filename, Reason})
+        end
     after
         _ = file:close(Fd)
     end.
@@ -1237,6 +1251,17 @@ read_header(Fd) ->
                 <<?MAGIC, Version:16/unsigned, MaxCount:16/unsigned>>
                   when Version =< ?VERSION ->
                     {ok, Version, MaxCount};
+                <<0:(?HEADER_SIZE * 8)>> ->
+                    %% Some file systems can persist the file size without
+                    %% the data after a crash. A zero filled header with
+                    %% nothing after it holds no entries so is equivalent to
+                    %% a header that was never written.
+                    case file:position(Fd, eof) of
+                        {ok, ?HEADER_SIZE} ->
+                            {error, missing_segment_header};
+                        _ ->
+                            {error, invalid_segment_format}
+                    end;
                 _ ->
                     {error, invalid_segment_format}
             end;

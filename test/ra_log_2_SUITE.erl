@@ -96,6 +96,10 @@ all_tests() ->
      concurrent_snapshot_install_and_compaction,
      snapshot_installation_with_live_indexes,
      init_with_dangling_symlink,
+     init_with_empty_segment_file,
+     init_with_zero_header_segment_file,
+     init_with_zero_header_and_data_fails,
+     init_with_invalid_segment_header_fails,
      init_after_missing_segments_event,
      snapshot_install_with_empty_indexes_file,
      init_after_accepted_snapshot_above_mem_table,
@@ -2777,6 +2781,58 @@ init_with_dangling_symlink(Config) ->
     ?assertEqual({error, enoent}, file:read_link_info(DanglingSymlinkName)),
 
     ra_log:close(Log3),
+    ok.
+
+init_with_empty_segment_file(Config) ->
+    %% a segment file created but whose header never became durable must not
+    %% prevent init, wherever it sits in the sequence of segments
+    init_with_bad_segment(Config, <<>>, ok).
+
+init_with_zero_header_segment_file(Config) ->
+    init_with_bad_segment(Config, <<0:64>>, ok).
+
+init_with_zero_header_and_data_fails(Config) ->
+    %% a zero header followed by more data is not a missing header
+    init_with_bad_segment(Config, <<0:64, 1:64>>, fail).
+
+init_with_invalid_segment_header_fails(Config) ->
+    init_with_bad_segment(Config, <<"XXXXXXXX">>, fail).
+
+init_with_bad_segment(Config, Content, Expect) ->
+    UId = ?config(uid, Config),
+    ServerDataDir = ra_env:server_data_dir(default, UId),
+    Log0 = ra_log_init(Config),
+    Log1 = write_and_roll(1, 256, 1, Log0),
+    Log2 = assert_log_events(Log1,
+                             fun(L) ->
+                                     #{num_segments := N} = ra_log:overview(L),
+                                     N >= 2
+                             end),
+    #{num_segments := NumSegs} = ra_log:overview(Log2),
+    ra_log:close(Log2),
+    %% sorts after existing segments
+    Bad = filename:join(ServerDataDir, "99999999.segment"),
+    ok = file:write_file(Bad, Content),
+    case Expect of
+        ok ->
+            Log3 = ra_log_init(Config),
+            #{num_segments := NumSegs} = ra_log:overview(Log3),
+            ra_log:close(Log3);
+        fail ->
+            Pid = spawn(fun () ->
+                                try ra_log_init(Config) of
+                                    _ -> exit(init_succeeded)
+                                catch _:R -> exit(R)
+                                end
+                        end),
+            MRef = erlang:monitor(process, Pid),
+            receive
+                {'DOWN', MRef, _, _, Reason} ->
+                    ?assertMatch({invalid_segment_file, _, _}, Reason)
+            after 5000 ->
+                      exit(timeout)
+            end
+    end,
     ok.
 
 init_after_missing_segments_event(Config) ->
