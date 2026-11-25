@@ -28,6 +28,7 @@ all() ->
      election_timeout,
      follower_aer_diverged,
      follower_aer_term_mismatch,
+     follower_aer_term_mismatch_then_snapshot,
      follower_aer_term_mismatch_at_snapshot,
      follower_aer_term_mismatch_snapshot,
      follower_handles_append_entries_rpc,
@@ -824,6 +825,40 @@ follower_aer_term_mismatch(_Config) ->
                                        last_index = 2,
                                        last_term = 3}, Reply),
                  ok.
+
+follower_aer_term_mismatch_then_snapshot(_Config) ->
+    %% after a term mismatch the follower asks for a resend from
+    %% last_applied + 1 but the stale entries remain in the log. A snapshot
+    %% from the leader above last_applied but not above the stale log tail
+    %% must still end the catch-up condition
+    State0 = (base_state(3, ?FUNCTION_NAME))#{last_applied => 2,
+                                              commit_index => 3},
+    AE = #append_entries_rpc{term = 6,
+                             leader_id = ?N1,
+                             prev_log_index = 3,
+                             prev_log_term = 6,
+                             leader_commit = 3},
+    {await_condition, #{condition := _} = State, _} =
+        ra_server:handle_follower(AE, State0),
+    ISRpc = #install_snapshot_rpc{term = 6, leader_id = ?N1,
+                                  chunk_state = {1, last},
+                                  meta = #{index => 3,
+                                           term => 6,
+                                           cluster => #{},
+                                           machine_version => 0},
+                                  data = []},
+    {follower, State1, [{next_event, ISRpc}]} =
+        ra_server:handle_await_condition(ISRpc, State),
+    ?assertNot(maps:is_key(condition, State1)),
+    %% a snapshot at or below last_applied must not end the condition
+    {await_condition, _, []} =
+        ra_server:handle_await_condition(
+          ISRpc#install_snapshot_rpc{meta = #{index => 2,
+                                              term => 5,
+                                              cluster => #{},
+                                              machine_version => 0}},
+          State),
+    ok.
 
 follower_aer_term_mismatch_at_snapshot(_Config) ->
     %% case where the last correct entry in the log is the snapshot
