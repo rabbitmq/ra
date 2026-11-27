@@ -31,8 +31,24 @@
 -define(TIMEOUT, 30000).
 -define(SYNC_INTERVAL, 5000).
 
+-define(C_BATCHES, 1).
+-define(C_WRITES, 2).
+-define(C_DELETES, 3).
+-define(C_SYNCS, 4).
+-define(C_SYNC_TIME, 5).
+
+-define(COUNTER_FIELDS,
+        [{batches, ?C_BATCHES, counter, "Number of batches processed"},
+         {writes, ?C_WRITES, counter, "Number of store operations processed"},
+         {deletes, ?C_DELETES, counter, "Number of delete operations processed"},
+         {syncs, ?C_SYNCS, counter, "Number of sync operations performed"},
+         {sync_time, ?C_SYNC_TIME, {counter, time_ms},
+          "Total time spent syncing the meta data store to disk"}
+        ]).
+
 -record(?MODULE, {ref :: dets:tab_name(),
-                  table_name :: atom()}).
+                  table_name :: atom(),
+                  counter :: counters:counters_ref()}).
 
 -opaque state() :: #?MODULE{}.
 
@@ -54,13 +70,17 @@ init(#{name := System,
                                          {auto_save, ?SYNC_INTERVAL}]),
     _ = ets:new(TblName, [named_table, public, {read_concurrency, true}]),
     TblName = dets:to_ets(TblName, TblName),
+    CRef = ra_counters:new(TblName, ?COUNTER_FIELDS,
+                           #{ra_system => System, module => ?MODULE}),
     ?INFO("ra: meta data store initialised for system ~ts. ~b record(s) recovered",
           [System, ets:info(TblName, size)]),
     {ok, #?MODULE{ref = Ref,
-                  table_name = TblName}}.
+                  table_name = TblName,
+                  counter = CRef}}.
 
 handle_batch(Commands, #?MODULE{ref = Ref,
-                                table_name = TblName} = State) ->
+                                table_name = TblName,
+                                counter = CRef} = State) ->
     DoInsert =
         fun (Id, Key, Value, Inserts0) ->
                 case Inserts0 of
@@ -76,32 +96,41 @@ handle_batch(Commands, #?MODULE{ref = Ref,
                         end
                 end
         end,
-    {Inserts, Replies, ShouldSync} =
+    {Inserts, Replies, ShouldSync, Writes, Deletes} =
         lists:foldl(
           fun ({cast, {store, Id, Key, Value}},
-               {Inserts0, Replies, DoSync}) ->
-                  {DoInsert(Id, Key, Value, Inserts0), Replies, DoSync};
+               {Inserts0, Replies, DoSync, W, D}) ->
+                  {DoInsert(Id, Key, Value, Inserts0), Replies, DoSync,
+                   W + 1, D};
               ({call, From, {store, Id, Key, Value}},
-               {Inserts0, Replies, _DoSync}) ->
+               {Inserts0, Replies, _DoSync, W, D}) ->
                   {DoInsert(Id, Key, Value, Inserts0),
-                   [{reply, From, ok} | Replies], true};
+                   [{reply, From, ok} | Replies], true, W + 1, D};
               ({cast, {delete, Id}},
-               {Inserts0, Replies, DoSync}) ->
-                  {handle_delete(TblName, Id, Ref, Inserts0), Replies, DoSync};
+               {Inserts0, Replies, DoSync, W, D}) ->
+                  {handle_delete(TblName, Id, Ref, Inserts0), Replies, DoSync,
+                   W, D + 1};
               ({call, From, {delete, Id}},
-               {Inserts0, Replies, _DoSync}) ->
+               {Inserts0, Replies, _DoSync, W, D}) ->
                   {handle_delete(TblName, Id, Ref, Inserts0),
-                   [{reply, From, ok} | Replies], true}
-          end, {#{}, [], false}, Commands),
+                   [{reply, From, ok} | Replies], true, W, D + 1}
+          end, {#{}, [], false, 0, 0}, Commands),
     Objects = maps:values(Inserts),
     true = ets:insert(TblName, Objects),
     ok = dets:insert(TblName, Objects),
     case ShouldSync of
         true ->
-            ok = dets:sync(TblName);
+            T = erlang:monotonic_time(millisecond),
+            ok = dets:sync(TblName),
+            counters:add(CRef, ?C_SYNCS, 1),
+            counters:add(CRef, ?C_SYNC_TIME,
+                         erlang:monotonic_time(millisecond) - T);
         false ->
             ok
     end,
+    counters:add(CRef, ?C_BATCHES, 1),
+    counters:add(CRef, ?C_WRITES, Writes),
+    counters:add(CRef, ?C_DELETES, Deletes),
     {ok, Replies, State}.
 
 terminate(_, #?MODULE{ref = Ref,
